@@ -885,6 +885,17 @@ pub struct MlsRosterAuthorityFacts {
 }
 
 #[derive(Clone, Debug)]
+pub enum MlsMemberRosterSelectorRead {
+    NotFound,
+    RevisionUnavailable,
+    Authorized {
+        request:
+            arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody,
+        governance_station_id: arkret_wire::DidCoreId,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub enum MlsRosterAuthorityRead {
     NotFound,
     RevisionUnavailable,
@@ -1290,6 +1301,19 @@ pub enum MlsMemberGroupStateMaterialRead {
 
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
+    /// Bind the member's accepted target to immutable Genesis provenance at
+    /// one current/target authorized cut, without disclosing a prejoin Event.
+    async fn mls_member_roster_selector(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsMemberRosterAuthorityReadRequestBody,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<MlsMemberRosterSelectorRead> {
+        let _ = (request, issuer);
+        Err(crate::PersistenceError::Conflict(
+            "unsupported_feature: atomic MLS member roster selector is unavailable".to_owned(),
+        ))
+    }
+
     /// Return only the producer key frozen at this exact accepted Agent Event.
     /// Current key state must never substitute for a missing admission record.
     async fn historical_agent_signer_key(
@@ -1329,6 +1353,47 @@ pub trait AuthorityCommitStore: Send + Sync {
         let _ = (verified, issuer);
         Err(crate::PersistenceError::Conflict(
             "unsupported_feature: MLS Add authority ingress is unavailable".to_owned(),
+        ))
+    }
+
+    /// Original signed recipient proof, including acknowledged rows. Replays
+    /// reuse these bytes even after claim expiry or Station key rotation.
+    async fn mls_recipient_attestation(
+        &self,
+        commit: &EventId,
+        welcome: &arkret_wire::MlsWelcomeDeliveryId,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody>,
+    > {
+        let _ = (commit, welcome);
+        Err(crate::PersistenceError::Internal(
+            "recipient attestation store unavailable".into(),
+        ))
+    }
+
+    async fn pending_mls_recipient_attestations(
+        &self,
+        limit: usize,
+    ) -> PersistenceResult<
+        Vec<arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody>,
+    > {
+        let _ = limit;
+        Err(crate::PersistenceError::Internal(
+            "recipient attestation outbox unavailable".into(),
+        ))
+    }
+
+    /// Acknowledge only the exact canonical request digest that governance
+    /// reports installed. A different digest never retires the durable proof.
+    async fn acknowledge_mls_recipient_attestation(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody,
+        digest: &arkret_wire::Hash,
+        at: DateTime<Utc>,
+    ) -> PersistenceResult<()> {
+        let _ = (request, digest, at);
+        Err(crate::PersistenceError::Internal(
+            "recipient attestation acknowledgement unavailable".into(),
         ))
     }
 
@@ -1922,6 +1987,21 @@ pub trait AuthorityCommitStore: Send + Sync {
         issuer: &arkret_wire::DidCoreId,
         sign: RealmStateSnapshotSigner<'_>,
     ) -> PersistenceResult<Option<RealmStateSnapshot>>;
+
+    /// Archive an original governing Snapshot whose authority and signature
+    /// the receiving layer verified. The store independently proves its exact
+    /// Account disclosure against the member Station's durable replica cut.
+    async fn install_verified_account_snapshot(
+        &self,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+        snapshot: &RealmStateSnapshot,
+    ) -> PersistenceResult<()> {
+        let _ = (account, issuer, snapshot);
+        Err(crate::PersistenceError::Internal(
+            "verified Account Snapshot installation is unavailable".to_owned(),
+        ))
+    }
 
     /// Read the original signed Snapshot previously issued to this exact
     /// Account and recheck, at one read cut, that every disclosed row, head,

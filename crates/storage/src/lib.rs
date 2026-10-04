@@ -252,6 +252,8 @@ pub enum ConflictCode {
     SpaceNotArchived,
     /// A Space lifecycle write targets a tombstoned Space.
     SpaceAlreadyTerminal,
+    /// A Space tombstone still has a live child or Strand placement.
+    SpaceHasLiveDependents,
     /// A structural Relation endpoint is not an object of the Relation's own
     /// Realm (`relation.md` section 4.4).
     CrossRealmStructuralRelation,
@@ -375,7 +377,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 80] = [
+    pub const ALL: [Self; 81] = [
         Self::ApprovalNonceReused,
         Self::ApprovalRequired,
         Self::AppletRevoked,
@@ -402,6 +404,7 @@ impl ConflictCode {
         Self::SpaceNotActive,
         Self::SpaceNotArchived,
         Self::SpaceAlreadyTerminal,
+        Self::SpaceHasLiveDependents,
         Self::CrossRealmStructuralRelation,
         Self::GateCheckFailed,
         Self::InvalidMembershipTransition,
@@ -491,6 +494,7 @@ impl ConflictCode {
             Self::SpaceNotActive => arkret_wire::ReasonCode::SPACE_NOT_ACTIVE,
             Self::SpaceNotArchived => arkret_wire::ReasonCode::SPACE_NOT_ARCHIVED,
             Self::SpaceAlreadyTerminal => arkret_wire::ReasonCode::SPACE_ALREADY_TERMINAL,
+            Self::SpaceHasLiveDependents => arkret_wire::ReasonCode::SPACE_HAS_LIVE_DEPENDENTS,
             Self::CrossRealmStructuralRelation => {
                 arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION
             }

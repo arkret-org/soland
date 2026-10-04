@@ -119,6 +119,8 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::ModerationDecisionLift
             | arkret_wire::EventKind::SpaceCreate
             | arkret_wire::EventKind::SpaceUpdate
+            | arkret_wire::EventKind::SpaceParent
+            | arkret_wire::EventKind::SpaceTombstone
             | arkret_wire::EventKind::SchemaDefine
             | arkret_wire::EventKind::RealmPolicyBundle
             | arkret_wire::EventKind::PolicySet

@@ -108,6 +108,20 @@ fn signing_method_belongs_to_issuer(method: &DidUrl, issuer: &DidCoreId) -> bool
 }
 
 impl AuthorityCommitApplication {
+    pub async fn mls_member_roster_selector(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsMemberRosterAuthorityReadRequestBody,
+        issuer: &DidCoreId,
+    ) -> ServiceResult<soland_storage::MlsMemberRosterSelectorRead> {
+        request
+            .validate()
+            .map_err(|error| invalid(error.to_string()))?;
+        Ok(self
+            .store()
+            .mls_member_roster_selector(request, issuer)
+            .await?)
+    }
+
     pub async fn mls_roster_authority_attestors(
         &self,
         request: &MlsRosterAuthorityReadRequestBody,
@@ -211,7 +225,7 @@ fn verify_historical_proofs(facts: &MlsRosterAuthorityFacts) -> bool {
                 || arkret_identity::verify_authenticated_service_resolution_history(
                     attestor_resolution,
                     &attestation.attestor_station_id,
-                    chrono::Utc::now(),
+                    attestation.attested_at,
                 )
                 .is_err()
                 || arkret::verify_mls_attest_add_request(proof, attestor_resolution).is_err()
@@ -299,7 +313,11 @@ fn partition_pages(
             let size = arkret_canonical::canonical_json_bytes(&page)
                 .map_err(|error| internal(error.to_string()))?
                 .len();
-            if size > MAX_PAGE_BYTES {
+            if size > MAX_PAGE_BYTES
+                || arkret::mls_self_roster_authority_page_encoded_size(&page)
+                    .map_err(|error| internal(error.to_string()))?
+                    > MAX_PAGE_BYTES
+            {
                 break;
             }
             selected = Some(end);
@@ -423,6 +441,9 @@ fn sign_page(
         .map_err(|error| internal(error.to_string()))?
         .len()
         > MAX_PAGE_BYTES
+        || arkret::mls_self_roster_authority_page_encoded_size(&page)
+            .map_err(|error| internal(error.to_string()))?
+            > MAX_PAGE_BYTES
     {
         return Ok(MlsRosterAuthorityApplicationRead::RevisionUnavailable);
     }

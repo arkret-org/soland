@@ -2749,6 +2749,8 @@ async fn commit_one_in_connection(
         .await?;
         crate::space_current_results::commit_space_update_in_connection(conn, event, commit, true)
             .await?;
+        crate::space_current_results::commit_space_parent_in_connection(conn, event, commit, true)
+            .await?;
         crate::rsvp_current_results::commit_rsvp_current_result_in_connection(conn, event, commit)
             .await?;
         crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(

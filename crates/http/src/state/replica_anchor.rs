@@ -149,6 +149,126 @@ fn temporary(detail: impl std::fmt::Display) -> String {
     detail.to_string()
 }
 
+/// Refresh a hosted Account's exact original governing Snapshot. Native
+/// replica folding remains the only source of local current state: this read
+/// archives no object until that complete cut already matches the peer.
+pub(crate) async fn refresh_account_snapshot(
+    state: &AppState,
+    realm_id: &RealmId,
+    account: &arkret_wire::AccountId,
+) -> Result<arkret_wire::RealmStateSnapshot, String> {
+    use arkret_wire::{CurrentSelector, TypedCurrentResult};
+
+    if account.station_id != state.service_core_id() {
+        return Err("the Account is not hosted by this member Station".to_owned());
+    }
+    let commits = state.authority_commits();
+    let material = commits
+        .realm_state_snapshot_material_for_account(realm_id, account)
+        .await
+        .map_err(temporary)?
+        .ok_or("the Account has no disclosed current cut")?;
+    let actor = arkret_wire::ActorId::account(account.clone());
+    let realm_stream = CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let own_join = material.current_state_entries.iter().find(|row| matches!(row,
+        TypedCurrentResult::Value {
+            selector: CurrentSelector::MemberState { actor_id }, source_stream_ref, value, ..
+        } if actor_id == &actor && source_stream_ref == &realm_stream
+            && serde_json::from_value::<arkret_wire::MemberStateCurrent>(value.clone())
+                .is_ok_and(|member| member.membership == arkret_wire::MembershipState::Join)
+    )).ok_or("the hosted Account has no accepted current opening join")?;
+    let TypedCurrentResult::Value { revision, .. } = own_join else {
+        unreachable!()
+    };
+    let governance = commits
+        .current_authority(realm_id)
+        .await
+        .map_err(temporary)?
+        .ok_or("the Realm has no governing authority")?
+        .service_id;
+    let mut located = crate::routing::realm_join::resolve_verified_authority_of_service(
+        state,
+        realm_id,
+        &governance,
+    )
+    .await
+    .map_err(|error| error.message)?;
+    let request = PeerRealmJoinBootstrapRequestBody {
+        request_id: RequestId::new(format!("ak:request:{}", uuid::Uuid::now_v7()))
+            .map_err(temporary)?,
+        realm_id: realm_id.clone(),
+        member_account_id: account.clone(),
+        membership_commit_id: revision.commit_id.clone(),
+    };
+    let body = post_peer(
+        state,
+        &governance,
+        BOOTSTRAP_PATH,
+        &request,
+        BOOTSTRAP_MAX_BYTES,
+    )
+    .await?;
+    let outcome: PeerRealmJoinBootstrapOutcome =
+        serde_json::from_slice(&body).map_err(temporary)?;
+    if outcome.request_id != request.request_id || outcome.snapshot.realm_id != *realm_id {
+        return Err("bootstrap answer does not bind the Account Snapshot request".to_owned());
+    }
+    let nonce = crate::routing::realm_join::nonce_for_request(&request.request_id)
+        .map_err(|error| error.message)?;
+    let served = crate::routing::realm_join::verify_served_bundle(
+        state,
+        outcome.authority_bundle.clone(),
+        &nonce,
+    )
+    .await
+    .map_err(|error| error.message)?;
+    if served.authority.current_service_id() != &governance
+        || served.authority.current_generation() != located.authority.current_generation()
+    {
+        return Err("bootstrap bundle names another governing tenure".to_owned());
+    }
+    located = served;
+    RealmJoinBootstrapAssembly::new(outcome.clone()).map_err(temporary)?;
+    let snapshot = outcome.snapshot;
+    verify_snapshot(state, &mut located, &snapshot).await?;
+    if !snapshot.current_state_entries.contains(own_join)
+        || snapshot
+            .retention_and_history_floor
+            .stream_floors
+            .iter()
+            .find(|floor| floor.stream_ref == realm_stream)
+            .is_none_or(|floor| floor.oldest_position != revision.stream_position)
+        || snapshot
+            .visible_stream_heads
+            .iter()
+            .find(|head| head.stream_ref == realm_stream)
+            .is_none_or(|head| {
+                head.stream_position < revision.stream_position
+                    || (head.stream_position == revision.stream_position
+                        && head.commit_id != revision.commit_id)
+            })
+    {
+        return Err(
+            "the governing Snapshot does not bind the hosted Account's current join".to_owned(),
+        );
+    }
+    if let Err(error) = commits
+        .install_verified_account_snapshot(account, &state.service_core_id(), &snapshot)
+        .await
+    {
+        spawn_converge_stream(
+            state,
+            CommitStreamRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+        );
+        return Err(temporary(error));
+    }
+    Ok(snapshot)
+}
+
 async fn post_peer<T: serde::Serialize>(
     state: &AppState,
     governance: &DidCoreId,

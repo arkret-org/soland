@@ -7,6 +7,7 @@
 //! Production gaps: `validation_class` instead of bool and revocation fanout.
 
 pub(crate) mod erasure_receipts;
+mod mls_recipient_attestations;
 mod outbound;
 pub mod outbox;
 pub mod outbox_operator;

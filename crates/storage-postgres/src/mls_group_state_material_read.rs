@@ -63,7 +63,7 @@ pub(crate) struct MemberMlsTargetSelector {
     pub realm_id: RealmId,
     pub effective_scope: ScopeRef,
     pub mls_group_id: MlsGroupId,
-    pub group_state_event_id: EventId,
+    pub group_state_event_id: Option<EventId>,
     pub caller_actor_id: ActorId,
     pub target_commit_event_ref: EventId,
     pub target_epoch: u64,
@@ -435,11 +435,14 @@ pub(crate) async fn read_in_connection(
     })?;
     if group_row.mls_group_id != request.mls_group_id.as_str()
         || group.effective_scope != request.effective_scope
-        || group.genesis_event_ref != request.group_state_event_id
+        || request
+            .group_state_event_id
+            .as_ref()
+            .is_some_and(|selected| selected != &group.genesis_event_ref)
     {
         return Ok(Read::NotFound);
     }
-    let Some(genesis_row) = accepted_row(conn, &request.group_state_event_id).await? else {
+    let Some(genesis_row) = accepted_row(conn, &group.genesis_event_ref).await? else {
         return Ok(Read::RevisionUnavailable);
     };
     let genesis_commit = decode_commit(&genesis_row)?;
@@ -447,9 +450,9 @@ pub(crate) async fn read_in_connection(
         return Ok(Read::RevisionUnavailable);
     };
     if genesis_commit.stream_ref != expected_stream
-        || genesis_commit.event_ref != request.group_state_event_id
+        || genesis_commit.event_ref != group.genesis_event_ref
         || genesis_event.kind != EventKind::MlsGenesis
-        || genesis_event.event_id != request.group_state_event_id
+        || genesis_event.event_id != group.genesis_event_ref
         || genesis_event.scope_ref != request.effective_scope
         || genesis_event.realm_id != *realm_id
     {
@@ -493,7 +496,7 @@ pub(crate) async fn read(
         realm_id: request.realm_id.clone(),
         effective_scope: request.effective_scope.clone(),
         mls_group_id: request.mls_group_id.clone(),
-        group_state_event_id: request.group_state_event_id.clone(),
+        group_state_event_id: Some(request.group_state_event_id.clone()),
         caller_actor_id,
         target_commit_event_ref,
         target_epoch,

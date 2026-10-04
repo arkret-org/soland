@@ -397,6 +397,33 @@ pub(crate) async fn caller_realm_floor_in_connection(
     .await
 }
 
+/// Snapshot disclosure uses the same proven interval as the Account scan.
+/// A since-join replica need not hold the prefix preceding its opening join.
+pub(crate) async fn snapshot_realm_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    caller: &ActorId,
+) -> PersistenceResult<Option<ReadableFloor>> {
+    let stream = CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let genesis = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM realm_commits \
+         WHERE stream_key=$1 AND stream_position=0) AS present",
+    )
+    .bind::<Text, _>(crate::authority_commit::stream_key(&stream)?)
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if genesis.present {
+        return caller_realm_floor_in_connection(conn, realm_id, caller).await;
+    }
+    match replica_realm_floor_in_connection(conn, realm_id, caller).await? {
+        Ok(floor) => Ok(Some(floor)),
+        Err(_) => Ok(None),
+    }
+}
+
 #[derive(QueryableByName)]
 struct ReplicaAnchorRow {
     #[diesel(sql_type = diesel::sql_types::Nullable<Text>)]

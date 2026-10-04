@@ -277,6 +277,7 @@ pub(crate) async fn lists_for_actor(
             spaces.push(ProjectionSpaceRow {
                 space_id: space.id.ok_or_else(|| corrupt("Space id absent"))?,
                 realm_id: space.realm_id, kind: space.kind, title: space.title,
+                encrypted_metadata: space.encrypted_metadata,
                 parent_space_id: space.parent_space_id, rank: space.rank, state,
                 state_changed_at: space.state_changed_at,
                 created_by: Some(space.created_by), created_at: Some(space.created_at), updated_at: space.updated_at,
@@ -370,6 +371,7 @@ pub(crate) async fn lists_for_actor(
                 stage: strand.stage, stage_changed_at: strand.stage_changed_at,
                 title: strand.metadata.as_ref().and_then(|metadata| metadata.title.clone()),
                 summary: strand.metadata.as_ref().and_then(|metadata| metadata.summary.clone()),
+                topic: strand.topic,
                 board_space_id: placement.as_ref().map(|(board, _)| board.clone()),
                 list_space_id: placement.as_ref().map(|(_, position)| position.list_space_id.clone()),
                 rank: placement.map(|(_, position)| position.rank),

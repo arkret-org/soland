@@ -192,7 +192,7 @@ async fn space_create_root_and_child_have_three_sibling_results_and_exact_replay
         .iter()
         .find(|space| space.id.as_ref() == Some(&child_id))
         .unwrap();
-    assert_eq!(root_current.title, "Board");
+    assert_eq!(root_current.title.as_deref(), Some("Board"));
     assert_eq!(child_current.parent_space_id.as_ref(), Some(&root_id));
     assert_eq!(
         cut_counts(&pool, &realm_id).await,

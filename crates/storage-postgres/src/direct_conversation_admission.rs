@@ -246,6 +246,11 @@ pub(crate) async fn direct_conversation_realm_in_connection(
 /// Whether the Event maps to an action of the closed participant allowlist
 /// (`ak.authority.direct_conversation_participant.v1` `event_action_allowlist`).
 fn participant_action(event: &arkret_wire::Event) -> bool {
+    if arkret_models_collaboration::direct_conversation::direct_conversation_structure_action(
+        &event.kind,
+    ) {
+        return true;
+    }
     match event.kind {
         EventKind::MessageCreate
         | EventKind::MessageRedact
@@ -254,6 +259,7 @@ fn participant_action(event: &arkret_wire::Event) -> bool {
         | EventKind::ReactionAdd
         | EventKind::ReactionRemove
         | EventKind::ReadCursorAdvance
+        | EventKind::StrandWatchSet
         | EventKind::StrandCreate => true,
         EventKind::MemberState => {
             membership_of(event).as_deref() == Some("leave")
@@ -646,7 +652,10 @@ async fn participant_authority_admits(
     });
     let realm_scope =
         matches!(&event.scope_ref, ScopeRef::Realm { realm_id } if realm_id == &event.realm_id);
-    if event.executed_by.is_some() || !realm_scope || !founding.pair().contains(&event.actor_id) {
+    let valid_executor = event.executed_by.as_ref().is_none_or(|executor|
+        founding.authorization_basis.kind == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AgentController
+        && event.actor_id == founding.peer && &founding.founder == executor);
+    if !valid_executor || !realm_scope || !founding.pair().contains(&event.actor_id) {
         return Ok(false);
     }
     let source = event
@@ -665,6 +674,10 @@ async fn participant_authority_admits(
                 && actor_membership == Some("join")
                 && covered
                 && group.current_exact_pair
+                && (event.kind != EventKind::StrandWatchSet
+                    || watch_admits_in_connection(conn, event, founding).await?)
+                && (!arkret_models_collaboration::direct_conversation::direct_conversation_structure_action(&event.kind)
+                    || structure_admits_in_connection(conn, event, founding).await?)
         }
         Some(AuthoritySourceId::DirectConversationRepairV1) => {
             let Some(binding) = binding else {
@@ -707,12 +720,111 @@ async fn participant_authority_admits(
     if !admitted {
         return Ok(false);
     }
-    if (send_like(&event.kind) || repair_action(event))
+    if (send_like(&event.kind)
+        || repair_action(event)
+        || event.kind == EventKind::StrandWatchSet
+        || arkret_models_collaboration::direct_conversation::direct_conversation_structure_action(
+            &event.kind,
+        ))
         && !pair_grants_direct_message(conn, founding).await?
     {
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Read only the exact current object cuts, never the in-memory projection.
+async fn structure_admits_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    founding: &FoundingFacts,
+) -> PersistenceResult<bool> {
+    use std::collections::BTreeMap;
+
+    use arkret_models_collaboration::objects::space::Space;
+    use arkret_models_collaboration::objects::strand::Strand;
+    #[derive(QueryableByName)]
+    struct ObjectRow {
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+    }
+    let main_id =
+        arkret_wire::StrandId::new(&founding.main_strand_id).map_err(PersistenceError::database)?;
+    let target = event
+        .payload
+        .get("strand_id")
+        .or_else(|| event.payload.get("target_ref"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&founding.main_strand_id);
+    let rows = sql_query("SELECT s.value FROM strand_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position WHERE s.realm_id=$1 AND s.strand_id IN ($2,$3) AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id FOR SHARE OF s")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(&founding.main_strand_id).bind::<Text,_>(target)
+        .load::<ObjectRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let mut strands = BTreeMap::new();
+    for row in rows {
+        let strand: Strand = stored(row.value, "DM structure Strand")?;
+        if let Some(id) = strand.id.clone() {
+            strands.insert(id, strand);
+        }
+    }
+    let rows = sql_query("SELECT s.value || p.value || CASE WHEN q.value='null'::jsonb THEN '{}'::jsonb ELSE jsonb_build_object('child_scope_policy',q.value) END AS value FROM space_current_results s JOIN space_parent_current_results p ON p.space_id=s.space_id AND p.realm_id=s.realm_id JOIN space_child_scope_policy_current_results q ON q.space_id=s.space_id AND q.realm_id=s.realm_id JOIN realm_commits c ON c.commit_id=s.current_commit_id AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position JOIN realm_commits pc ON pc.commit_id=p.current_commit_id AND pc.realm_id=p.realm_id AND pc.stream_position=p.current_stream_position JOIN realm_commits qc ON qc.commit_id=q.current_commit_id AND qc.realm_id=q.realm_id AND qc.stream_position=q.current_stream_position WHERE s.realm_id=$1 AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id AND pc.stream_ref=c.stream_ref AND qc.stream_ref=c.stream_ref FOR SHARE OF s,p,q")
+        .bind::<Text,_>(event.realm_id.as_str()).load::<ObjectRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let mut spaces = BTreeMap::new();
+    for row in rows {
+        let mut value = row.value;
+        if value
+            .get("parent_space_id")
+            .is_some_and(serde_json::Value::is_null)
+        {
+            value.as_object_mut().unwrap().remove("parent_space_id");
+        }
+        let space: Space = stored(value, "DM structure Space")?;
+        if let Some(id) = space.id.clone() {
+            spaces.insert(id, space);
+        }
+    }
+    Ok(
+        arkret_models_collaboration::direct_conversation::direct_conversation_structure_admits(
+            event, &main_id, &strands, &spaces,
+        ),
+    )
+}
+
+async fn watch_admits_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    founding: &FoundingFacts,
+) -> PersistenceResult<bool> {
+    let Ok(payload) = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload,
+    >(serde_json::json!(&event.payload)) else {
+        return Ok(false);
+    };
+    if payload.watcher_actor_id != event.actor_id {
+        return Ok(false);
+    }
+    let main = arkret_wire::StrandId::new(founding.main_strand_id.clone())
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    #[derive(diesel::QueryableByName)]
+    struct Row {
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+    }
+    let rows = sql_query("SELECT s.value FROM strand_current_results s JOIN realm_commits c ON c.commit_id=s.current_commit_id AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position WHERE s.realm_id=$1 AND s.strand_id IN ($2,$3) AND c.stream_ref->>'kind'='realm' AND c.stream_ref->>'realm_id'=s.realm_id FOR SHARE OF s")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(main.as_str()).bind::<Text,_>(payload.strand_id.as_str())
+        .load::<Row>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let mut strands = std::collections::BTreeMap::new();
+    for row in rows {
+        let strand: arkret_models_collaboration::objects::strand::Strand =
+            serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+        if let Some(id) = strand.id.clone() {
+            strands.insert(id, strand);
+        }
+    }
+    Ok(
+        arkret_models_collaboration::direct_conversation::direct_conversation_watch_admits(
+            event, &main, &strands,
+        ),
+    )
 }
 
 /// The table's verdict for `event` at the caller's cut: the first refusing
@@ -773,6 +885,16 @@ async fn evaluate_in_connection(
         return Ok(Err(ConflictCode::DirectConversationRootMaskViolation));
     }
     if evaluated {
+        if event.kind == EventKind::SpaceCreate
+            && event
+                .payload
+                .get("object")
+                .and_then(|object| object.get("kind"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind != "topic")
+        {
+            return Ok(Err(ConflictCode::DirectConversationSpaceForbidden));
+        }
         let admitted = participant_authority_admits(
             conn,
             event,
@@ -901,6 +1023,22 @@ pub(crate) async fn commit_binding_current_result_in_connection(
     let payload = bound_payload(event).ok_or_else(|| {
         PersistenceError::SchemaViolation("ak.direct_conversation.bound payload is invalid".into())
     })?;
+    if payload.realm_id != event.realm_id
+        || commit.realm_id != event.realm_id
+        || commit.event_ref != event.event_id
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || event.scope_ref
+            != (ScopeRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "binding projection differs from its accepted Event/Realm stream".into(),
+        ));
+    }
     let entry = DirectConversationBindingEndorsementEntry {
         tag_id: arkret_models_collaboration::exact_current_results::CanonicalEventDot::new(
             event.event_id.clone(),
@@ -910,6 +1048,7 @@ pub(crate) async fn commit_binding_current_result_in_connection(
         value: payload.clone(),
     };
     let value = match binding_current_in_connection(conn, &event.realm_id).await? {
+        Some(current) if current.endorsements.contains(&entry) => Ok(current),
         Some(current) => current.with_endorsement(entry),
         None => Ok(DirectConversationBindingCurrentValue {
             endorsements: vec![entry],
@@ -927,7 +1066,7 @@ pub(crate) async fn commit_binding_current_result_in_connection(
     let position = i64::try_from(commit.stream_position).map_err(|_| {
         PersistenceError::SchemaViolation("binding stream position exceeds BIGINT".to_owned())
     })?;
-    sql_query(
+    let changed = sql_query(
         "INSERT INTO direct_conversation_binding_current_results \
          (realm_id,pair_key,binding_digest,current_commit_id,current_stream_position,value,updated_at) \
          VALUES ($1,$2,$3,$4,$5,$6,$7) \
@@ -935,7 +1074,12 @@ pub(crate) async fn commit_binding_current_result_in_connection(
            current_commit_id=EXCLUDED.current_commit_id, \
            current_stream_position=EXCLUDED.current_stream_position, \
            value=EXCLUDED.value, updated_at=EXCLUDED.updated_at \
-         WHERE direct_conversation_binding_current_results.binding_digest=EXCLUDED.binding_digest",
+         WHERE direct_conversation_binding_current_results.binding_digest=EXCLUDED.binding_digest \
+           AND direct_conversation_binding_current_results.pair_key=EXCLUDED.pair_key \
+           AND (direct_conversation_binding_current_results.current_stream_position<EXCLUDED.current_stream_position \
+             OR (direct_conversation_binding_current_results.current_stream_position=EXCLUDED.current_stream_position \
+               AND direct_conversation_binding_current_results.current_commit_id=EXCLUDED.current_commit_id \
+               AND direct_conversation_binding_current_results.value=EXCLUDED.value))",
     )
     .bind::<Text, _>(event.realm_id.as_str())
     .bind::<Text, _>(payload.pair_key.as_str())
@@ -947,5 +1091,127 @@ pub(crate) async fn commit_binding_current_result_in_connection(
     .execute(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(PersistenceError::Conflict(
+            "failed_precondition: binding projection changes its pair, digest or accepted revision"
+                .into(),
+        ))
+    }
+}
+
+/// Validate an authenticated replica value without re-running governing admission.
+pub(crate) async fn guard_binding_snapshot_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    entry: &arkret_wire::TypedCurrentResult,
+) -> PersistenceResult<()> {
+    let arkret_wire::TypedCurrentResult::Value {
+        selector,
+        source_stream_ref,
+        revision,
+        value,
+    } = entry;
+    let arkret_wire::CurrentSelector::DirectConversationBinding { pair_key } = selector else {
+        return Err(PersistenceError::SchemaViolation(
+            "binding selector is invalid".into(),
+        ));
+    };
+    if *source_stream_ref
+        != (arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        })
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "binding requires its exact Realm stream".into(),
+        ));
+    }
+    let incoming: DirectConversationBindingCurrentValue =
+        serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+    let digest = incoming
+        .binding_digest()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if incoming.endorsements.iter().any(|endorsement| {
+        endorsement.value.realm_id != *realm_id || endorsement.value.pair_key != *pair_key
+    }) || incoming
+        .endorsements
+        .windows(2)
+        .any(|entries| entries[0].tag_id >= entries[1].tag_id)
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "binding Realm, pair or canonical dots differ".into(),
+        ));
+    }
+    #[derive(diesel::QueryableByName)]
+    struct Retained {
+        #[diesel(sql_type = Text)]
+        pair_key: String,
+        #[diesel(sql_type = Text)]
+        binding_digest: String,
+        #[diesel(sql_type = Text)]
+        current_commit_id: String,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        current_stream_position: i64,
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+    }
+    let retained = sql_query("SELECT pair_key,binding_digest,current_commit_id,current_stream_position,value FROM direct_conversation_binding_current_results WHERE realm_id=$1 FOR UPDATE")
+        .bind::<Text,_>(realm_id.as_str()).get_result::<Retained>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if let Some(retained) = retained {
+        let old: DirectConversationBindingCurrentValue =
+            serde_json::from_value(retained.value.clone()).map_err(PersistenceError::database)?;
+        let position = i64::try_from(revision.stream_position).map_err(|_| {
+            PersistenceError::SchemaViolation("binding revision exceeds BIGINT".into())
+        })?;
+        if retained.pair_key != pair_key.as_str()
+            || retained.binding_digest != digest.as_str()
+            || retained.current_stream_position > position
+            || old
+                .endorsements
+                .iter()
+                .any(|item| !incoming.endorsements.contains(item))
+            || (retained.current_stream_position == position
+                && (retained.current_commit_id != revision.commit_id.as_str()
+                    || retained.value != *value))
+        {
+            return Err(PersistenceError::Conflict("failed_precondition: binding snapshot changes its pair, digest, revision or retained endorsements".into()));
+        }
+    }
     Ok(())
+}
+
+pub(crate) async fn install_binding_snapshot_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    entry: &arkret_wire::TypedCurrentResult,
+    installed_at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    guard_binding_snapshot_in_connection(conn, realm_id, entry).await?;
+    let arkret_wire::TypedCurrentResult::Value {
+        selector,
+        revision,
+        value,
+        ..
+    } = entry;
+    let arkret_wire::CurrentSelector::DirectConversationBinding { pair_key } = selector else {
+        unreachable!()
+    };
+    let binding: DirectConversationBindingCurrentValue =
+        serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+    let digest = binding
+        .binding_digest()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let position = i64::try_from(revision.stream_position)
+        .map_err(|_| PersistenceError::SchemaViolation("binding revision exceeds BIGINT".into()))?;
+    let changed = sql_query("INSERT INTO direct_conversation_binding_current_results (realm_id,pair_key,binding_digest,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(realm_id) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE direct_conversation_binding_current_results.pair_key=EXCLUDED.pair_key AND direct_conversation_binding_current_results.binding_digest=EXCLUDED.binding_digest AND (direct_conversation_binding_current_results.current_stream_position<EXCLUDED.current_stream_position OR (direct_conversation_binding_current_results.current_stream_position=EXCLUDED.current_stream_position AND direct_conversation_binding_current_results.current_commit_id=EXCLUDED.current_commit_id AND direct_conversation_binding_current_results.value=EXCLUDED.value))")
+        .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(pair_key.as_str()).bind::<Text,_>(digest.as_str()).bind::<Text,_>(revision.commit_id.as_str()).bind::<diesel::sql_types::BigInt,_>(position).bind::<Jsonb,_>(value).bind::<diesel::sql_types::Timestamptz,_>(installed_at)
+        .execute(conn).await.map_err(PersistenceError::database)?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(PersistenceError::Conflict(
+            "failed_precondition: binding snapshot revision differs".into(),
+        ))
+    }
 }

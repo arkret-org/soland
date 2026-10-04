@@ -428,6 +428,7 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
                 | "agent_participation"
                 | "metadata"
                 | "encrypted_metadata"
+                | "topic"
                 | "content"
                 | "encrypted_content"
         ) && !matches!(
@@ -445,6 +446,61 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
         }
     }
     let (row, current, position) = lock_active_patch_target(conn, event, commit, &payload).await?;
+    if payload.patch.iter().any(|(path, _)| path == "topic") {
+        if payload.expected_state_digest.is_none()
+            || crate::direct_conversation_admission::direct_conversation_realm_in_connection(
+                conn,
+                &event.realm_id,
+            )
+            .await?
+            .is_none()
+            || current.scope_circle_id.is_some()
+            || !arkret_models_collaboration::objects::profiles::resolve_primary_track(
+                &current.tracks,
+                None,
+            )
+            .ok()
+            .flatten()
+            .is_some_and(|(name, _)| name == "discussion")
+        {
+            return Err(reject(
+                "Topic classification requires a Direct Conversation Chat and exact digest CAS",
+            ));
+        }
+        for (_, op) in payload
+            .patch
+            .iter()
+            .filter(|(path, _)| path.as_str() == "topic")
+        {
+            match op {
+                arkret_wire::patch::PatchOp::Explicit {
+                    op: arkret_wire::patch::PatchOpKind::Set,
+                    value: Some(value),
+                } => {
+                    let topic: arkret_models_collaboration::objects::strand::StrandTopic =
+                        serde_json::from_value(value.clone())
+                            .map_err(PersistenceError::database)?;
+                    let present = diesel::sql_query("SELECT EXISTS (SELECT 1 FROM space_current_results s JOIN space_parent_current_results p ON p.space_id=s.space_id AND p.realm_id=s.realm_id WHERE s.realm_id=$1 AND s.space_id=$2 AND s.value->>'kind'='topic' AND s.value->>'state'='active' AND NOT (s.value ? 'scope_circle_id') AND p.value->'parent_space_id'='null'::jsonb) AS present")
+                        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(topic.space_id.as_str())
+                        .get_result::<PresentRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+                    if !present.present {
+                        return Err(reject(
+                            "Topic classification target is not an active same-Realm root Topic",
+                        ));
+                    }
+                }
+                arkret_wire::patch::PatchOp::Explicit {
+                    op: arkret_wire::patch::PatchOpKind::Unset,
+                    value: None,
+                } if current.topic.is_some() => {}
+                _ => {
+                    return Err(reject(
+                        "Topic classification requires a whole explicit set or existing-value unset",
+                    ));
+                }
+            }
+        }
+    }
     let writes_synthesis = payload.patch.iter().any(|(path, _)| {
         matches!(
             path.as_str(),

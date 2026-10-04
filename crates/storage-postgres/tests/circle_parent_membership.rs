@@ -839,6 +839,18 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             roster,
             soland_storage::MlsRosterAuthorityRead::NotFound
         ));
+        let member = arkret_models_collaboration::mls_roster_authority::MlsMemberRosterAuthorityReadRequestBody {
+            realm_id: roster_request.realm_id.clone(), effective_scope: roster_request.effective_scope.clone(),
+            mls_group_id: roster_request.mls_group_id.clone(), target_commit_event_ref: roster_request.target_commit_event_ref.clone(),
+            target_epoch: roster_request.target_epoch, caller_actor_id: roster_request.caller_actor_id.clone(), cursor: None,
+        };
+        assert!(matches!(
+            store
+                .mls_member_roster_selector(&member, &ordinary_realm::station())
+                .await
+                .unwrap(),
+            soland_storage::MlsMemberRosterSelectorRead::NotFound
+        ));
     }
     let joined = circle_member(&pool, &circle, &alice).await;
     let circle_head = same_parent_join.authority_commit.clone();

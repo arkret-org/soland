@@ -4684,6 +4684,7 @@ CREATE TABLE strand_current_results (
  CHECK(value->>'realm_id'=realm_id)
 );
 CREATE INDEX strand_current_results_realm ON strand_current_results(realm_id,strand_id);
+CREATE INDEX strand_current_results_topic ON strand_current_results(realm_id, (value #>> '{topic,space_id}'));
 
 -- Registered typed-pair position current, including an explicit JSON null.
 -- The Board and Strand are separate typed identity components, never a hash

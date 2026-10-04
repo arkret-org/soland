@@ -905,6 +905,9 @@ impl FederationDispatcher {
     /// Run one dispatch pass. Pulled out of [`spawn`] so the
     /// integration test can drive the loop deterministically.
     pub async fn run_one_pass(&self) -> Result<(), String> {
+        if let Err(error) = super::mls_recipient_attestations::dispatch(&self.state).await {
+            tracing::warn!(%error, "recipient MLS Add proof outbox scan is unavailable");
+        }
         if let Err(error) =
             crate::routing::identity::account::materialize_contact_completions(&self.state).await
         {

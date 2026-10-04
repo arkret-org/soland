@@ -1,7 +1,8 @@
 //! Member-authorized signed MLS roster reads through Account and governance Stations.
 
 use arkret_models_collaboration::mls_roster_authority::{
-    MlsRosterAuthorityReadOutcome, MlsRosterAuthorityReadRequestBody,
+    MlsMemberRosterAuthorityReadRequestBody, MlsRosterAuthorityReadOutcome,
+    MlsRosterAuthorityReadRequestBody,
 };
 use arkret_wire::{DidCoreId, ErrorCode};
 use soland_services::authority_commit::{
@@ -94,6 +95,70 @@ fn json_page(page: MlsRosterAuthorityReadOutcome) -> JsonResult<serde_json::Valu
     json_ok(value)
 }
 
+fn self_json_page(
+    page: MlsRosterAuthorityReadOutcome,
+    request: &MlsRosterAuthorityReadRequestBody,
+    authority: &DidCoreId,
+    resolution: &arkret_models_identity::AuthenticatedServiceResolution,
+) -> JsonResult<serde_json::Value> {
+    for record in &page.records {
+        if let arkret_models_collaboration::mls_roster_authority::MlsRosterRecord::Add {
+            proposal_wire_b64u,
+            attestation,
+            ..
+        } = record
+        {
+            let proposal = arkret_mls::verify_add_proposal_leaf(
+                &arkret_canonical::base64url_decode(proposal_wire_b64u.as_str())
+                    .map_err(|_| unavailable())?,
+            )
+            .map_err(|_| unavailable())?;
+            if proposal.actor_id != attestation.actor_id
+                || proposal.leaf_signature_key != attestation.leaf_signature_key_b64u
+            {
+                return Err(unavailable());
+            }
+        }
+    }
+    let head = page.manifest.authority_head_commit_event_ref.clone();
+    let projected =
+        arkret::project_mls_self_roster_authority_page(page, request, authority, &head, resolution)
+            .map_err(|_| unavailable())?;
+    json_ok(serde_json::to_value(projected).map_err(|_| unavailable())?)
+}
+
+async fn recheck_self_cut(
+    state: &AppState,
+    member: &MlsMemberRosterAuthorityReadRequestBody,
+    selected: &MlsRosterAuthorityReadRequestBody,
+    authority: &soland_storage::CurrentRealmAuthority,
+) -> Result<(), AppError> {
+    let cut = state
+        .authority_commits()
+        .mls_member_roster_selector(member, &state.service_core_id())
+        .await
+        .map_err(internal_read_error)?;
+    match cut {
+        soland_storage::MlsMemberRosterSelectorRead::NotFound => return Err(not_found()),
+        soland_storage::MlsMemberRosterSelectorRead::Authorized {
+            request,
+            governance_station_id,
+        } if &request == selected && governance_station_id == authority.service_id => {}
+        _ => return Err(unavailable()),
+    }
+    if state
+        .authority_commits()
+        .current_authority(&member.realm_id)
+        .await
+        .map_err(internal_read_error)?
+        .as_ref()
+        != Some(authority)
+    {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
 #[salvo::oapi::endpoint(
     operation_id = "ak.self.mls.read.roster_authority",
     request_body = serde_json::Value,
@@ -109,15 +174,37 @@ pub(super) async fn resolve_self_mls_roster_authority(
     let session = aa.authenticated_session(state, req).await?;
     let caller =
         crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
-    let request = req
-        .parse_json::<MlsRosterAuthorityReadRequestBody>()
+    let member_request = req
+        .parse_json::<MlsMemberRosterAuthorityReadRequestBody>()
         .await
         .map_err(|_| AppError::new(ErrorCode::SchemaViolation, "invalid MLS roster request"))?;
-    validate_request(&request)?;
-    if request.caller_actor_id != caller || caller.route_service_id() != &state.service_core_id() {
+    member_request.validate().map_err(|_| {
+        AppError::new(
+            ErrorCode::SchemaViolation,
+            "invalid MLS member roster selector",
+        )
+    })?;
+    if member_request.caller_actor_id != caller
+        || caller.route_service_id() != &state.service_core_id()
+    {
         return Err(not_found());
     }
     let local = state.service_core_id();
+    let (request, selected_governance) = match state
+        .authority_commits()
+        .mls_member_roster_selector(&member_request, &local)
+        .await
+        .map_err(internal_read_error)?
+    {
+        soland_storage::MlsMemberRosterSelectorRead::NotFound => return Err(not_found()),
+        soland_storage::MlsMemberRosterSelectorRead::RevisionUnavailable => {
+            return Err(unavailable());
+        }
+        soland_storage::MlsMemberRosterSelectorRead::Authorized {
+            request,
+            governance_station_id,
+        } => (request, governance_station_id),
+    };
     let authorized = state
         .authority_commits()
         .mls_roster_authority_attestors(&request, &local, None)
@@ -134,8 +221,19 @@ pub(super) async fn resolve_self_mls_roster_authority(
         .await
         .map_err(internal_read_error)?
         .ok_or_else(not_found)?;
+    if authority.service_id != selected_governance {
+        return Err(unavailable());
+    }
     if authority.service_id == local {
-        return json_page(governance_page(state, &request, None).await?);
+        let page = governance_page(state, &request, None).await?;
+        let resolution =
+            crate::routing::system::service_resolution::current_authenticated_service_resolution(
+                state,
+            )
+            .await
+            .map_err(|_| unavailable())?;
+        recheck_self_cut(state, &member_request, &request, &authority).await?;
+        return self_json_page(page, &request, &authority.service_id, &resolution);
     }
     if !matches!(authorized, Preflight::ForwardRequired) {
         return Err(unavailable());
@@ -188,7 +286,8 @@ pub(super) async fn resolve_self_mls_roster_authority(
     {
         return Err(unavailable());
     }
-    json_page(page)
+    recheck_self_cut(state, &member_request, &request, &authority).await?;
+    self_json_page(page, &request, &authority.service_id, &resolution)
 }
 
 #[salvo::oapi::endpoint(

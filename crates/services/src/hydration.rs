@@ -263,7 +263,40 @@ pub async fn hydrate_sidecar_context_projections(
 async fn hydration_replay_records(
     persistence: &dyn soland_storage::PersistenceStore,
 ) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
-    persistence.events().snapshot_all().await
+    let records = persistence.events().snapshot_all().await?;
+    let mut ordered = BTreeMap::new();
+    for record in records {
+        let id = arkret_wire::EventId::new(record.event_id.clone())
+            .map_err(soland_storage::PersistenceError::database)?;
+        let accepted = persistence
+            .authority_commits()
+            .committed_event(&id)
+            .await?
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(
+                    "hydration canonical Event has no accepting Commit".to_owned(),
+                )
+            })?;
+        if serde_json::to_value(&accepted.event)
+            .map_err(soland_storage::PersistenceError::database)?
+            != record.envelope
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "hydration canonical Event differs from its Commit binding".to_owned(),
+            ));
+        }
+        let stream = arkret_canonical::canonical_json_bytes(&accepted.commit.stream_ref)
+            .map_err(soland_storage::PersistenceError::database)?;
+        if ordered
+            .insert((stream, accepted.commit.stream_position), record)
+            .is_some()
+        {
+            return Err(soland_storage::PersistenceError::Internal(
+                "hydration contains two Events at one Commit stream position".to_owned(),
+            ));
+        }
+    }
+    Ok(ordered.into_values().collect())
 }
 
 fn install_relation_current_results(
@@ -996,7 +1029,7 @@ pub async fn hydrate_projections_from_persistence(
                 container_space_id: id.to_string(),
                 realm_id: space.realm_id.to_string(),
                 kind: space.kind,
-                title: space.title,
+                title: space.title.unwrap_or_default(),
                 fields: space.fields,
                 scope_circle_id: space.scope_circle_id.map(|id| id.to_string()),
                 child_scope_policy: space.child_scope_policy,
@@ -1012,6 +1045,7 @@ pub async fn hydrate_projections_from_persistence(
             },
         );
     }
+    let mut canonical_strands = BTreeMap::new();
     for strand in current_objects.strands {
         let id = strand.id.ok_or_else(|| {
             soland_storage::PersistenceError::Internal(
@@ -1028,7 +1062,7 @@ pub async fn hydrate_projections_from_persistence(
             arkret_wire::ObjectState::Redacted => ObjectLifecycleState::Redacted,
         };
         let metadata = strand.metadata.unwrap_or_default();
-        proj.strands.insert(
+        canonical_strands.insert(
             id.to_string(),
             StrandProjection {
                 strand_id: id.to_string(),
@@ -1061,6 +1095,7 @@ pub async fn hydrate_projections_from_persistence(
             },
         );
     }
+    proj.strands.extend(canonical_strands.clone());
     // The legacy projection_circles mirror can be absent or stale after
     // direct Circle admission. Rebuild this process-local cache only from exact
     // accepted Event/Commit pairs. Each Circle's transitions are ordered by
@@ -1299,13 +1334,20 @@ pub async fn hydrate_projections_from_persistence(
         }
     }
 
-    // The Strand mirror intentionally stores only common index fields. Replay
-    // the accepted projection events after mirror hydration so Calendar
-    // fields, schema activation, the schedule revision DAG, RSVP causal-register
-    // heads, Poll Message/vote state, and moderation OR-Set indexes survive
-    // a process restart from their canonical durable source. Poll responses
-    // are replayed from the Event log into PollState and deliberately do not
-    // create standalone MessageState timeline rows.
+    // Replay retained histories in their actual Commit stream order to rebuild
+    // Calendar revision sources, RSVP heads, Poll state and moderation indexes.
+    // Since-join replicas can have a complete canonical Strand current without
+    // its create history; their materialized state must not be rewound by
+    // reapplying old transitions against the latest lifecycle state.
+    let replayable_strands = events
+        .iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::StrandCreate.as_str())
+        .map(|record| {
+            let id = arkret_wire::EventId::new(record.event_id.clone())
+                .map_err(soland_storage::PersistenceError::database)?;
+            Ok(arkret_wire::StrandId::from_event_id(&id).to_string())
+        })
+        .collect::<soland_storage::PersistenceResult<BTreeSet<_>>>()?;
     let default_strand_realms = events
         .iter()
         .filter(|event| event.kind == arkret_wire::EventKind::RealmSetDefaultStrand.as_str())
@@ -1325,6 +1367,21 @@ pub async fn hydrate_projections_from_persistence(
     let replay_events = events
         .into_iter()
         .filter(|event| {
+            if matches!(
+                arkret_wire::EventKind::from_wire(&event.kind),
+                arkret_wire::EventKind::StrandUpdate
+                    | arkret_wire::EventKind::StrandArchive
+                    | arkret_wire::EventKind::StrandRestore
+            ) && event
+                .envelope
+                .pointer("/payload/target_ref")
+                .and_then(Value::as_str)
+                .is_some_and(|id| {
+                    canonical_strands.contains_key(id) && !replayable_strands.contains(id)
+                })
+            {
+                return false;
+            }
             matches!(
                 arkret_wire::EventKind::from_wire(&event.kind),
                 arkret_wire::EventKind::StrandCreate
@@ -1401,6 +1458,15 @@ pub async fn hydrate_projections_from_persistence(
             "accepted-poll",
             Some(reference),
         )?;
+    }
+    // Exact typed current remains the final object truth. Historical replay
+    // contributes only the derived Calendar source that this cache needs.
+    for (id, mut strand) in canonical_strands {
+        strand.schedule_revision_source = proj
+            .strands
+            .get(&id)
+            .and_then(|replayed| replayed.schedule_revision_source.clone());
+        proj.strands.insert(id, strand);
     }
     // The default pointer is a singleton last-write-wins result. Replaying
     // reception order would let an older Event overwrite a later Commit, so

@@ -263,6 +263,60 @@ pub(crate) async fn verified_head(
         .get_result::<CutRow>(conn).await.optional().map_err(PersistenceError::database)?.map(|row| Ok(arkret_wire::CommitStreamHead { stream_ref:stream.clone(), commit_id:row.head_commit_id.parse().map_err(invalid)?, stream_position:u64::try_from(row.head_stream_position).map_err(invalid)? })).transpose()
 }
 
+#[derive(diesel::QueryableByName)]
+struct CurrentEvidenceRow {
+    #[diesel(sql_type = Jsonb)]
+    entry_json: serde_json::Value,
+}
+
+/// Exact current evidence retained by verified bootstrap and contiguous
+/// replica folding. A stale or unverified stream cannot prove a missing
+/// historical Commit, and its row is excluded rather than reconstructed.
+pub(crate) async fn snapshot_current_evidence(
+    conn: &mut AsyncPgConnection,
+    realm: &RealmId,
+    heads: &[arkret_wire::CommitStreamHead],
+) -> PersistenceResult<Vec<TypedCurrentResult>> {
+    let rows = diesel::sql_query(
+        "SELECT jsonb_build_object('selector',selector,'source_stream_ref',source_stream_ref, \
+         'revision',jsonb_build_object('commit_id',current_commit_id,'stream_position',current_stream_position), \
+         'value',value) AS entry_json FROM replica_authorization_rows WHERE realm_id=$1",
+    ).bind::<Text, _>(realm.as_str()).load::<CurrentEvidenceRow>(conn)
+        .await.map_err(PersistenceError::database)?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut verified = BTreeSet::new();
+    for head in heads {
+        if verified_head(conn, &head.stream_ref).await?.as_ref() == Some(head) {
+            verified.insert(head.stream_ref.clone());
+        }
+    }
+    let mut entries = Vec::new();
+    for row in rows {
+        let entry: TypedCurrentResult = serde_json::from_value(row.entry_json).map_err(invalid)?;
+        let TypedCurrentResult::Value {
+            source_stream_ref,
+            revision,
+            ..
+        } = &entry;
+        if source_stream_ref.realm_id() != realm {
+            return Err(invalid("current evidence belongs to another Realm"));
+        }
+        if verified.contains(source_stream_ref)
+            && heads.iter().any(|head| {
+                &head.stream_ref == source_stream_ref
+                    && (revision.stream_position < head.stream_position
+                        || (revision.stream_position == head.stream_position
+                            && revision.commit_id == head.commit_id))
+            })
+        {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
 pub(crate) async fn install_verified_head(
     conn: &mut AsyncPgConnection,
     head: &arkret_wire::CommitStreamHead,

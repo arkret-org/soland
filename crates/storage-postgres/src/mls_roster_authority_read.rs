@@ -30,6 +30,135 @@ struct GroupRow {
 }
 
 #[derive(QueryableByName)]
+struct ProvenanceRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    mls_group_id: String,
+    #[diesel(sql_type = Text)]
+    genesis_event_ref: String,
+}
+
+#[derive(QueryableByName)]
+struct AuthorityRow {
+    #[diesel(sql_type = Text)]
+    service_id: String,
+}
+
+pub(crate) async fn member_selector(
+    pool: &PgPool,
+    request: &arkret_models_collaboration::mls_roster_authority::MlsMemberRosterAuthorityReadRequestBody,
+    issuer: &DidCoreId,
+) -> PersistenceResult<soland_storage::MlsMemberRosterSelectorRead> {
+    request
+        .validate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        member_selector_in_connection(conn, request, issuer)
+            .await
+            .map_err(PgTransactionError::from)
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
+async fn member_selector_in_connection(
+    conn: &mut AsyncPgConnection,
+    request: &arkret_models_collaboration::mls_roster_authority::MlsMemberRosterAuthorityReadRequestBody,
+    issuer: &DidCoreId,
+) -> PersistenceResult<soland_storage::MlsMemberRosterSelectorRead> {
+    use soland_storage::MlsMemberRosterSelectorRead as Selected;
+
+    use crate::mls_group_state_material_read::MemberMlsTargetSelector;
+    if request.caller_actor_id.route_service_id() != issuer {
+        return Ok(Selected::NotFound);
+    }
+    let selector = MemberMlsTargetSelector {
+        realm_id: request.realm_id.clone(),
+        effective_scope: request.effective_scope.clone(),
+        mls_group_id: request.mls_group_id.clone(),
+        group_state_event_id: None,
+        caller_actor_id: request.caller_actor_id.clone(),
+        target_commit_event_ref: request.target_commit_event_ref.clone(),
+        target_epoch: request.target_epoch,
+    };
+    match crate::mls_group_state_material_read::read_in_connection(conn, &selector, issuer, None)
+        .await?
+    {
+        MlsMemberGroupStateMaterialRead::NotFound => return Ok(Selected::NotFound),
+        MlsMemberGroupStateMaterialRead::RevisionUnavailable => {
+            return Ok(Selected::RevisionUnavailable);
+        }
+        MlsMemberGroupStateMaterialRead::Authorized { .. } => {}
+    }
+    let key = String::from_utf8(
+        arkret_canonical::canonical_json_bytes(&request.effective_scope)
+            .map_err(PersistenceError::database)?,
+    )
+    .map_err(PersistenceError::database)?;
+    let current =
+        sql_query("SELECT mls_group_id,value FROM mls_group_current_results WHERE scope_key=$1")
+            .bind::<Text, _>(&key)
+            .get_result::<GroupRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+    let mut genesis = None;
+    if let Some(row) = current {
+        let Ok(group) = serde_json::from_value::<MlsGroupCurrent>(row.value) else {
+            return Ok(Selected::RevisionUnavailable);
+        };
+        if row.mls_group_id != request.mls_group_id.as_str()
+            || group.effective_scope != request.effective_scope
+        {
+            return Ok(Selected::RevisionUnavailable);
+        }
+        genesis = Some(group.genesis_event_ref);
+    }
+    let frozen = sql_query("SELECT realm_id,mls_group_id,genesis_event_ref FROM mls_replica_genesis_provenance WHERE scope_key=$1")
+        .bind::<Text, _>(&key).get_result::<ProvenanceRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if let Some(row) = frozen {
+        let Ok(reference) = EventId::new(row.genesis_event_ref) else {
+            return Ok(Selected::RevisionUnavailable);
+        };
+        if row.realm_id != request.realm_id.as_str()
+            || row.mls_group_id != request.mls_group_id.as_str()
+            || genesis.as_ref().is_some_and(|value| value != &reference)
+        {
+            return Ok(Selected::RevisionUnavailable);
+        }
+        genesis = Some(reference);
+    }
+    let Some(genesis) = genesis else {
+        return Ok(Selected::RevisionUnavailable);
+    };
+    let peer = request.with_accepted_genesis(genesis);
+    if peer.validate().is_err() {
+        return Ok(Selected::RevisionUnavailable);
+    }
+    let Some(authority) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
+        .bind::<Text, _>(request.realm_id.as_str())
+        .get_result::<AuthorityRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+    else {
+        return Ok(Selected::RevisionUnavailable);
+    };
+    let Ok(governance_station_id) = DidCoreId::new(authority.service_id) else {
+        return Ok(Selected::RevisionUnavailable);
+    };
+    Ok(Selected::Authorized {
+        request: peer,
+        governance_station_id,
+    })
+}
+
+#[derive(QueryableByName)]
 struct AcceptedRow {
     #[diesel(sql_type = Jsonb)]
     envelope: serde_json::Value,
@@ -122,7 +251,7 @@ async fn read_in_connection(
         realm_id: request.realm_id.clone(),
         effective_scope: request.effective_scope.clone(),
         mls_group_id: request.mls_group_id.clone(),
-        group_state_event_id: request.genesis_event_ref.clone(),
+        group_state_event_id: Some(request.genesis_event_ref.clone()),
         caller_actor_id: request.caller_actor_id.clone(),
         target_commit_event_ref: request.target_commit_event_ref.clone(),
         target_epoch: request.target_epoch,

@@ -1584,6 +1584,21 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    /// Archive the original governing object after peer authority and
+    /// cryptographic verification, without granting local signing authority.
+    pub async fn install_verified_account_snapshot(
+        &self,
+        account: &arkret_wire::AccountId,
+        issuer: &DidCoreId,
+        snapshot: &RealmStateSnapshot,
+    ) -> ServiceResult<()> {
+        soland_storage::enforce_inline_realm_state_snapshot_capacity(snapshot)?;
+        Ok(self
+            .store()
+            .install_verified_account_snapshot(account, issuer, snapshot)
+            .await?)
+    }
+
     /// Return the exact original object issued to `account`, after the store
     /// re-proves its disclosure at the read cut. A current head is never a
     /// substitute for a missing or no-longer-disclosable reference.
@@ -1730,6 +1745,43 @@ impl AuthorityCommitApplication {
         Ok(self
             .store()
             .install_mls_add_authority_attestation(verified, issuer)
+            .await?)
+    }
+
+    pub async fn mls_recipient_attestation(
+        &self,
+        commit: &arkret_wire::EventId,
+        welcome: &arkret_wire::MlsWelcomeDeliveryId,
+    ) -> ServiceResult<
+        Option<arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody>,
+    > {
+        Ok(self
+            .store()
+            .mls_recipient_attestation(commit, welcome)
+            .await?)
+    }
+
+    pub async fn pending_mls_recipient_attestations(
+        &self,
+        limit: usize,
+    ) -> ServiceResult<
+        Vec<arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody>,
+    > {
+        Ok(self
+            .store()
+            .pending_mls_recipient_attestations(limit)
+            .await?)
+    }
+
+    pub async fn acknowledge_mls_recipient_attestation(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody,
+        digest: &arkret_wire::Hash,
+        at: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        Ok(self
+            .store()
+            .acknowledge_mls_recipient_attestation(request, digest, at)
             .await?)
     }
 

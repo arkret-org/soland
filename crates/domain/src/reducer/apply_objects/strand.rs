@@ -524,8 +524,9 @@ struct StrandNarrativePost {
     tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
 }
 
-/// Apply an `ak.strand.update` against one complete frozen Strand document so
-/// dotted Synthesis paths cannot be mistaken for the top-level Description.
+/// Patch the frozen narrative cache so Synthesis paths remain distinct from
+/// the top-level Description. Whole-value Topic state belongs to the native
+/// canonical Strand current; this compatibility cache does not carry it.
 fn apply_strand_narrative_patch(
     strand: &StrandProjection,
     patch: &serde_json::Map<String, Value>,
@@ -564,9 +565,23 @@ fn apply_strand_narrative_patch(
     let typed_patch =
         serde_json::from_value::<arkret_wire::patch::Patch>(Value::Object(patch.clone()))
             .map_err(|_| "strand_patch_invalid")?;
-    let post = typed_patch
-        .apply_for_typed_target(&Value::Object(pre), &strand.strand_id)
-        .map_err(|_| "strand_patch_invalid")?;
+    typed_patch.validate().map_err(|_| "strand_patch_invalid")?;
+    let mut narrative_patch = arkret_wire::patch::Patch::new();
+    for (path, op) in typed_patch.iter() {
+        if path != "topic" {
+            narrative_patch
+                .insert_op(path.clone(), op.clone())
+                .map_err(|_| "strand_patch_invalid")?;
+        }
+    }
+    let pre = Value::Object(pre);
+    let post = if narrative_patch.is_empty() {
+        pre
+    } else {
+        narrative_patch
+            .apply_for_typed_target(&pre, &strand.strand_id)
+            .map_err(|_| "strand_patch_invalid")?
+    };
     let post_object = post.as_object().ok_or("strand_projection_invalid")?;
     let content = post_object.get("content").cloned();
     let encrypted_content = post_object.get("encrypted_content").cloned();

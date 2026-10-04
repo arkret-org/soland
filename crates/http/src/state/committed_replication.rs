@@ -174,6 +174,34 @@ async fn verified_replicated_welcomes(
     Ok(verified)
 }
 
+async fn prepare_replica_roster_witnesses(
+    state: &AppState,
+    item: &CommittedEventSubmission,
+    welcomes: Vec<VerifiedMlsWelcome>,
+) -> ServiceResult<Vec<VerifiedMlsWelcome>> {
+    let mut prepared = Vec::with_capacity(welcomes.len());
+    for mut welcome in welcomes {
+        match super::authority_mls_unit::attach_replicated_roster_witnesses(
+            state,
+            item,
+            std::slice::from_mut(&mut welcome),
+        )
+        .await
+        {
+            Ok(()) => prepared.push(welcome),
+            Err(error @ (ServiceError::Database(_) | ServiceError::Internal(_))) => {
+                return Err(error);
+            }
+            Err(error) => tracing::warn!(
+                commit_event_ref = %item.event_submission.event.event_id,
+                welcome_id = %welcome.delivery.welcome_id,
+                %error, "replicated Welcome refused without rejecting its accepted Commit"
+            ),
+        }
+    }
+    Ok(prepared)
+}
+
 async fn replicate_one(
     state: &AppState,
     peer: &AuthenticatedPeerContext,
@@ -245,6 +273,7 @@ async fn replicate_one(
             }
             // A replay may queue outstanding Welcomes only after the current
             // origin binding has been re-proved for this authenticated peer.
+            let welcomes = prepare_replica_roster_witnesses(state, item, welcomes).await?;
             return state
                 .authority_commits()
                 .queue_replicated_welcomes(
@@ -326,6 +355,7 @@ async fn replicate_one(
             .realm_digest_suite(event.realm_id.as_str()),
     )
     .await?;
+    let welcomes = prepare_replica_roster_witnesses(state, item, welcomes).await?;
     let outcome = state
         .authority_commits()
         .install_committed_replica(&CommittedReplica {

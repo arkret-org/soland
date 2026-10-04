@@ -302,9 +302,6 @@ pub async fn issue_account_snapshot(
         else {
             return Ok(None);
         };
-        if tenure.service_id != issuer.as_str() {
-            return Err(rejected("this Station does not hold the current governing tenure").into());
-        }
         let Some(material) =
             account_snapshot_material_in_connection(conn, realm_id, account).await?
         else {
@@ -312,6 +309,24 @@ pub async fn issue_account_snapshot(
         };
         if i64::try_from(material.governance_generation).ok() != Some(tenure.generation) {
             return Err(rejected("material generation differs from the locked tenure").into());
+        }
+        crate::issued_realm_snapshots::require_snapshot_serving_cut(
+            conn,
+            account,
+            issuer,
+            &tenure.service_id,
+            &material,
+        )
+        .await?;
+        if tenure.service_id != issuer.as_str() {
+            return crate::issued_realm_snapshots::served_current_snapshot(
+                conn, account, issuer, &material,
+            )
+            .await?
+            .map(Some)
+            .ok_or_else(|| {
+                rejected("the current governing Snapshot has not been installed").into()
+            });
         }
         let snapshot = sign(&material)?;
         if !soland_storage::signed_snapshot_matches_material(&snapshot, &material) {
@@ -506,7 +521,7 @@ async fn disclosure_facts_in_connection(
             "snapshot cut includes an uncommitted Event".to_owned(),
         ));
     }
-    let caller_floor = crate::account_stream_scan::caller_realm_floor_in_connection(
+    let caller_floor = crate::account_stream_scan::snapshot_realm_floor_in_connection(
         conn,
         realm_id,
         &ActorId::account(account.clone()),

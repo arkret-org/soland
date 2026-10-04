@@ -1,5 +1,75 @@
 use super::*;
 
+#[test]
+fn accepted_topic_set_and_unset_preserve_narrative_and_allow_independent_description_update() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("topic-narrative");
+    let realm = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let strand = "ak:strand:AbMObYvbipIn0nz_nVS0khLjwBPnTUlKZMk5TJ0w4k6A";
+    let content = |body: &str| serde_json::json!({"kind":"ak.content.text", "body":body});
+    let create = make_operation(
+        arkret_wire::EventKind::StrandCreate,
+        realm,
+        serde_json::json!({"object":{
+            "id":strand, "realm_id":realm,
+            "metadata":{"title":"Original Chat"},
+            "content":content("Original Description"),
+            "created_by":account_actor("ak:did_core:web:alice.example"),
+        }}),
+    );
+    assert!(matches!(
+        state.apply(&create, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    let tracks = state.strands[strand].tracks.clone();
+    // Only accepted updates enter this cache. Admission owns the exact
+    // whole-value CAS and target validation in the native current writer.
+    for topic in [
+        serde_json::json!({"$op":"set", "value":{
+            "space_id":"ak:space:ARkwFWDTPrObvpqVAL9kBsWkK8GrMr5FDO--3PcMFEwU", "rank":"a0"
+        }}),
+        serde_json::json!({"$op":"unset"}),
+    ] {
+        let update = make_operation(
+            arkret_wire::EventKind::StrandUpdate,
+            realm,
+            serde_json::json!({"target_ref":strand,
+                "expected_state_digest":format!("sha256:{}", "1".repeat(64)),
+                "patch":{"topic":topic},
+            }),
+        );
+        assert!(matches!(
+            state.apply(&update, &hlc),
+            ProjectionEffect::StrandLifecycle { .. }
+        ));
+        assert_eq!(state.strands[strand].title, "Original Chat");
+        assert_eq!(
+            state.strands[strand].content,
+            Some(content("Original Description"))
+        );
+        assert_eq!(state.strands[strand].tracks, tracks);
+    }
+    let mixed = make_operation(
+        arkret_wire::EventKind::StrandUpdate,
+        realm,
+        serde_json::json!({"target_ref":strand,
+            "expected_state_digest":format!("sha256:{}", "2".repeat(64)),
+            "patch":{"topic":{"$op":"set", "value":{
+                    "space_id":"ak:space:ARkwFWDTPrObvpqVAL9kBsWkK8GrMr5FDO--3PcMFEwU", "rank":"b0"}},
+                "content":{"$op":"set", "value":content("Updated Description")}},
+        }),
+    );
+    assert!(matches!(
+        state.apply(&mixed, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
+    assert_eq!(
+        state.strands[strand].content,
+        Some(content("Updated Description"))
+    );
+    assert_eq!(state.strands[strand].tracks, tracks);
+}
+
 // ── Strand lifecycle state-machine tests ──
 
 /// End-to-end Strand lifecycle through the dispatcher: create → archive →

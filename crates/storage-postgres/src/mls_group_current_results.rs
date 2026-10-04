@@ -1016,6 +1016,78 @@ pub(crate) async fn require_mls_send_gate_in_connection(
     event: &arkret_wire::Event,
 ) -> PersistenceResult<()> {
     let envelopes = match event.kind {
+        EventKind::SpaceCreate | EventKind::StrandCreate => {
+            let object = event.payload.get("object").ok_or_else(|| {
+                PersistenceError::SchemaViolation("object create is missing its object".to_owned())
+            })?;
+            let encrypted = object.get("encrypted_metadata");
+            let plaintext = if event.kind == EventKind::SpaceCreate {
+                ["title", "summary", "labels", "avatar_blob_ref"]
+                    .iter()
+                    .any(|field| object.get(*field).is_some())
+            } else {
+                object.get("metadata").is_some()
+            };
+            if !plaintext && encrypted.is_none() {
+                return Ok(());
+            }
+            encrypted
+                .map(|value| {
+                    serde_json::from_value::<arkret_models_crypto::EncryptedEnvelope>(value.clone())
+                        .map(|envelope| vec![envelope])
+                        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
+                })
+                .transpose()?
+        }
+        EventKind::SpaceUpdate | EventKind::StrandUpdate => {
+            let Some(patch) = event.payload.get("patch") else {
+                return Ok(());
+            };
+            let patch: arkret_wire::Patch = serde_json::from_value(patch.clone())
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            let user_metadata = patch.iter().any(|(path, _)| {
+                if event.kind == EventKind::SpaceUpdate {
+                    matches!(
+                        path.split('.').next(),
+                        Some(
+                            "title"
+                                | "summary"
+                                | "labels"
+                                | "avatar_blob_ref"
+                                | "encrypted_metadata"
+                        )
+                    )
+                } else {
+                    matches!(
+                        path.split('.').next(),
+                        Some("metadata" | "encrypted_metadata")
+                    )
+                }
+            });
+            if !user_metadata {
+                return Ok(());
+            }
+            let mut encrypted = None;
+            for (path, op) in patch.iter() {
+                if path.starts_with("encrypted_metadata.")
+                    || (path == "encrypted_metadata"
+                        && op.op() != arkret_wire::patch::PatchOpKind::Set)
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "encrypted metadata requires a whole-envelope set".to_owned(),
+                    ));
+                }
+                if path == "encrypted_metadata" {
+                    encrypted = Some(vec![
+                        serde_json::from_value::<arkret_models_crypto::EncryptedEnvelope>(
+                            op.value().cloned().unwrap_or_default(),
+                        )
+                        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+                    ]);
+                }
+            }
+            encrypted
+        }
         EventKind::MessageCreate | EventKind::MessageRevise => {
             soland_storage::message_create_envelopes(&event.payload)
                 .map_err(PersistenceError::SchemaViolation)?

@@ -65,6 +65,7 @@ pub(crate) use member_identity::{HandleClaimEvidenceRecord, MemberIdentityEventR
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };
+pub(crate) use replica_anchor::refresh_account_snapshot;
 pub use replica_anchor::spawn_pending_anchor_sweeper;
 pub(crate) use service_route_fetcher::VerifiedBindingRouteFetcher;
 pub use soland_services::events::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};

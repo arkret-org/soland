@@ -64,6 +64,28 @@ struct DeliveryRow {
 
 const TRUST_DOMAIN: &str = "ak:trust_domain:direct-conversation.example";
 
+struct CanonicalHydrationAdapter;
+
+impl soland_services::hydration::HydrationProjectionAdapter for CanonicalHydrationAdapter {
+    fn operation_from_canonical_record(
+        &self,
+        record: &soland_services::events::AcceptedEvent,
+    ) -> Option<arkret_event_draft::ProjectedEventOperation> {
+        let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).ok()?;
+        let operation_id =
+            arkret_wire::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).ok()?;
+        let suite = event.realm_id.digest_suite_code().digest_suite();
+        arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            operation_id,
+            arkret_wire::OperationKind::Create,
+            None,
+            &event,
+            suite,
+        )
+        .ok()
+    }
+}
+
 /// A founder with an accepted founding device, a same-Station peer and their
 /// accepted Contact round, in which the founder is the responder.
 struct Pair {
@@ -898,28 +920,6 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
 
 #[tokio::test]
 async fn committed_direct_conversation_founding_rebuilds_resolver_projection_after_restart() {
-    struct Adapter;
-    impl soland_services::hydration::HydrationProjectionAdapter for Adapter {
-        fn operation_from_canonical_record(
-            &self,
-            record: &soland_services::events::AcceptedEvent,
-        ) -> Option<arkret_event_draft::ProjectedEventOperation> {
-            let event =
-                serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).ok()?;
-            let operation_id =
-                arkret_wire::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
-                    .ok()?;
-            arkret_event_draft::ProjectedEventOperation::from_accepted_event(
-                operation_id,
-                arkret_wire::OperationKind::Create,
-                None,
-                &event,
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .ok()
-        }
-    }
-
     let pool = contract_pool().await;
     let pair = pair(&pool).await;
     let at = now();
@@ -962,7 +962,7 @@ async fn committed_direct_conversation_founding_rebuilds_resolver_projection_aft
         let projection = soland_services::projection::ProjectionService::new("dm-restart-test");
         let persistence = PgPersistenceStore::new(pool.clone());
         projection
-            .hydrate_from_persistence(&persistence, &Adapter, [realm.clone()])
+            .hydrate_from_persistence(&persistence, &CanonicalHydrationAdapter, [realm.clone()])
             .await
             .unwrap();
         let state = projection.snapshot();
@@ -2589,6 +2589,88 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         ConflictCode::DirectConversationRootMaskViolation
     );
 
+    let head = Box::pin(exercise_flat_topics(
+        &pool,
+        &uow,
+        head,
+        &binding_ref,
+        &add_ref,
+        &founder,
+        &peer,
+        &facts.main_strand_id,
+    ))
+    .await;
+
+    // Personal watch uses stable participant authority, never the root or bootstrap.
+    let mut head = head;
+    for actor in [&founder, &peer] {
+        let other = if actor == &founder { &peer } else { &founder };
+        let payload =
+            |watcher: &ActorId| {
+                serde_json::to_value(
+            arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload::set(
+                facts.main_strand_id.clone(), watcher.clone(),
+                arkret_models_collaboration::events_payloads::strand::StrandWatchLevel::All, None,
+            )
+        ).unwrap()
+            };
+        let rows_before = count(
+            &pool,
+            "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1",
+            &realm_id,
+        )
+        .await;
+        for (watcher, source) in [
+            (other, Cites::Participant(&binding_ref)),
+            (actor, Cites::Bootstrap(&create_ref)),
+        ] {
+            assert_eq!(
+                refused(&cited(
+                    &head,
+                    EventKind::StrandWatchSet,
+                    actor.clone(),
+                    payload(watcher),
+                    source
+                ))
+                .await,
+                ConflictCode::DirectConversationParticipantAuthorityDenied
+            );
+            assert_eq!(
+                count(
+                    &pool,
+                    "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1",
+                    &realm_id
+                )
+                .await,
+                rows_before
+            );
+        }
+        let write = cited(
+            &head,
+            EventKind::StrandWatchSet,
+            actor.clone(),
+            payload(actor),
+            Cites::Participant(&binding_ref),
+        );
+        uow.commit_event(write.clone()).await.unwrap();
+        head = write.authority_commit;
+        assert_eq!(count(&pool, "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1 AND value->>'level'='all'", &realm_id).await, rows_before + 1);
+        let mut stale = payload(actor);
+        stale["level"] = serde_json::json!("muted");
+        assert_eq!(
+            refused(&cited(
+                &head,
+                EventKind::StrandWatchSet,
+                actor.clone(),
+                stale,
+                Cites::Participant(&binding_ref)
+            ))
+            .await,
+            ConflictCode::FailedPrecondition
+        );
+        assert_eq!(count(&pool, "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1 AND value->>'level'='all'", &realm_id).await, rows_before + 1);
+    }
+
     // Both participants send under the binding, citing either endorsement.
     let peer_message = cited(
         &head,
@@ -2641,7 +2723,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     uow.commit_event(rejoin.clone()).await.unwrap();
     let head = rejoin.authority_commit.clone();
 
-    // A withdrawn directional Contact stops every send at the next cut.
+    // A withdrawn directional Contact stops sends and personal watch writes.
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
         "UPDATE contacts SET tombstone_event_ref=request_event_ref \
@@ -2663,6 +2745,99 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         ))
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    let watch_rows = count(
+        &pool,
+        "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1",
+        &realm_id,
+    )
+    .await;
+    let watch = arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload::set(
+        facts.main_strand_id.clone(),
+        peer.clone(),
+        arkret_models_collaboration::events_payloads::strand::StrandWatchLevel::Muted,
+        None,
+    );
+    assert_eq!(
+        refused(&cited(
+            &head,
+            EventKind::StrandWatchSet,
+            peer.clone(),
+            serde_json::to_value(watch).unwrap(),
+            Cites::Participant(&binding_ref),
+        ))
+        .await,
+        ConflictCode::DirectConversationParticipantAuthorityDenied
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1",
+            &realm_id,
+        )
+        .await,
+        watch_rows
+    );
+    // The actual structure sequence above includes classification cancellation
+    // and lifecycle transitions. Cold hydration must preserve canonical state
+    // even though this fixture gives many Commit positions equal timestamps.
+    let persistence = PgPersistenceStore::new(pool.clone());
+    let canonical =
+        soland_storage::EventProjectionStoreRegistry::object_current_snapshot(&persistence)
+            .snapshot()
+            .await
+            .unwrap();
+    let projection = soland_services::projection::ProjectionService::new("topic-watch-restart");
+    projection
+        .hydrate_from_persistence(&persistence, &CanonicalHydrationAdapter, [realm_id.clone()])
+        .await
+        .unwrap();
+    let state = projection.snapshot();
+    let expected = canonical
+        .strands
+        .iter()
+        .filter(|strand| strand.realm_id == realm_id);
+    let mut expected_count = 0;
+    for strand in expected {
+        expected_count += 1;
+        let id = strand.id.as_ref().unwrap();
+        let cached = &state.strands[id.as_str()];
+        let lifecycle = match strand.state.as_ref().unwrap() {
+            arkret_wire::ObjectState::Active => {
+                soland_domain::reducer::ObjectLifecycleState::Active
+            }
+            arkret_wire::ObjectState::Archived => {
+                soland_domain::reducer::ObjectLifecycleState::Archived
+            }
+            arkret_wire::ObjectState::Redacted => {
+                soland_domain::reducer::ObjectLifecycleState::Redacted
+            }
+        };
+        assert_eq!(cached.state, lifecycle);
+        assert_eq!(cached.tracks, strand.tracks);
+        assert_eq!(cached.stage, strand.stage);
+        assert_eq!(
+            cached.content,
+            strand
+                .content
+                .as_ref()
+                .map(|value| serde_json::to_value(value).unwrap())
+        );
+        assert_eq!(
+            cached.encrypted_content,
+            strand
+                .encrypted_content
+                .as_ref()
+                .map(|value| serde_json::to_value(value).unwrap())
+        );
+    }
+    assert_eq!(
+        state
+            .strands
+            .values()
+            .filter(|strand| strand.realm_id == realm_id.as_str())
+            .count(),
+        expected_count
     );
 }
 
@@ -2836,4 +3011,285 @@ async fn seed_peer_remove(
         .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(&event.actor_id).unwrap())
         .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(peer).unwrap())
         .execute(&mut *conn).await.unwrap();
+}
+
+async fn exercise_flat_topics(
+    pool: &PgPool,
+    uow: &PgEventCommitUnitOfWork,
+    mut head: AuthorityCommitTransaction,
+    binding: &arkret_wire::EventId,
+    group: &arkret_wire::EventId,
+    founder: &ActorId,
+    peer: &ActorId,
+    main: &arkret_wire::StrandId,
+) -> AuthorityCommitTransaction {
+    use arkret_models_collaboration::events_payloads::{
+        SpaceCreatePayload, StrandCreatePayload, StrandPatchPayload,
+    };
+    use arkret_models_collaboration::objects::space::Space;
+    use arkret_models_collaboration::objects::strand::{Strand, StrandTopic};
+    #[derive(diesel::QueryableByName)]
+    struct ValueRow {
+        #[diesel(sql_type=diesel::sql_types::Jsonb)]
+        value: serde_json::Value,
+    }
+    async fn current(pool: &PgPool, id: &arkret_wire::StrandId) -> serde_json::Value {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("SELECT value FROM strand_current_results WHERE strand_id=$1")
+            .bind::<Text, _>(id.as_str())
+            .get_result::<ValueRow>(&mut *conn)
+            .await
+            .unwrap()
+            .value
+    }
+    async fn structure(pool: &PgPool, realm: &RealmId) -> serde_json::Value {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("SELECT jsonb_build_object('strands',(SELECT jsonb_agg(to_jsonb(s) ORDER BY strand_id) FROM strand_current_results s WHERE realm_id=$1),'spaces',(SELECT jsonb_agg(to_jsonb(s) ORDER BY space_id) FROM space_current_results s WHERE realm_id=$1),'parents',(SELECT jsonb_agg(to_jsonb(s) ORDER BY space_id) FROM space_parent_current_results s WHERE realm_id=$1),'positions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY strand_id) FROM strand_position_current_results s WHERE realm_id=$1)) AS value")
+            .bind::<Text,_>(realm.as_str()).get_result::<ValueRow>(&mut *conn).await.unwrap().value
+    }
+    let realm = head.event.realm_id.clone();
+    let before_group = count(
+        pool,
+        "SELECT COUNT(*) AS count FROM mls_group_current_results WHERE realm_id=$1",
+        &realm,
+    )
+    .await;
+    let mut envelope: arkret_models_crypto::EncryptedEnvelope =
+        serde_json::from_value(ciphertext(main, 1, group)["encrypted_content"].clone()).unwrap();
+    envelope.content_type = "application/json".into();
+    let mut space = Space::create_object(realm.clone(), "topic", "", founder.clone());
+    space.title = None;
+    space.encrypted_metadata = Some(envelope.clone());
+    space.created_at = head.commit.committed_at;
+    space.rank = Some("a0".into());
+    for kind in ["list", "board"] {
+        let mut other = space.clone();
+        other.kind = kind.into();
+        let request = cited(
+            &head,
+            EventKind::SpaceCreate,
+            founder.clone(),
+            serde_json::to_value(SpaceCreatePayload::new(other)).unwrap(),
+            Cites::Participant(binding),
+        );
+        let before = dc_footprint(pool, &realm).await;
+        let before_structure = structure(pool, &realm).await;
+        assert_eq!(
+            refusal_code(uow.commit_event(request).await),
+            ConflictCode::DirectConversationSpaceForbidden
+        );
+        assert_eq!(dc_footprint(pool, &realm).await, before);
+        assert_eq!(structure(pool, &realm).await, before_structure);
+    }
+    let create = cited(
+        &head,
+        EventKind::SpaceCreate,
+        founder.clone(),
+        serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
+        Cites::Participant(binding),
+    );
+    let first = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
+    uow.commit_event(create.clone()).await.unwrap();
+    head = create.authority_commit;
+    space.created_by = peer.clone();
+    space.created_at = head.commit.committed_at;
+    space.rank = Some("a1".into());
+    let create = cited(
+        &head,
+        EventKind::SpaceCreate,
+        peer.clone(),
+        serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
+        Cites::Participant(binding),
+    );
+    let second = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
+    uow.commit_event(create.clone()).await.unwrap();
+    head = create.authority_commit;
+    let mut chat = Strand::new_create(realm.clone(), "", founder.clone());
+    chat.metadata = None;
+    chat.encrypted_metadata = Some(envelope);
+    chat.tracks.clear();
+    chat.tracks.insert(
+        "discussion".into(),
+        arkret_models_collaboration::objects::profiles::StrandTrack::discussion_primary(),
+    );
+    chat.created_at = head.commit.committed_at;
+    let create = cited(
+        &head,
+        EventKind::StrandCreate,
+        founder.clone(),
+        serde_json::to_value(StrandCreatePayload { object: chat }).unwrap(),
+        Cites::Participant(binding),
+    );
+    let chat_id = arkret_wire::StrandId::from_event_id(&create.authority_commit.event.event_id);
+    uow.commit_event(create.clone()).await.unwrap();
+    head = create.authority_commit;
+    let digest = |value: &serde_json::Value| {
+        arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            arkret_canonical::canonical_json_bytes(value).unwrap(),
+        ))
+        .unwrap()
+    };
+    let initial = current(pool, &chat_id).await;
+    assert!(initial.get("topic").is_none());
+    let stale = digest(&initial);
+    for (actor, topic, rank) in [(founder, first.clone(), "a0"), (peer, second.clone(), "a1")] {
+        let payload = StrandPatchPayload::for_topic(
+            chat_id.clone(),
+            Some(StrandTopic {
+                space_id: topic.clone(),
+                rank: rank.into(),
+            }),
+            digest(&current(pool, &chat_id).await),
+        )
+        .unwrap();
+        let request = cited(
+            &head,
+            EventKind::StrandUpdate,
+            actor.clone(),
+            serde_json::to_value(payload).unwrap(),
+            Cites::Participant(binding),
+        );
+        uow.commit_event(request.clone()).await.unwrap();
+        head = request.authority_commit;
+        assert_eq!(
+            current(pool, &chat_id).await["topic"],
+            serde_json::json!({"space_id":topic,"rank":rank})
+        );
+    }
+    let bad = StrandPatchPayload::for_topic(chat_id.clone(), None, stale).unwrap();
+    let request = cited(
+        &head,
+        EventKind::StrandUpdate,
+        peer.clone(),
+        serde_json::to_value(bad).unwrap(),
+        Cites::Participant(binding),
+    );
+    let footprint_before = dc_footprint(pool, &realm).await;
+    let structure_before = structure(pool, &realm).await;
+    assert!(uow.commit_event(request).await.is_err());
+    assert_eq!(dc_footprint(pool, &realm).await, footprint_before);
+    assert_eq!(structure(pool, &realm).await, structure_before);
+    let invalid = vec![
+        (EventKind::SpaceCreate, {
+            let mut board = space.clone();
+            board.kind = "board".into();
+            board.created_by = founder.clone();
+            board.created_at = head.commit.committed_at;
+            serde_json::to_value(SpaceCreatePayload::new(board)).unwrap()
+        }),
+        (
+            EventKind::SpaceParent,
+            serde_json::json!({"space_id":second,"parent_space_id":first,"expected_parent_space_id":null}),
+        ),
+        (
+            EventKind::StrandMove,
+            serde_json::json!({"board_space_id":first,"strand_id":chat_id,"target_space_id":second,"rank":"a2"}),
+        ),
+        (
+            EventKind::StrandArchive,
+            serde_json::json!({"target_ref":main}),
+        ),
+        (
+            EventKind::SpaceTombstone,
+            serde_json::json!({"space_id":second}),
+        ),
+    ];
+    for (kind, payload) in invalid {
+        let request = cited(
+            &head,
+            kind.clone(),
+            founder.clone(),
+            payload,
+            Cites::Participant(binding),
+        );
+        let before = dc_footprint(pool, &realm).await;
+        let state = structure(pool, &realm).await;
+        assert!(uow.commit_event(request).await.is_err(), "{kind}");
+        assert_eq!(dc_footprint(pool, &realm).await, before);
+        assert_eq!(structure(pool, &realm).await, state);
+    }
+    let archive = cited(
+        &head,
+        EventKind::StrandArchive,
+        peer.clone(),
+        serde_json::json!({"target_ref":chat_id}),
+        Cites::Participant(binding),
+    );
+    uow.commit_event(archive.clone()).await.unwrap();
+    head = archive.authority_commit;
+    let delete = cited(
+        &head,
+        EventKind::SpaceTombstone,
+        founder.clone(),
+        serde_json::json!({"space_id":second}),
+        Cites::Participant(binding),
+    );
+    assert_eq!(
+        refusal_code(uow.commit_event(delete).await),
+        ConflictCode::SpaceHasLiveDependents
+    );
+    let restore = cited(
+        &head,
+        EventKind::StrandRestore,
+        founder.clone(),
+        serde_json::json!({"target_ref":chat_id}),
+        Cites::Participant(binding),
+    );
+    uow.commit_event(restore.clone()).await.unwrap();
+    head = restore.authority_commit;
+    let archive = cited(
+        &head,
+        EventKind::SpaceArchive,
+        peer.clone(),
+        serde_json::json!({"space_id":second}),
+        Cites::Participant(binding),
+    );
+    uow.commit_event(archive.clone()).await.unwrap();
+    head = archive.authority_commit;
+    assert_eq!(current(pool, &chat_id).await["state"], "active");
+    let unset = StrandPatchPayload::for_topic(
+        chat_id.clone(),
+        None,
+        digest(&current(pool, &chat_id).await),
+    )
+    .unwrap();
+    let clear = cited(
+        &head,
+        EventKind::StrandUpdate,
+        peer.clone(),
+        serde_json::to_value(unset).unwrap(),
+        Cites::Participant(binding),
+    );
+    uow.commit_event(clear.clone()).await.unwrap();
+    head = clear.authority_commit;
+    assert!(current(pool, &chat_id).await.get("topic").is_none());
+    let delete = cited(
+        &head,
+        EventKind::SpaceTombstone,
+        founder.clone(),
+        serde_json::json!({"space_id":second}),
+        Cites::Participant(binding),
+    );
+    uow.commit_event(delete.clone()).await.unwrap();
+    head = delete.authority_commit;
+    assert_eq!(current(pool, main).await["state"], "active");
+    assert_eq!(
+        count(
+            pool,
+            "SELECT COUNT(*) AS count FROM strand_position_current_results WHERE realm_id=$1",
+            &realm
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            pool,
+            "SELECT COUNT(*) AS count FROM mls_group_current_results WHERE realm_id=$1",
+            &realm
+        )
+        .await,
+        before_group
+    );
+    head
 }

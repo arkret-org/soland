@@ -64,6 +64,19 @@ pub(crate) async fn realm_state_snapshot_manifest_for_realm(
 ) -> Result<arkret_wire::RealmStateSnapshot, soland_http::error::AppError> {
     let realm_id = arkret_wire::RealmId::new(realm_id.to_owned())
         .map_err(|_| soland_http::error::AppError::param_invalid("invalid realm_id"))?;
+    if state
+        .authority_commits()
+        .current_authority(&realm_id)
+        .await
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
+        .is_some_and(|authority| authority.service_id != state.service_core_id())
+    {
+        return crate::state::refresh_account_snapshot(state, &realm_id, account)
+            .await.map_err(|reason| {
+                tracing::warn!(%reason, realm_id=%realm_id, "member Account Snapshot refresh unavailable");
+                snapshot_unavailable("the complete governing Snapshot is not installed at the member cut")
+            });
+    }
     let verification_method = state
         .service_verification_method("notary-key")
         .map_err(soland_http::error::AppError::internal)?;

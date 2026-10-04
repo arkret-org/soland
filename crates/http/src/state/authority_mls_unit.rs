@@ -158,6 +158,99 @@ pub(super) async fn attach_local_roster_witnesses(
         .current(&transaction.event.scope_ref)
         .await?
         .ok_or_else(|| failed_precondition("the scope has no accepted MLS Genesis"))?;
+    let installation = transaction
+        .mls_state
+        .as_ref()
+        .ok_or_else(|| schema("MLS Commit has no public transition"))?;
+    let added = installation
+        .consumed_proposals
+        .iter()
+        .filter(|proposal| proposal.proposal_type == 1)
+        .map(|proposal| {
+            arkret_mls::verify_add_proposal_leaf(&proposal.proposal_wire).map_err(schema)
+        })
+        .collect::<ServiceResult<Vec<_>>>()?;
+    sign_local_roster_witnesses(
+        state,
+        &transaction.event,
+        &transaction.commit,
+        &current.value.genesis_event_ref,
+        installation.epoch,
+        transaction.commit.committed_at,
+        &added,
+        &mut transaction.welcomes,
+    )
+    .await
+}
+
+/// A replica recipient signs the exact Add after its original governance
+/// receipt has been verified. It does not reconstruct a pre-join MLS group.
+pub(super) async fn attach_replicated_roster_witnesses(
+    state: &AppState,
+    item: &arkret_models_collaboration::authority_commit::CommittedEventSubmission,
+    welcomes: &mut [VerifiedMlsWelcome],
+) -> ServiceResult<()> {
+    if welcomes.is_empty() {
+        return Ok(());
+    }
+    let event = &item.event_submission.event;
+    let payload: MlsCommitPayload = payload(event)?;
+    let genesis = item
+        .genesis_event_ref
+        .as_ref()
+        .ok_or_else(|| failed_precondition("replicated Welcome lacks accepted Genesis selector"))?;
+    let group = event.scope_ref.canonical_mls_group_id().map_err(schema)?;
+    let added = arkret_mls::verify_adds_from_accepted_public_commit(
+        &arkret_canonical::base64url_decode(payload.commit_bytes_b64()).map_err(schema)?,
+        group.as_str(),
+        payload.governance_binding().previous_epoch(),
+    )
+    .map_err(schema)?;
+    for welcome in welcomes.iter_mut() {
+        if let Some(request) = state
+            .authority_commits()
+            .mls_recipient_attestation(&event.event_id, &welcome.delivery.welcome_id)
+            .await?
+        {
+            welcome.roster_witness =
+                Some(VerifiedMlsRecipientRosterWitness {
+                    accepted_genesis_event_ref: genesis.clone(),
+                    signed_attest_add_request_canonical_json:
+                        arkret_canonical::canonical_json_bytes(&request).map_err(schema)?,
+                    local_attestor_resolution: None,
+                });
+        }
+    }
+    sign_local_roster_witnesses(
+        state,
+        event,
+        &item.source_commit,
+        genesis,
+        payload.next_epoch(),
+        crate::wire::now(),
+        &added,
+        welcomes,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn sign_local_roster_witnesses(
+    state: &AppState,
+    event: &Event,
+    commit: &arkret_wire::RealmCommit,
+    genesis: &arkret_wire::EventId,
+    epoch: u64,
+    attested_at: chrono::DateTime<chrono::Utc>,
+    added: &[arkret_mls::MlsVerifiedAddProposalLeaf],
+    welcomes: &mut [VerifiedMlsWelcome],
+) -> ServiceResult<()> {
+    if welcomes
+        .iter()
+        .all(|welcome| welcome.roster_witness.is_some())
+    {
+        return Ok(());
+    }
     let resolution =
         crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
             .await
@@ -166,16 +259,11 @@ pub(super) async fn attach_local_roster_witnesses(
             })?;
     let station = state.service_core_id();
     let method = format!("{}#notary-key", state.service_did());
-    let group = transaction
-        .event
-        .scope_ref
-        .canonical_mls_group_id()
-        .map_err(schema)?;
-    let installation = transaction
-        .mls_state
-        .as_ref()
-        .ok_or_else(|| schema("MLS Commit has no public transition"))?;
-    for welcome in &mut transaction.welcomes {
+    let group = event.scope_ref.canonical_mls_group_id().map_err(schema)?;
+    for welcome in welcomes {
+        if welcome.roster_witness.is_some() {
+            continue;
+        }
         let Some(claim_key) = &welcome.claim else {
             continue;
         };
@@ -204,20 +292,10 @@ pub(super) async fn attach_local_roster_witnesses(
             .find(|claim| claim.claim_id == welcome.delivery.keypackage_claim_ref.as_str())
             .ok_or_else(|| failed_precondition("local Add claim id is absent"))?;
         let package = arkret_canonical::base64url_decode(&selected.keypackage).map_err(schema)?;
-        let mut matching = installation
-            .consumed_proposals
-            .iter()
-            .filter_map(|proposal| {
-                if proposal.proposal_type != 1 {
-                    return None;
-                }
-                arkret_mls::verify_add_proposal_leaf(&proposal.proposal_wire)
-                    .ok()
-                    .filter(|parsed| {
-                        parsed.actor_id == welcome.delivery.recipient_actor_id
-                            && parsed.key_package_bytes == package
-                    })
-            });
+        let mut matching = added.iter().filter(|parsed| {
+            parsed.actor_id == welcome.delivery.recipient_actor_id
+                && parsed.key_package_bytes == package
+        });
         let parsed = matching
             .next()
             .ok_or_else(|| failed_precondition("local claim does not match a consumed Add"))?;
@@ -237,25 +315,25 @@ pub(super) async fn attach_local_roster_witnesses(
         .ok_or_else(|| failed_precondition("local Add lacks endpoint authorization"))?;
         let mut attestation = MlsAddAuthorityAttestation {
             attestor_station_id: station.clone(),
-            realm_id: transaction.event.realm_id.clone(),
-            effective_scope: transaction.event.scope_ref.clone(),
+            realm_id: event.realm_id.clone(),
+            effective_scope: event.scope_ref.clone(),
             mls_group_id: group.clone(),
-            genesis_event_ref: current.value.genesis_event_ref.clone(),
-            commit_event_ref: transaction.event.event_id.clone(),
-            commit_stream_position: transaction.commit.stream_position,
-            epoch: installation.epoch,
+            genesis_event_ref: genesis.clone(),
+            commit_event_ref: event.event_id.clone(),
+            commit_stream_position: commit.stream_position,
+            epoch,
             welcome_id: welcome.delivery.welcome_id.clone(),
             claim_id: welcome.delivery.keypackage_claim_ref.clone(),
             actor_id: welcome.delivery.recipient_actor_id.clone(),
             endpoint: welcome.delivery.recipient_endpoint.clone(),
             authorization_event_ref,
-            leaf_signature_key_b64u: parsed.leaf_signature_key,
+            leaf_signature_key_b64u: parsed.leaf_signature_key.clone(),
             claim_record_digest: arkret_wire::Hash::new(
                 arkret_canonical::canonical_sha256(selected).map_err(schema)?,
             )
             .map_err(schema)?,
             claim_receipt: outcome.claim_receipt.clone(),
-            attested_at: transaction.commit.committed_at,
+            attested_at,
             signature: KeyOperationSignature {
                 kid: arkret_wire::NonEmptyString::new(method.clone()).map_err(schema)?,
                 signature_algorithm: Some(
@@ -277,7 +355,7 @@ pub(super) async fn attach_local_roster_witnesses(
         request.validate_claim_binding().map_err(schema)?;
         arkret::verify_mls_attest_add_request(&request, &resolution).map_err(schema)?;
         welcome.roster_witness = Some(VerifiedMlsRecipientRosterWitness {
-            accepted_genesis_event_ref: current.value.genesis_event_ref.clone(),
+            accepted_genesis_event_ref: genesis.clone(),
             signed_attest_add_request_canonical_json: arkret_canonical::canonical_json_bytes(
                 &request,
             )

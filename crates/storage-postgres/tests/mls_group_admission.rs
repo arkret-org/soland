@@ -944,6 +944,109 @@ async fn realm_mls_material_peer_uses_joined_target_cut_not_prejoin_genesis_cut(
             .unwrap(),
         Read::Authorized { genesis: None }
     ));
+    use arkret_models_collaboration::mls_roster_authority::MlsMemberRosterAuthorityReadRequestBody;
+    use soland_storage::MlsMemberRosterSelectorRead as Selected;
+    let member = MlsMemberRosterAuthorityReadRequestBody {
+        realm_id: realm_id.clone(),
+        effective_scope: realm_scope(&realm_id),
+        mls_group_id: request.mls_group_id.clone(),
+        target_commit_event_ref: target.authority_commit.event.event_id.clone(),
+        target_epoch: 1,
+        caller_actor_id: bob.clone(),
+        cursor: None,
+    };
+    assert!(matches!(
+        store
+            .mls_member_roster_selector(&member, &remote_station)
+            .await
+            .unwrap(),
+        Selected::RevisionUnavailable
+    ));
+    let scope_key =
+        String::from_utf8(arkret_canonical::canonical_json_bytes(&member.effective_scope).unwrap())
+            .unwrap();
+    diesel::sql_query("INSERT INTO mls_replica_genesis_provenance (realm_id,scope_key,mls_group_id,genesis_event_ref,first_carried_commit_event_ref,created_at) VALUES ($1,$2,$3,$4,$5,now())")
+        .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(&scope_key).bind::<Text,_>(member.mls_group_id.as_str())
+        .bind::<Text,_>(genesis_ref.as_str()).bind::<Text,_>(member.target_commit_event_ref.as_str()).execute(&mut conn).await.unwrap();
+    match store
+        .mls_member_roster_selector(&member, &remote_station)
+        .await
+        .unwrap()
+    {
+        Selected::Authorized {
+            request: selected,
+            governance_station_id,
+        } => {
+            assert_eq!(selected, member.with_accepted_genesis(genesis_ref.clone()));
+            assert_eq!(governance_station_id, station);
+        }
+        result => panic!("authorized member without a prejoin baseline was refused: {result:?}"),
+    }
+    for field in ["actor", "realm", "scope", "group", "target", "epoch"] {
+        let mut wrong = member.clone();
+        match field {
+            "actor" => {
+                wrong.caller_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    founder.clone(),
+                    remote_station.clone(),
+                ))
+            }
+            "realm" => {
+                wrong.realm_id =
+                    arkret_wire::RealmId::from_event_id(&wrong_genesis.group_state_event_id);
+                wrong.effective_scope = realm_scope(&wrong.realm_id);
+            }
+            "scope" => {
+                wrong.effective_scope = arkret_wire::ScopeRef::Circle {
+                    realm_id: realm_id.clone(),
+                    circle_id: arkret_wire::CircleId::from_event_id(
+                        &wrong_genesis.group_state_event_id,
+                    ),
+                }
+            }
+            "group" => {
+                wrong.mls_group_id =
+                    arkret_wire::MlsGroupId::new(arkret_canonical::base64url_encode([25; 32]))
+                        .unwrap()
+            }
+            "target" => wrong.target_commit_event_ref = wrong_genesis.group_state_event_id.clone(),
+            _ => wrong.target_epoch = 2,
+        }
+        assert!(
+            matches!(
+                store
+                    .mls_member_roster_selector(&wrong, &remote_station)
+                    .await
+                    .unwrap(),
+                Selected::NotFound
+            ),
+            "{field}"
+        );
+    }
+    diesel::sql_query(
+        "UPDATE mls_replica_genesis_provenance SET mls_group_id=$1 WHERE scope_key=$2",
+    )
+    .bind::<Text, _>(arkret_canonical::base64url_encode([25; 32]))
+    .bind::<Text, _>(&scope_key)
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(matches!(
+        store
+            .mls_member_roster_selector(&member, &remote_station)
+            .await
+            .unwrap(),
+        Selected::RevisionUnavailable
+    ));
+    diesel::sql_query("UPDATE mls_replica_genesis_provenance SET mls_group_id=$1,genesis_event_ref='corrupt' WHERE scope_key=$2")
+        .bind::<Text,_>(member.mls_group_id.as_str()).bind::<Text,_>(&scope_key).execute(&mut conn).await.unwrap();
+    assert!(matches!(
+        store
+            .mls_member_roster_selector(&member, &remote_station)
+            .await
+            .unwrap(),
+        Selected::RevisionUnavailable
+    ));
 }
 
 #[tokio::test]

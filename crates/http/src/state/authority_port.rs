@@ -79,6 +79,8 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::StrandWatchSet
         | EventKind::SpaceCreate
         | EventKind::SpaceUpdate
+        | EventKind::SpaceParent
+        | EventKind::SpaceTombstone
         | EventKind::SchemaDefine
         | EventKind::RealmPolicyBundle
         | EventKind::DirectConversationBound

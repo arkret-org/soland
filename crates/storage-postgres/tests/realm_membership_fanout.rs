@@ -2670,7 +2670,7 @@ fn snapshot_signer() -> impl Fn(
     &soland_storage::RealmStateSnapshotMaterial,
 ) -> soland_storage::PersistenceResult<arkret_wire::RealmStateSnapshot> {
     let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
-    let method = arkret_wire::DidUrl::new("did:web:station.example#notary-key").unwrap();
+    let method = arkret_wire::DidUrl::new("did:web:ordinary-station.example#notary-key").unwrap();
     move |material| {
         soland_services::authority_commit::build_signed_realm_state_snapshot(
             material,
@@ -2680,6 +2680,236 @@ fn snapshot_signer() -> impl Fn(
         )
         .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
     }
+}
+
+/// Two real Stations preserve the original governance signature while the
+/// member serves an exact hosted Account cut and its reserved window basis.
+#[tokio::test]
+async fn member_account_snapshot_preserves_governance_and_exact_replica_cut() {
+    let governor_db = TestDatabase::lease().await;
+    let member_db = TestDatabase::lease().await;
+    let pool = governor_db.pool();
+    let member_pool = member_db.pool();
+    let governor = PgAuthorityCommitStore { pool: pool.clone() };
+    let member = PgAuthorityCommitStore {
+        pool: member_pool.clone(),
+    };
+    let unit = admit(&pool, "member-account-snapshot", "public").await;
+    let realm = unit.transactions[0].event.realm_id.clone();
+    let actor = remote_member("snapshot-reader");
+    let account = actor.as_account_id().unwrap();
+    let join = membership_request(
+        unit.transactions.last().unwrap(),
+        actor.clone(),
+        &actor,
+        "join",
+    );
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(join.clone()).await.unwrap();
+    member
+        .install_committed_replica(&replica(&unit, &join, true))
+        .await
+        .unwrap();
+    let material = governor
+        .member_station_bootstrap_material(&realm, account, &join.authority_commit.commit.commit_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let sign = snapshot_signer();
+    let snapshot = sign(&material).unwrap();
+    let unsigned = arkret_canonical::unsigned_value(&snapshot, &["signature"]).unwrap();
+    arkret_signatures::detached_object::verify_detached_object_signature(
+        &snapshot.signature,
+        &unsigned,
+        arkret_wire::DetachedSignatureContext::RealmSnapshot,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+                .verifying_key()
+                .to_bytes()
+                .to_vec(),
+        },
+    )
+    .unwrap();
+    member
+        .install_replica_anchor(&ReplicaAnchorInstall {
+            realm_id: realm.clone(),
+            join_commit_id: join.authority_commit.commit.commit_id.clone(),
+            governance_generation: snapshot.governance_generation,
+            snapshot_head: snapshot.visible_stream_heads[0].clone(),
+            visible_stream_heads: snapshot.visible_stream_heads.clone(),
+            current_state_entries: snapshot.current_state_entries.clone(),
+            verified_snapshot: snapshot.clone(),
+        })
+        .await
+        .unwrap();
+    let never_sign = |_: &soland_storage::RealmStateSnapshotMaterial| -> soland_storage::PersistenceResult<arkret_wire::RealmStateSnapshot> {
+        panic!("a member Station must never sign a Realm Snapshot")
+    };
+    let issuer = member_station();
+    let issued = member
+        .issue_realm_state_snapshot_for_account(&realm, account, &issuer, &never_sign)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        arkret_canonical::canonical_json_bytes(&issued).unwrap(),
+        arkret_canonical::canonical_json_bytes(&snapshot).unwrap()
+    );
+    assert_eq!(
+        member
+            .issued_realm_state_snapshot(&realm, account, &snapshot.snapshot_id, &issuer)
+            .await
+            .unwrap(),
+        Some(snapshot.clone())
+    );
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let window = member
+        .freeze_account_realm_window(
+            &soland_storage::AccountRealmWindowRequest {
+                realm_id: realm.clone(),
+                account: account.clone(),
+                issuer: issuer.clone(),
+                window_limit: 20,
+                window_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7()),
+                expires_at_ms: now_ms + 300_000,
+                now_ms,
+                byte_budget: 7 * 1024 * 1024,
+                delivered_heads: snapshot.visible_stream_heads.clone(),
+                selected_stream_refs: None,
+            },
+            &never_sign,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(window.committed_events.is_empty());
+    assert_ne!(window.window.preview_only, Some(true));
+    assert!(window.window.window_start_basis.is_some());
+    let foreign = remote_member("another-snapshot-reader");
+    assert!(
+        member
+            .issued_realm_state_snapshot(
+                &realm,
+                foreign.as_account_id().unwrap(),
+                &snapshot.snapshot_id,
+                &issuer
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        member
+            .issue_realm_state_snapshot_for_account(
+                &realm,
+                account,
+                &arkret_wire::DidCoreId::new("ak:did_core:web:wrong.example").unwrap(),
+                &never_sign
+            )
+            .await
+            .is_err()
+    );
+
+    // The accepted successor makes the old head insufficient for a fresh
+    // Snapshot. Installing the original new object closes exactly that cut.
+    let message = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::StrandCreate,
+        &founder(),
+        serde_json::json!({"object": {
+            "schema":"ak.schema.strand.v1", "realm_id":realm,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Next snapshot cut"}, "state":"active",
+            "created_by":founder_actor(), "created_at":join.authority_commit.commit.committed_at,
+        }}),
+        join.authority_commit.commit.committed_at,
+    ));
+    uow.commit_event(message.clone()).await.unwrap();
+    member
+        .install_committed_replica(&replica(&unit, &message, false))
+        .await
+        .unwrap();
+    assert!(
+        member
+            .issue_realm_state_snapshot_for_account(&realm, account, &issuer, &never_sign)
+            .await
+            .is_err()
+    );
+    let next_material = governor
+        .member_station_bootstrap_material(&realm, account, &join.authority_commit.commit.commit_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let next_snapshot = sign(&next_material).unwrap();
+    async fn archive_count(pool: &PgPool) -> i64 {
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("SELECT COUNT(*)::bigint AS count FROM realm_state_snapshot_issuances")
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .unwrap()
+            .count
+    }
+    let before = archive_count(&member_pool).await;
+    let mut incomplete = next_material.clone();
+    incomplete.current_state_entries.pop().unwrap();
+    assert!(
+        member
+            .install_verified_account_snapshot(account, &issuer, &sign(&incomplete).unwrap())
+            .await
+            .is_err()
+    );
+    assert!(
+        member
+            .install_verified_account_snapshot(
+                foreign.as_account_id().unwrap(),
+                &issuer,
+                &next_snapshot
+            )
+            .await
+            .is_err()
+    );
+    let wrong_key = ed25519_dalek::SigningKey::from_bytes(&[0x43; 32]);
+    let wrong_signer = soland_services::authority_commit::build_signed_realm_state_snapshot(
+        &next_material,
+        arkret_wire::DidUrl::new("did:web:member-station.example#notary-key").unwrap(),
+        &wrong_key,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    assert!(
+        member
+            .install_verified_account_snapshot(account, &issuer, &wrong_signer)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        archive_count(&member_pool).await,
+        before,
+        "rejected objects issue nothing"
+    );
+    member
+        .install_verified_account_snapshot(account, &issuer, &next_snapshot)
+        .await
+        .unwrap();
+    assert_eq!(
+        member
+            .issue_realm_state_snapshot_for_account(&realm, account, &issuer, &never_sign)
+            .await
+            .unwrap(),
+        Some(next_snapshot.clone())
+    );
+    let leave = membership_request(&message.authority_commit, actor.clone(), &actor, "leave");
+    uow.commit_event(leave.clone()).await.unwrap();
+    member
+        .install_committed_replica(&replica(&unit, &leave, false))
+        .await
+        .unwrap();
+    assert!(!matches!(
+        member
+            .issued_realm_state_snapshot(&realm, account, &next_snapshot.snapshot_id, &issuer)
+            .await,
+        Ok(Some(_))
+    ));
 }
 
 fn row_selectors(entries: &[arkret_wire::TypedCurrentResult]) -> Vec<arkret_wire::CurrentSelector> {
@@ -4295,6 +4525,76 @@ async fn recipient_mls_add_attestation_outbox_is_atomic_durable_and_idempotent()
         .await
         .unwrap();
     }
+    assert_eq!(recipient_roster_outbox_count(&pool).await, 1);
+    let proof: arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody =
+        serde_json::from_slice(
+            &first
+                .roster_witness
+                .as_ref()
+                .unwrap()
+                .signed_attest_add_request_canonical_json,
+        )
+        .unwrap();
+    let frozen = store
+        .mls_recipient_attestation(
+            &proof.attestation.commit_event_ref,
+            &proof.attestation.welcome_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        arkret_canonical::canonical_json_bytes(&frozen).unwrap(),
+        arkret_canonical::canonical_json_bytes(&proof).unwrap()
+    );
+    assert_eq!(
+        store
+            .pending_mls_recipient_attestations(32)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let wrong_digest = arkret_wire::Hash::new(format!("sha256:{}", "9".repeat(64))).unwrap();
+    assert!(
+        store
+            .acknowledge_mls_recipient_attestation(&proof, &wrong_digest, chrono::Utc::now())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .pending_mls_recipient_attestations(32)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let digest =
+        arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&proof).unwrap()).unwrap();
+    for _ in 0..2 {
+        store
+            .acknowledge_mls_recipient_attestation(&proof, &digest, chrono::Utc::now())
+            .await
+            .unwrap();
+    }
+    assert!(
+        store
+            .pending_mls_recipient_attestations(32)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .mls_recipient_attestation(
+                &proof.attestation.commit_event_ref,
+                &proof.attestation.welcome_id
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(recipient_roster_outbox_count(&pool).await, 1);
 }
 

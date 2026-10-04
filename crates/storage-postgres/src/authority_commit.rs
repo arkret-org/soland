@@ -902,6 +902,11 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
         .load::<SnapshotCurrentRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
+    // A bootstrap installs verified current rows whose source Commit may be
+    // below this member's history floor. Their exact durable replica evidence
+    // supplies the source only while its verified cut equals the held head.
+    let replica_evidence =
+        crate::replica_authorization::snapshot_current_evidence(conn, realm_id, &heads).await?;
     let mut current_state_entries = rows
         .into_iter()
         .map(|row| {
@@ -1165,27 +1170,54 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                     ));
                 }
             };
-            Ok(arkret_wire::TypedCurrentResult::Value {
-                selector,
-                source_stream_ref: decode_json(
-                    row.source_stream_ref.ok_or_else(|| {
-                        PersistenceError::Internal(
-                            "snapshot current result has no covering RealmCommit".to_owned(),
-                        )
-                    })?,
-                    "current source stream ref",
-                )?,
-                revision: arkret_wire::CurrentRevision {
+            let revision = arkret_wire::CurrentRevision {
                     commit_id: decode_text(row.current_commit_id, "current RealmCommit id")?,
                     stream_position: to_u64(
                         row.current_stream_position,
                         "current stream position",
                     )?,
-                },
+                };
+            let source_stream_ref = match row.source_stream_ref {
+                Some(source) => decode_json(source, "current source stream ref")?,
+                None => replica_evidence.iter().find_map(|entry| {
+                    let arkret_wire::TypedCurrentResult::Value {
+                        selector: proved_selector, source_stream_ref, revision: proved_revision, value,
+                    } = entry;
+                    (proved_selector == &selector && proved_revision == &revision && value == &row.value)
+                        .then(|| source_stream_ref.clone())
+                }).ok_or_else(|| PersistenceError::SchemaViolation(
+                    "snapshot current result has neither its covering Commit nor exact verified replica evidence".to_owned(),
+                ))?,
+            };
+            Ok(arkret_wire::TypedCurrentResult::Value {
+                selector, source_stream_ref, revision,
                 value: row.value,
             })
         })
         .collect::<PersistenceResult<Vec<_>>>()?;
+    // These public result values are proved by the original snapshot, but do
+    // not carry the private admission provenance required by governing tables.
+    // Preserve them as read evidence without manufacturing those tables.
+    for entry in replica_evidence {
+        let arkret_wire::TypedCurrentResult::Value { selector, .. } = &entry;
+        if matches!(
+            selector,
+            arkret_wire::CurrentSelector::RealmAuthorityRoot
+                | arkret_wire::CurrentSelector::CapabilityGrant { .. }
+                | arkret_wire::CurrentSelector::InviteLifecycle { .. }
+                | arkret_wire::CurrentSelector::InviteLiveTarget { .. }
+                | arkret_wire::CurrentSelector::InviteDirectedInvitee { .. }
+                | arkret_wire::CurrentSelector::MlsGroup { .. }
+        ) && !current_state_entries.iter().any(|current| {
+            let arkret_wire::TypedCurrentResult::Value {
+                selector: current_selector,
+                ..
+            } = current;
+            current_selector == selector
+        }) {
+            current_state_entries.push(entry);
+        }
+    }
     current_state_entries.extend(
         crate::relation_current_results::snapshot_rows_in_connection(conn, realm_id).await?,
     );
@@ -2341,6 +2373,14 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         crate::agent_producer_signer_keys::read(&self.pool, realm_id, selector).await
     }
 
+    async fn mls_member_roster_selector(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsMemberRosterAuthorityReadRequestBody,
+        issuer: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<soland_storage::MlsMemberRosterSelectorRead> {
+        crate::mls_roster_authority_read::member_selector(&self.pool, request, issuer).await
+    }
+
     async fn mls_roster_authority_read(
         &self,
         request: &arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody,
@@ -2357,6 +2397,34 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<arkret_models_collaboration::mls_roster_authority::MlsAttestAddOutcome>
     {
         crate::mls_roster_attest_add::install(&self.pool, verified, issuer).await
+    }
+
+    async fn mls_recipient_attestation(
+        &self,
+        commit: &arkret_wire::EventId,
+        welcome: &arkret_wire::MlsWelcomeDeliveryId,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody>,
+    > {
+        crate::mls_recipient_attestation_outbox::get(&self.pool, commit, welcome).await
+    }
+
+    async fn pending_mls_recipient_attestations(
+        &self,
+        limit: usize,
+    ) -> PersistenceResult<
+        Vec<arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody>,
+    > {
+        crate::mls_recipient_attestation_outbox::pending(&self.pool, limit).await
+    }
+
+    async fn acknowledge_mls_recipient_attestation(
+        &self,
+        request: &arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody,
+        digest: &arkret_wire::Hash,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        crate::mls_recipient_attestation_outbox::acknowledge(&self.pool, request, digest, at).await
     }
 
     async fn mls_member_group_state_material_read(
@@ -3788,6 +3856,18 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     ) -> PersistenceResult<Option<arkret_wire::RealmStateSnapshot>> {
         crate::snapshot_disclosure_gate::issue_account_snapshot(
             &self.pool, realm_id, account, issuer, sign,
+        )
+        .await
+    }
+
+    async fn install_verified_account_snapshot(
+        &self,
+        account: &arkret_wire::AccountId,
+        issuer: &arkret_wire::DidCoreId,
+        snapshot: &arkret_wire::RealmStateSnapshot,
+    ) -> PersistenceResult<()> {
+        crate::issued_realm_snapshots::install_verified_account_snapshot(
+            &self.pool, account, issuer, snapshot,
         )
         .await
     }
