@@ -418,6 +418,30 @@ pub(crate) async fn exact_current_result_for_account(
             } => (generation, head),
         };
         let selector = match &request.selector {
+            ExactCurrentResultSelector::AgentInteraction(selector) => {
+                use arkret_models_collaboration::agent_interaction::AgentInteractionExactCurrentResult;
+                use arkret_models_collaboration::exact_current_results::NeverWrittenExactCurrentSelector;
+                if !sql_query("SELECT EXISTS(SELECT 1 FROM member_state_current_results m JOIN realm_commits c ON c.realm_id=m.realm_id AND c.commit_id=m.current_commit_id AND c.stream_position=m.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' WHERE m.realm_id=$1 AND m.member_id=$2 AND m.membership='join' AND e.envelope->'payload' ? 'agent_controller_binding') AS present")
+                    .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(ActorId::account(selector.agent_account_id.clone()).to_string()).get_result::<ExistsRow>(&mut *conn).await?.present { return Ok(SelfExactCurrentRead::NotFound); }
+                let result = crate::agent_interaction_current_results::read_in_connection(conn, &request.realm_id, &selector.agent_account_id).await?;
+                let outcome = match result {
+                    Some(row) => ExactCurrentResultsReadOutcome::Present {
+                        realm_id: request.realm_id.clone(), governance_generation: generation, effective_stream_head: head.clone(),
+                        entry: ExactCurrentResultEntry::AgentInteraction(AgentInteractionExactCurrentResult {
+                            selector: selector.clone(), source_stream_ref: head.stream_ref.clone(),
+                            revision: CurrentRevision { commit_id: arkret_wire::RealmCommitId::new(row.current_commit_id).map_err(|error| corrupt(error.to_string()))?, stream_position: to_u64(row.current_stream_position, "Agent interaction position")? },
+                            value: serde_json::from_value(row.value).map_err(|error| corrupt(error.to_string()))?,
+                        }),
+                    },
+                    None if crate::agent_interaction_current_results::known_never_written(conn, &request.realm_id, &selector.agent_account_id, head.stream_position).await? => ExactCurrentResultsReadOutcome::NeverWritten {
+                        realm_id: request.realm_id.clone(), governance_generation: generation, effective_stream_head: head,
+                        selector: NeverWrittenExactCurrentSelector::AgentInteraction(selector.clone()),
+                    },
+                    None => return Ok(SelfExactCurrentRead::Unresolved("Agent interaction absence is not confirmed")),
+                };
+                outcome.validate_for_request(request, generation).map_err(|error| corrupt(error.to_string()))?;
+                return Ok(SelfExactCurrentRead::Answer(outcome));
+            }
             ExactCurrentResultSelector::Relation(selector) => selector,
             ExactCurrentResultSelector::ModerationState(selector) => {
                 return moderation_state_read(

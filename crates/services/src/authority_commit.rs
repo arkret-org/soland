@@ -1496,6 +1496,18 @@ impl AuthorityCommitApplication {
         Ok(self.store().current_mimi_room_binding(room_uri).await?)
     }
 
+    pub async fn agent_owner_direct_scope(
+        &self,
+        realm: &arkret_wire::RealmId,
+        agent: &arkret_wire::AccountId,
+        controller: &arkret_wire::AccountId,
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .store()
+            .agent_owner_direct_scope(realm, agent, controller)
+            .await?)
+    }
+
     pub async fn current_agent_result(
         &self,
         realm_id: &arkret_wire::RealmId,

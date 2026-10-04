@@ -108,9 +108,7 @@ pub(crate) async fn dispatch_committed_event_notifications(
 
 async fn fan_out(state: &AppState, source: &CommittedSource<'_>, basis: &NotificationFanoutBasis) {
     for planned in plan(source, basis, &state.service_core_id()) {
-        if planned.notification_kind == NotificationKind::Mention
-            && !mention_passes_agent_gate(state, source, basis, &planned).await
-        {
+        if !mention_passes_agent_gate(state, source, basis, &planned).await {
             continue;
         }
         put_notification(state, source, planned).await;
@@ -358,6 +356,30 @@ async fn mention_passes_agent_gate(
     else {
         return false;
     };
+    let Some(agent_account) = planned.recipient.as_account_id() else {
+        return false;
+    };
+    if state
+        .authority_commits()
+        .agent_owner_direct_scope(source.realm_id, agent_account, &controller)
+        .await
+        .unwrap_or(false)
+    {
+        return *source.sender == ActorId::account(controller);
+    }
+    let mode = state
+        .authority_commits()
+        .current_agent_result(
+            source.realm_id,
+            &arkret_wire::CurrentSelector::AgentInteraction {
+                agent_account_id: agent_account.clone(),
+            },
+        )
+        .await;
+    let public = matches!(mode, Ok(Some(arkret_wire::TypedCurrentResult::Value { source_stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id }, value, .. })) if realm_id == *source.realm_id && serde_json::from_value::<arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue>(value.clone()).is_ok_and(|v| v.controller_account_id == controller && v.interaction_mode == arkret_models_collaboration::agent_interaction::AgentInteractionMode::Public));
+    if !public {
+        return false;
+    }
     if *source.sender == ActorId::account(controller) {
         return true;
     }

@@ -153,6 +153,7 @@ const AUDITED_FAMILIES: &[&str] = &[
     "realm_organization_current_results",
     "realm_bootstrap_current_results",
     "agent_status_current_results",
+    "agent_interaction_current_results",
     "agent_key_current_results",
     "key_backup_active_series_current_results",
     "pcr_device_generation_current_results",
@@ -1219,6 +1220,12 @@ pub(crate) fn disclose_to_account(
             ));
         }
         match selector {
+            CurrentSelector::AgentInteraction { .. } => {
+                let _: arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
+                if source_stream_ref != &realm_stream {
+                    return Err(rejected("Agent interaction current is not Realm scoped"));
+                }
+            }
             CurrentSelector::Sidecar { sidecar_id } => {
                 let sidecar: arkret_models_collaboration::agent_sidecar::AgentSidecar =
                     serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;

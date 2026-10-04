@@ -1863,8 +1863,18 @@ pub trait AuthorityCommitStore: Send + Sync {
         room_uri: &arkret_wire::MimiRoomUri,
     ) -> PersistenceResult<Option<MimiRoomBindingCurrentRecord>>;
 
+    /// Resolve an agreed owner Direct binding independently of group mode.
+    async fn agent_owner_direct_scope(
+        &self,
+        _realm: &arkret_wire::RealmId,
+        _agent: &arkret_wire::AccountId,
+        _controller: &arkret_wire::AccountId,
+    ) -> PersistenceResult<bool> {
+        Ok(false)
+    }
+
     /// Read one accepted Agent typed current row at its durable revision.
-    /// Only the closed AgentKey and AgentStatus selectors are admitted.
+    /// Only the closed AgentKey, AgentStatus and AgentInteraction selectors are admitted.
     async fn current_agent_result(
         &self,
         realm_id: &arkret_wire::RealmId,

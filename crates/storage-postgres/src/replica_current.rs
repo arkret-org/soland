@@ -38,6 +38,7 @@ const MEMBER_STATION_FAMILIES: &[&str] = &[
     "strand_current_results",
     "strand_position_current_results",
     "strand_watch_current_results",
+    "agent_interaction_current_results",
     "direct_conversation_binding_current_results",
     "rsvp_current_results",
     "realm_set_default_strand_current_results",
@@ -209,6 +210,24 @@ async fn guard_snapshot_revisions(
         let source = serde_json::to_value(source_stream_ref).map_err(malformed)?;
         let incoming_position = position(revision.stream_position)?;
         match selector {
+            S::AgentInteraction { agent_account_id } => {
+                let key = arkret_wire::derive_agent_interaction_current_key(agent_account_id)
+                    .map_err(malformed)?;
+                let old = diesel::sql_query("SELECT current_commit_id,current_stream_position,value FROM agent_interaction_current_results WHERE realm_id=$1 AND current_key=$2")
+                    .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(key)
+                    .get_result::<crate::agent_interaction_current_results::ModeRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+                if old.is_some_and(|old| {
+                    old.current_stream_position > incoming_position
+                        || (old.current_stream_position == incoming_position
+                            && (old.current_commit_id != revision.commit_id.as_str()
+                                || old.value != *value))
+                }) {
+                    return Err(PersistenceError::Conflict(
+                        "failed_precondition: Agent interaction snapshot is stale or conflicting"
+                            .into(),
+                    ));
+                }
+            }
             S::DirectConversationBinding { .. } => {
                 crate::direct_conversation_admission::guard_binding_snapshot_in_connection(
                     conn, realm_id, entry,
@@ -727,6 +746,27 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
             continue;
         }
         match selector {
+            S::AgentInteraction { agent_account_id } => {
+                if *source_stream_ref
+                    != (arkret_wire::CommitStreamRef::Realm {
+                        realm_id: realm_id.clone(),
+                    })
+                {
+                    return Err(PersistenceError::SchemaViolation(
+                        "Agent interaction snapshot is not Realm scoped".into(),
+                    ));
+                }
+                let current: arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue = serde_json::from_value(value.clone()).map_err(malformed)?;
+                crate::agent_interaction_current_results::install_in_connection(
+                    conn,
+                    realm_id,
+                    agent_account_id,
+                    revision,
+                    &current,
+                    installed_at,
+                )
+                .await?;
+            }
             S::DirectConversationBinding { .. } => {
                 crate::direct_conversation_admission::install_binding_snapshot_in_connection(
                     conn,
@@ -1235,6 +1275,10 @@ pub(crate) async fn advance_in_connection(
                 &value,
             )
             .await?;
+        }
+        arkret_wire::EventKind::AgentInteractionSet => {
+            crate::agent_interaction_current_results::project_in_connection(conn, event, commit)
+                .await?;
         }
         arkret_wire::EventKind::StrandWatchSet => {
             let payload: arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload = serde_json::from_value(serde_json::json!(&event.payload)).map_err(PersistenceError::database)?;

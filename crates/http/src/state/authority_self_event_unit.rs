@@ -144,6 +144,7 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
             | arkret_wire::EventKind::StrandMove
             | arkret_wire::EventKind::StrandReorder
             | arkret_wire::EventKind::StrandWatchSet
+            | arkret_wire::EventKind::AgentInteractionSet
             | arkret_wire::EventKind::InviteCreate
             | arkret_wire::EventKind::InviteThirdParty
             | arkret_wire::EventKind::InviteClaim

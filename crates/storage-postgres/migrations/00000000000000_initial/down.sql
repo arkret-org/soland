@@ -54,6 +54,7 @@ DROP TABLE IF EXISTS sidecar_context_current_results;
 DROP TABLE IF EXISTS sidecar_current_results;
 DROP TABLE IF EXISTS realm_bootstrap_current_results;
 DROP TABLE IF EXISTS agent_key_current_results;
+DROP TABLE IF EXISTS agent_interaction_current_results;
 DROP TABLE IF EXISTS agent_status_current_results;
 DROP TABLE IF EXISTS pcr_genesis_units;
 DROP TABLE IF EXISTS ordinary_realm_bootstrap_units;

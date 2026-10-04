@@ -39,6 +39,7 @@ mod actor_profiles;
 mod agent_control;
 mod agent_current_results;
 mod agent_draft_pending_intents;
+mod agent_interaction_current_results;
 mod agent_membership_cascades;
 mod agent_pcr_genesis;
 mod agent_principal_row;

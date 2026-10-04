@@ -848,6 +848,10 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
                 current_commit_id, current_stream_position, value \
            FROM mimi_room_binding_current_results WHERE realm_id = $1 \
          UNION ALL \
+         SELECT 'agent_interaction'::text AS selector_kind, jsonb_build_object('kind','agent_interaction','agent_account_id',agent_account_id) AS selector_subject, \
+                current_commit_id,current_stream_position,value \
+           FROM agent_interaction_current_results WHERE realm_id = $1 \
+         UNION ALL \
          SELECT 'agent_status'::text AS selector_kind, to_jsonb(agent_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM agent_status_current_results WHERE realm_id = $1 \
@@ -1141,6 +1145,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                         })?,
                     }
                 }
+                ("agent_interaction", Some(subject)) => serde_json::from_value(subject).map_err(PersistenceError::database)?,
                 ("agent_status", Some(agent_id)) => arkret_wire::CurrentSelector::AgentStatus {
                     agent_id: serde_json::from_value(agent_id).map_err(|error| {
                         PersistenceError::Internal(format!(
@@ -3655,6 +3660,19 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PersistenceError::database)?
         .map(decode_mimi_room_binding_current)
         .transpose()
+    }
+
+    async fn agent_owner_direct_scope(
+        &self,
+        realm: &arkret_wire::RealmId,
+        agent: &arkret_wire::AccountId,
+        controller: &arkret_wire::AccountId,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::agent_interaction_current_results::owner_direct_in_connection(
+            &mut conn, realm, agent, controller,
+        )
+        .await
     }
 
     async fn current_agent_result(

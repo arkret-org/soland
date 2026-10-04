@@ -2054,3 +2054,263 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
     assert_eq!(after.covered, before.covered);
     assert_eq!(after.epoch, before.epoch);
 }
+
+#[tokio::test]
+async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
+    use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite};
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let station = ordinary_realm::station();
+    let station_did = device_authorization_history::did_web_station(&station);
+    let principal = accepted_controller(&pool, station_did.clone()).await;
+    let controller = &principal.history.account;
+    let realm =
+        ordinary_realm::bootstrap_unit_for_account("agent-mode-cas", controller, &station_did);
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    store
+        .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let parent = realm.transactions.last().unwrap();
+    let create = ordinary_realm::next_request(
+        parent,
+        EventKind::SidecarCreate,
+        &controller.principal_id,
+        serde_json::json!({}),
+        parent.commit.committed_at,
+    );
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(create.clone()).await.unwrap();
+    let realm_id = &create.authority_commit.event.realm_id;
+    let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
+    let (agent, genesis, provision_ref) = provision_owned_agent(&pool, &principal).await;
+    let no_key = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(no_key.desired_agent_ids.is_empty());
+    assert!(no_key.authority_stream_head.contains(&provision_ref));
+    let agent_did = arkret_wire::Did::new(format!(
+        "did:{}",
+        agent
+            .principal_id
+            .as_str()
+            .strip_prefix("ak:did_core:")
+            .unwrap()
+    ))
+    .unwrap();
+    let delegation = format!("{agent_did}#managed-controller");
+    let key_event = sidecar_agent::agent_control_event(
+        &principal.history.device_verification_method,
+        principal.history.founding_device_signing_seed,
+        controller,
+        &agent,
+        &genesis.event.realm_id,
+        &delegation,
+        sidecar_agent::agent_key_authorization(
+            &agent_did,
+            &controller.principal_id,
+            genesis.commit.committed_at,
+        ),
+        genesis.commit.committed_at,
+    );
+    let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
+    let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
+    profiles
+        .admit_agent_control_event(AgentControlAdmissionWrite {
+            commit: soland_storage::AuthorityCommitTransaction {
+                expected_authority: genesis.expected_authority.clone(),
+                event: key_event.clone(),
+                commit: key_commit.clone(),
+                mls_state: None,
+                welcomes: Vec::new(),
+                recipient_queue_capacity: 0,
+            },
+            queued_at: key_commit.committed_at,
+        })
+        .await
+        .unwrap();
+    let not_joined = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(not_joined.desired_agent_ids.is_empty());
+    assert!(
+        not_joined
+            .authority_stream_head
+            .contains(&key_event.event_id)
+    );
+    let join = ordinary_realm::next_request(
+        &create.authority_commit,
+        EventKind::MemberState,
+        &controller.principal_id,
+        serde_json::json!({"member_id": arkret_wire::ActorId::account(agent.clone()), "membership":"join",
+            "agent_controller_binding": {"controller_account_id":controller,
+                "controller_membership_generation_ref":parent.event.event_id}}),
+        key_commit.committed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    uow.commit_event(join.clone()).await.unwrap();
+    let joined = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(joined.desired_agent_ids, vec![agent.principal_id.clone()]);
+    assert!(
+        joined
+            .authority_stream_head
+            .contains(&join.authority_commit.event.event_id)
+    );
+    assert_ne!(
+        joined.participant_authority_digest,
+        not_joined.participant_authority_digest
+    );
+
+    let guard = principal
+        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+        .await
+        .unwrap();
+    let make_mode = |previous: &soland_storage::AuthorityCommitTransaction,
+                     mode: &str,
+                     expected: Option<arkret_wire::CurrentRevision>| {
+        let payload = arkret_models_collaboration::agent_interaction::AgentInteractionSetPayload {
+            agent_account_id: agent.clone(),
+            controller_account_id: controller.clone(),
+            interaction_mode: if mode == "public" {
+                arkret_models_collaboration::agent_interaction::AgentInteractionMode::Public
+            } else {
+                arkret_models_collaboration::agent_interaction::AgentInteractionMode::Private
+            },
+            expected_revision: expected,
+        };
+        let mut request = ordinary_realm::next_request(
+            previous,
+            EventKind::AgentInteractionSet,
+            &controller.principal_id,
+            serde_json::to_value(payload).unwrap(),
+            previous.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+        );
+        request
+            .authority_commit
+            .event
+            .producer_proof
+            .as_mut()
+            .unwrap()
+            .verification_method = principal.history.device_verification_method.clone();
+        ordinary_realm::reseal(&mut request.authority_commit.event);
+        request = ordinary_realm::request_for_event(
+            previous,
+            request.authority_commit.event,
+            previous.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+        );
+        request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::HumanDevice(
+            guard.clone(),
+        ));
+        request
+    };
+    let public = make_mode(&join.authority_commit, "public", None);
+    let mut unguarded = public.clone();
+    unguarded.self_producer_guard = None;
+    assert!(
+        uow.commit_event(unguarded)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("capability_denied")
+    );
+    uow.commit_event(public.clone()).await.unwrap();
+    let selector = arkret_wire::CurrentSelector::AgentInteraction {
+        agent_account_id: agent.clone(),
+    };
+    let row = store
+        .current_agent_result(realm_id, &selector)
+        .await
+        .unwrap()
+        .unwrap();
+    let arkret_wire::TypedCurrentResult::Value {
+        revision, value, ..
+    } = row;
+    assert_eq!(value["interaction_mode"], "public");
+    let public_cut = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(joined.desired_agent_ids, public_cut.desired_agent_ids);
+    assert_eq!(
+        joined.participant_authority_digest,
+        public_cut.participant_authority_digest
+    );
+    let stale = make_mode(&public.authority_commit, "private", None);
+    assert!(
+        uow.commit_event(stale)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("failed_precondition")
+    );
+    let private = make_mode(&public.authority_commit, "private", Some(revision));
+    uow.commit_event(private.clone()).await.unwrap();
+    let arkret_wire::TypedCurrentResult::Value { value, .. } = store
+        .current_agent_result(realm_id, &selector)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(value["interaction_mode"], "private");
+    let private_cut = read(&pool, realm_id, &sidecar, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(joined.desired_agent_ids, private_cut.desired_agent_ids);
+    assert_eq!(
+        joined.participant_authority_digest,
+        private_cut.participant_authority_digest
+    );
+    let private_write = ordinary_realm::next_request(
+        &private.authority_commit,
+        EventKind::MessageCreate,
+        &agent.principal_id,
+        serde_json::json!({}),
+        private.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    assert!(
+        uow.commit_event(private_write)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("shared Agent authority is unavailable")
+    );
+    let arkret_wire::TypedCurrentResult::Value {
+        revision: private_revision,
+        ..
+    } = store
+        .current_agent_result(realm_id, &selector)
+        .await
+        .unwrap()
+        .unwrap();
+    let same_value = make_mode(
+        &private.authority_commit,
+        "private",
+        Some(private_revision.clone()),
+    );
+    uow.commit_event(same_value.clone()).await.unwrap();
+    let arkret_wire::TypedCurrentResult::Value {
+        revision: advanced, ..
+    } = store
+        .current_agent_result(realm_id, &selector)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        advanced.stream_position,
+        private_revision.stream_position + 1
+    );
+    assert_eq!(
+        advanced.commit_id,
+        same_value.authority_commit.commit.commit_id
+    );
+    let snapshot = store
+        .realm_state_snapshot_material_for_account(realm_id, controller)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(snapshot.current_state_entries.iter().any(|row| matches!(row, arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::AgentInteraction { agent_account_id }, value, .. } if agent_account_id == &agent && value["interaction_mode"] == "private")));
+}

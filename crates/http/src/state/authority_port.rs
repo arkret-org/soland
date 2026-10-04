@@ -77,6 +77,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::StrandMove
         | EventKind::StrandReorder
         | EventKind::StrandWatchSet
+        | EventKind::AgentInteractionSet
         | EventKind::SpaceCreate
         | EventKind::SpaceUpdate
         | EventKind::SpaceParent

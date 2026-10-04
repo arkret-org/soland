@@ -5176,6 +5176,21 @@ CREATE TABLE realm_bootstrap_current_results (
  PRIMARY KEY(realm_id,result_family)
 );
 
+CREATE TABLE agent_interaction_current_results (
+ realm_id TEXT NOT NULL,
+ current_key TEXT NOT NULL,
+ agent_account_id JSONB NOT NULL,
+ current_commit_id TEXT NOT NULL,
+ current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
+ value JSONB NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(realm_id,current_key),
+ UNIQUE(realm_id,agent_account_id),
+ CHECK(jsonb_typeof(agent_account_id)='object'),
+ CHECK(jsonb_typeof(value)='object'),
+ CHECK(value->>'interaction_mode' IN ('private','public'))
+);
+
 CREATE TABLE agent_status_current_results (
  realm_id TEXT NOT NULL,
  current_key TEXT NOT NULL,

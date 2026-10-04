@@ -2497,6 +2497,14 @@ async fn commit_one_in_connection(
         .into());
     }
 
+    if matches!(
+        event.scope_ref,
+        arkret_wire::ScopeRef::Realm { .. } | arkret_wire::ScopeRef::Circle { .. }
+    ) {
+        // Shared writes acquire the Realm cut before controller or Agent producer current.
+        crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    }
+
     if let Some(guard) = request.self_producer_guard.as_ref() {
         crate::authority_commit::check_self_producer_guard_in_connection(
             conn,
@@ -2547,6 +2555,32 @@ async fn commit_one_in_connection(
         )
         .await?;
     }
+
+    if event.kind == arkret_wire::EventKind::AgentInteractionSet {
+        if !matches!(
+            request.self_producer_guard,
+            Some(soland_storage::SelfProducerCommitGuard::HumanDevice(_))
+        ) && request.forwarded_producer_evidence.is_none()
+        {
+            return Err(PersistenceError::Conflict(
+                "capability_denied: Agent mode requires the original controller device producer"
+                    .into(),
+            )
+            .into());
+        }
+        crate::agent_interaction_current_results::admit_in_connection(
+            conn,
+            event,
+            &request.authority_commit.commit,
+        )
+        .await?;
+    }
+    crate::agent_interaction_current_results::require_shared_producer_in_connection(
+        conn,
+        event,
+        &request.authority_commit.commit,
+    )
+    .await?;
 
     // contact-and-direct-conversation.md section 8.4: the profile table of a
     // Direct Conversation Realm precedes every action authority and writer.
@@ -2676,6 +2710,8 @@ async fn commit_one_in_connection(
         crate::call_state_current_results::commit_in_connection(conn, event, commit).await?;
         crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
         crate::strand_watch_current_results::commit_in_connection(conn, event, commit).await?;
+        crate::agent_interaction_current_results::project_in_connection(conn, event, commit)
+            .await?;
         crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
         crate::sidecar_exchange_controls::commit_in_connection(conn, event, commit, true).await?;
         commit_relation_current_result_in_connection(conn, event, commit, true).await?;

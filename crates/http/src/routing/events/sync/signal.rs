@@ -516,6 +516,34 @@ async fn verify_signal_agent_current_authority(
     .await?;
     let controller_account =
         crate::routing::identity::agent_pcr::agent_controller_account(state, &agent_record).await?;
+    let owner_direct = if let Some(account) = actor.as_account_id() {
+        state
+            .authority_commits()
+            .agent_owner_direct_scope(&envelope.realm_id, account, &controller_account)
+            .await
+            .map_err(|_| signal_rail_unavailable("resolve Signal private scope"))?
+    } else {
+        false
+    };
+    if !matches!(envelope.scope_ref, arkret_wire::ScopeRef::Sidecar { .. }) && !owner_direct {
+        let account = actor
+            .as_account_id()
+            .ok_or_else(|| signal_proof_invalid("Signal authority is unavailable"))?;
+        let mode = state
+            .authority_commits()
+            .current_agent_result(
+                &envelope.realm_id,
+                &arkret_wire::CurrentSelector::AgentInteraction {
+                    agent_account_id: account.clone(),
+                },
+            )
+            .await
+            .map_err(|_| signal_rail_unavailable("resolve Signal authority"))?;
+        if !matches!(mode, Some(arkret_wire::TypedCurrentResult::Value { value, .. }) if serde_json::from_value::<arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue>(value.clone()).is_ok_and(|v| v.controller_account_id == controller_account && v.interaction_mode == arkret_models_collaboration::agent_interaction::AgentInteractionMode::Public))
+        {
+            return Err(signal_proof_invalid("Signal authority is unavailable"));
+        }
+    }
     let controller_actor = arkret_wire::ActorId::account(controller_account);
     let controller_realms = state
         .authority_commits()
