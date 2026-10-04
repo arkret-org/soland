@@ -1,11 +1,19 @@
+#[cfg(test)]
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
+#[cfg(test)]
 use soland_services::operation_semantics as kinds;
 // Canonical home of these payload-field readers is `soland_storage::projection`
 // (re-exported at the storage crate root); the signatures and bodies were
 // identical, so this module re-exports them instead of keeping copies.
-pub(super) use soland_storage::{first_string_field, object_string_field, patch_string_field};
+#[cfg(test)]
+pub(super) use soland_storage::first_string_field;
+#[cfg(test)]
+pub(super) use soland_storage::object_string_field;
+#[cfg(test)]
+pub(super) use soland_storage::patch_string_field;
 
+#[cfg(test)]
 fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     matches!(
         kinds::canonical_kind_for_operation(operation),
@@ -13,6 +21,7 @@ fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(super) fn operation_realm_title(operation: &Operation) -> Option<&str> {
     // `ensure_projected_realm` runs for every accepted event in a Realm. Space,
     // Strand, and other child-object events also carry `object.title` or a
@@ -23,6 +32,7 @@ pub(super) fn operation_realm_title(operation: &Operation) -> Option<&str> {
     first_string_field(&operation.payload, &["title"])
 }
 
+#[cfg(test)]
 pub(super) fn operation_realm_summary(operation: &Operation) -> Option<&str> {
     if !operation_updates_realm_metadata(operation) {
         return None;
@@ -30,25 +40,14 @@ pub(super) fn operation_realm_summary(operation: &Operation) -> Option<&str> {
     first_string_field(&operation.payload, &["summary"])
 }
 
+#[cfg(test)]
 pub(super) fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
     (kinds::canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::RealmDiscovery))
         .then(|| operation.payload.get("value").and_then(Value::as_str))
         .flatten()
 }
 
-pub(super) fn operation_realm_class(operation: &Operation) -> Option<&str> {
-    object_string_field(operation, &["realm_class"])
-        .or_else(|| patch_string_field(operation, "realm_class"))
-}
-
-pub(super) fn operation_realm_default_join_rule(operation: &Operation) -> Option<&str> {
-    (kinds::canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::RealmJoinRule))
-        .then(|| operation.payload.get("value").and_then(Value::as_str))
-        .flatten()
-        .or_else(|| object_string_field(operation, &["default_join_rule"]))
-        .or_else(|| patch_string_field(operation, "default_join_rule"))
-}
-
+#[cfg(test)]
 pub(super) fn operation_realm_history_access(operation: &Operation) -> Option<&str> {
     match kinds::canonical_kind_for_operation(operation) {
         Some(arkret_wire::EventKind::RealmCreate) => {
@@ -61,41 +60,13 @@ pub(super) fn operation_realm_history_access(operation: &Operation) -> Option<&s
     }
 }
 
-pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {
-    match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::EventKind::RealmPreviewPolicy) => operation.payload.get("value").cloned(),
-        Some(arkret_wire::EventKind::RealmCreate) => operation
-            .payload
-            .get("object")
-            .and_then(|object| object.get("preview_policy"))
-            .cloned(),
-        _ => None,
-    }
-}
-
-pub(super) fn operation_realm_asset_privacy_policy(operation: &Operation) -> Option<Value> {
-    match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::EventKind::RealmAssetPrivacyPolicy) => {
-            operation.payload.get("value").cloned()
-        }
-        Some(arkret_wire::EventKind::RealmCreate) => operation
-            .payload
-            .get("object")
-            .and_then(|object| object.get("asset_privacy_policy"))
-            .cloned(),
-        _ => None,
-    }
-}
-
 // Converged to the single crate-root canonical-digest helper (delegates
 // to SDK `canonical_sha256`); re-exported so projection call sites keep
 // referencing `canonical_value_digest`.
+#[cfg(test)]
 pub(super) use crate::canonical_value_digest;
 
-pub(super) fn is_valid_history_access(value: &str) -> bool {
-    matches!(value, "since_join" | "all_history_for_current_members")
-}
-
+#[cfg(test)]
 pub(super) fn operation_realm_encryption_profile(operation: &Operation) -> Option<&str> {
     first_string_field(&operation.payload, &["encryption_profile"])
         .or_else(|| object_string_field(operation, &["encryption_profile"]))

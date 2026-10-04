@@ -1,12 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use arkret_models_identity::HandleClaim;
 #[cfg(test)]
 use arkret_models_identity::HandleClaimStatus;
 use serde_json::Value;
+#[cfg(test)]
+pub use soland_storage::MemberIdentityReplacementEdge;
 pub use soland_storage::{
-    HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
-    MemberIdentitySubjectKey,
+    HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentitySubjectKey,
 };
 
 /// Disposable Realm/member identity projection. Hydration rebuilds every
@@ -26,6 +29,7 @@ pub struct MemberIdentityRegistry {
     handle_claims_by_subject: BTreeMap<arkret_wire::DidCoreId, Vec<HandleClaimEvidenceRecord>>,
 }
 
+#[cfg(test)]
 /// Effective updates used by the accepted-state optimistic concurrency guard:
 /// each unreplaced update's Event ID with its exact signed payload.
 /// Concurrent unreplaced identity events remain separate entries.
@@ -69,16 +73,6 @@ impl MemberIdentityRegistry {
         }
     }
 
-    pub fn handle_claims_for_subject(
-        &self,
-        subject_id: &arkret_wire::DidCoreId,
-    ) -> Vec<HandleClaimEvidenceRecord> {
-        self.handle_claims_by_subject
-            .get(subject_id)
-            .cloned()
-            .unwrap_or_default()
-    }
-
     pub fn invalidate_handle_claims_for_subject(
         &mut self,
         subject_id: &arkret_wire::DidCoreId,
@@ -101,29 +95,7 @@ impl MemberIdentityRegistry {
         self.handle_claims_by_subject.clone()
     }
 
-    /// MIU-SOL-3 (R3.2) — compute the current writer-observed
-    /// effective-set digest for `(realm_id, actor_id)` across all stored
-    /// segments. This is the value an incoming event's
-    /// `expected_state_digest` MUST equal BEFORE it lands (optimistic
-    /// concurrency guard). With no stored event the effective set is empty
-    /// and digests `[]`; `None` only reports a digest failure.
-    ///
-    /// Uses the SDK `member_identity_effective_set_digest` formula:
-    /// sha256 over RFC 8785 JCS of the exact signed payloads ordered by
-    /// `event_id` (`current-results.md` §2, decision 0115).
-    pub fn current_state_digest_for_actor(&self, realm_id: &str, actor_id: &str) -> Option<String> {
-        let snapshot = self
-            .snapshot_for_actor(realm_id, actor_id)
-            .unwrap_or_default();
-        let effective: Vec<(&arkret_identifiers::EventId, &Value)> = snapshot
-            .effective
-            .iter()
-            .map(|(event_id, payload)| (event_id, payload))
-            .collect();
-        arkret_models_identity::member_identity::member_identity_effective_set_digest(&effective)
-            .ok()
-    }
-
+    #[cfg(test)]
     /// Build a [`MemberIdentitySnapshot`] across all segments under
     /// `(realm_id, actor_id)`. Applies the replacement-edge filter per
     /// MID-2/3, sorts by `(segment, event_id)`, and computes the
@@ -235,24 +207,6 @@ pub(crate) fn handle_claim_record_from_envelope(
         expires_at: claim.claim.expires_at,
         envelope: envelope.clone(),
     })
-}
-
-pub(crate) fn handle_claim_envelopes_in_identity_payload(identity_payload: &Value) -> Vec<&Value> {
-    let mut out = Vec::new();
-    if let Some(claims) = identity_payload
-        .get("handle_claims")
-        .and_then(Value::as_array)
-    {
-        out.extend(claims.iter());
-    }
-    if let Some(claims) = identity_payload
-        .get("member_identity")
-        .and_then(|member_identity| member_identity.get("handle_claims"))
-        .and_then(Value::as_array)
-    {
-        out.extend(claims.iter());
-    }
-    out
 }
 
 #[cfg(test)]

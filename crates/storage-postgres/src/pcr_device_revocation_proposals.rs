@@ -10,7 +10,11 @@ use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AsyncPgConnection, PersistenceError, PersistenceResult, PgPool, pg_conn};
+#[cfg(test)]
+use crate::PgPool;
+#[cfg(test)]
+use crate::pg_conn;
+use crate::{AsyncPgConnection, PersistenceError, PersistenceResult};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +23,7 @@ pub(crate) struct RevocationProposal {
     pub value: DeviceRevokePayload,
 }
 
+#[cfg(test)]
 pub(crate) struct ConfirmedRevocationProposals {
     pub authority_commit_id: RealmCommitId,
     pub proposals: Vec<RevocationProposal>,
@@ -328,6 +333,7 @@ pub(crate) async fn confirmed_pcr_device_cut_in_connection(
     }))
 }
 
+#[cfg(test)]
 pub(crate) async fn confirmed_pcr_device_cut(
     pool: &PgPool,
     account: &AccountId,
@@ -337,6 +343,7 @@ pub(crate) async fn confirmed_pcr_device_cut(
     confirmed_pcr_device_cut_in_connection(&mut conn, account, device_id).await
 }
 
+#[cfg(test)]
 pub(crate) async fn confirmed_revocation_proposals(
     pool: &PgPool,
     account: &AccountId,

@@ -199,7 +199,6 @@ pub struct AppState {
     connection_drain: Arc<tokio::sync::watch::Sender<Option<ConnectionDrain>>>,
     /// Lossy process-local acceleration signal. Durable pending rows remain
     /// the reconciliation source of truth after missed wakeups or restarts.
-    control_seal_wakeup: Arc<tokio::sync::Notify>,
     /// Inbound admission slots for Applet edge transactions. Saturation is a
     /// protocol outcome, not a timeout: applet-integration.md 7.3 requires the
     /// shed delivery to come back as per-event `queue_full` with
@@ -1207,7 +1206,6 @@ impl AppState {
             historical_contact_assertion_keys: Arc::new(Mutex::new(BTreeMap::new())),
             event_broadcast,
             connection_drain: Arc::new(tokio::sync::watch::Sender::new(None)),
-            control_seal_wakeup: Arc::new(tokio::sync::Notify::new()),
             applet_transaction_slots: Arc::new(tokio::sync::Semaphore::new(
                 applet_transaction_inflight_capacity,
             )),
@@ -1700,73 +1698,6 @@ impl AppState {
         self.member_identity.lock().snapshot_handle_claims()
     }
 
-    pub(crate) fn member_identity_state_digest(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> Option<String> {
-        self.member_identity
-            .lock()
-            .current_state_digest_for_actor(realm_id, actor_id)
-    }
-
-    /// Install an accepted identity assertion into the disposable registry.
-    /// Event/Commit and current assertions have already committed together;
-    /// hydration reads those accepted facts, not this cache's write-through.
-    pub(crate) async fn record_member_identity_update(
-        &self,
-        record: super::MemberIdentityEventRecord,
-        identity_payload: &Value,
-    ) {
-        let store = self.persistence.member_identity_store();
-        let claim_records: Vec<super::HandleClaimEvidenceRecord> =
-            super::member_identity::handle_claim_envelopes_in_identity_payload(identity_payload)
-                .into_iter()
-                .filter_map(super::member_identity::handle_claim_record_from_envelope)
-                .collect();
-        for claim in &claim_records {
-            if let Err(error) = store.put_handle_claim(claim).await {
-                tracing::error!(
-                    %error,
-                    digest = %claim.digest,
-                    "failed to persist handle claim evidence"
-                );
-            }
-        }
-        let mut registry = self.member_identity.lock();
-        registry.insert(record);
-        for claim in claim_records {
-            registry.restore_handle_claim(claim);
-        }
-    }
-
-    pub(crate) async fn cache_handle_claim(&self, envelope: Value) -> Option<String> {
-        let record = super::member_identity::handle_claim_record_from_envelope(&envelope)?;
-        let digest = record.digest.clone();
-        if let Err(error) = self
-            .persistence
-            .member_identity_store()
-            .put_handle_claim(&record)
-            .await
-        {
-            tracing::error!(%error, %digest, "failed to persist handle claim evidence");
-        }
-        self.member_identity.lock().restore_handle_claim(record);
-        Some(digest)
-    }
-
-    pub(crate) fn cached_handle_claims_for_subject(
-        &self,
-        subject_id: &str,
-    ) -> Vec<super::HandleClaimEvidenceRecord> {
-        let Ok(subject_id) = arkret_wire::DidCoreId::new(subject_id.to_owned()) else {
-            return Vec::new();
-        };
-        self.member_identity
-            .lock()
-            .handle_claims_for_subject(&subject_id)
-    }
-
     pub(crate) async fn invalidate_cached_handle_claims_for_subject(
         &self,
         subject_id: &str,
@@ -2015,23 +1946,11 @@ impl AppState {
         self.connection_drain.subscribe()
     }
 
-    pub(crate) fn current_connection_drain(&self) -> Option<ConnectionDrain> {
-        *self.connection_drain.borrow()
-    }
-
     pub(crate) fn publish_event_notification(
         &self,
         notification: EventNotification,
     ) -> Result<usize, tokio::sync::broadcast::error::SendError<EventNotification>> {
         self.event_broadcast.send(notification)
-    }
-
-    pub(crate) fn wake_control_seal_coordinator(&self) {
-        self.control_seal_wakeup.notify_one();
-    }
-
-    pub(crate) async fn control_seal_wakeup_notified(&self) {
-        self.control_seal_wakeup.notified().await;
     }
 
     /// Claim one inbound Applet-transaction admission slot, or `None` when the

@@ -1,93 +1,22 @@
+#[cfg(test)]
 use std::hash::Hasher;
-use std::sync::{Arc, OnceLock};
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::OnceLock;
 
 use arkret_event_draft::EventPayloadExt as _;
 
 use super::*;
 
-/// SOL-SEC-03 — per-Realm-actor submit serialization uses a fixed-size pool of
-/// locks keyed by a hash of `(realm_id, actor_id)`, instead of an unbounded
-/// `HashMap` entry that was never evicted. Federation inbound can carry
-/// arbitrarily many distinct actor DIDs, so a per-actor map grows without bound
-/// (memory DoS). A fixed pool bounds memory to `ACTOR_SUBMIT_LOCK_SHARDS`
-/// entries; two actors hashing to the same shard merely serialize together,
-/// which is a safe superset of the required per-actor exclusion.
-const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
-const ACCOUNT_DATA_SUBMIT_LOCK_SHARDS: usize = 1024;
-const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
-pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 const IDENTITY_CREATION_CONTROL_PROOF_MAX_FUTURE_SKEW_SECONDS: i64 = 30;
-
-static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
-static ACCOUNT_DATA_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
-static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
-static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod ghost_provision;
 pub(in crate::routing) use ghost_provision::{applet_committed_ref, submit_applet_authoring_unit};
 mod sidecar_ensure;
 pub(crate) use sidecar_ensure::submit_sidecar_ensure_batch;
-mod agent_membership_cascade;
-pub(in crate::routing) use agent_membership_cascade::submit_agent_membership_cascade;
 
-fn actor_submit_lock(realm_id: &str, actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-    let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| {
-        (0..ACTOR_SUBMIT_LOCK_SHARDS)
-            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
-            .collect()
-    });
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(realm_id, &mut hasher);
-    std::hash::Hash::hash(actor_id, &mut hasher);
-    let shard = (hasher.finish() as usize) % ACTOR_SUBMIT_LOCK_SHARDS;
-    locks[shard].clone()
-}
-
-fn account_data_submit_lock(owner: &str, key: &str) -> Arc<tokio::sync::Mutex<()>> {
-    let locks = ACCOUNT_DATA_SUBMIT_LOCKS.get_or_init(|| {
-        (0..ACCOUNT_DATA_SUBMIT_LOCK_SHARDS)
-            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
-            .collect()
-    });
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(owner, &mut hasher);
-    std::hash::Hash::hash(key, &mut hasher);
-    let shard = (hasher.finish() as usize) % ACCOUNT_DATA_SUBMIT_LOCK_SHARDS;
-    locks[shard].clone()
-}
-
-fn invite_lifecycle_submit_lock(
-    realm_id: &str,
-    envelope: &Value,
-) -> Option<Arc<tokio::sync::Mutex<()>>> {
-    let invite_id = envelope
-        .get("payload")
-        .and_then(Value::as_object)
-        .and_then(|payload| {
-            payload
-                .get("invite_id")
-                .or_else(|| payload.get("invite_ref"))
-                .or_else(|| payload.get("invite").and_then(|invite| invite.get("id")))
-        })
-        .and_then(Value::as_str)?;
-    let locks = INVITE_LIFECYCLE_LOCKS.get_or_init(|| {
-        (0..INVITE_LIFECYCLE_LOCK_SHARDS)
-            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
-            .collect()
-    });
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hash::hash(realm_id, &mut hasher);
-    std::hash::Hash::hash(invite_id, &mut hasher);
-    let shard = (hasher.finish() as usize) % INVITE_LIFECYCLE_LOCK_SHARDS;
-    Some(locks[shard].clone())
-}
-
-pub(in crate::routing) fn service_event_authoring_lock() -> Arc<tokio::sync::Mutex<()>> {
-    SERVICE_EVENT_AUTHORING_LOCK
-        .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
-        .clone()
-}
-
+#[cfg(test)]
 fn stamp_projection_operation_received_at(
     operation: &mut arkret_event_draft::ProjectedEventOperation,
     received_at: chrono::DateTime<chrono::Utc>,
@@ -107,6 +36,7 @@ fn stamp_projection_operation_received_at(
     );
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: EventId,
@@ -123,13 +53,8 @@ pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) producer_signing_key: Option<arkret_wire::DidKey>,
 }
 
-impl ValidatedEventEnvelope {
-    /// The submitting device, or `""` for a deviceless service session — the
-    /// same empty-source spelling projection already fans out on.
-    pub(in crate::routing) fn device_id_str(&self) -> &str {
-        self.device_id.as_ref().map_or("", DeviceId::as_str)
-    }
-}
+#[cfg(test)]
+impl ValidatedEventEnvelope {}
 
 #[derive(Debug)]
 pub(in crate::routing) struct EventValidationError {
@@ -145,6 +70,7 @@ pub(in crate::routing) enum SubmitOneError {
         error: Box<AppError>,
         details: Option<Value>,
     },
+    #[cfg(test)]
     Quarantined {
         event_id: String,
         reason_code: String,
@@ -158,14 +84,7 @@ pub(in crate::routing) struct SubmittedEventOutcome {
     pub duplicate: bool,
 }
 
-#[derive(Debug)]
-pub(in crate::routing) struct EventCommitIdempotency {
-    pub authenticated_actor: arkret_wire::ActorId,
-    pub operation_id: String,
-    pub key: String,
-    pub request_hash: String,
-}
-
+#[cfg(test)]
 pub(super) fn map_event_hash_collision(
     event_id: impl Into<String>,
     error: &soland_services::ServiceError,
@@ -179,6 +98,7 @@ pub(super) fn map_event_hash_collision(
     })
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) realm_id: String,
@@ -210,22 +130,7 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) direct_conversation_founding: bool,
 }
 
-pub(in crate::routing::events::event_log) fn staged_realm_digest_algorithm(
-    envelope: &Value,
-) -> String {
-    envelope
-        .get("payload")
-        .and_then(|payload| {
-            payload
-                .get("object")
-                .and_then(|object| object.get("digest_algorithm"))
-                .or_else(|| payload.get("digest_algorithm"))
-        })
-        .and_then(Value::as_str)
-        .unwrap_or("sha256")
-        .to_owned()
-}
-
+#[cfg(test)]
 /// Closed authorization context for trusted internal protocol adapters. This
 /// does not skip schema, proof, actor-lock, idempotency or reducer admission;
 /// it only supplies the protocol-specific substitute for ordinary Realm
@@ -241,6 +146,7 @@ pub(in crate::routing) struct InternalEventAdmission {
     binding: InternalEventBinding,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 enum InternalEventBinding {
     AppletFormal {
@@ -273,17 +179,8 @@ enum InternalEventBinding {
     },
 }
 
+#[cfg(test)]
 impl InternalEventAdmission {
-    pub(in crate::routing::events::event_log) fn is_peer_replication(&self) -> bool {
-        matches!(
-            self.binding,
-            InternalEventBinding::PeerFederatedEvent { .. }
-                | InternalEventBinding::PeerAgentMembershipCascade { .. }
-        )
-    }
-    pub(in crate::routing::events::event_log) fn is_applet_formal(&self) -> bool {
-        matches!(self.binding, InternalEventBinding::AppletFormal { .. })
-    }
     pub(in crate::routing) fn applet_formal(
         realm_id: impl Into<String>,
         actor_id: arkret_wire::ActorId,
@@ -302,116 +199,6 @@ impl InternalEventAdmission {
                 event_id: event_id.into(),
                 applet_id,
                 staged_producer_authority,
-            },
-        }
-    }
-
-    pub(in crate::routing) fn sidecar_ensure(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        device_id: impl Into<String>,
-        kind: impl Into<String>,
-        event_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: actor_id.signing_principal_id().to_string(),
-            actor_id,
-            kind: kind.into(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::SidecarEnsure {
-                event_id: event_id.into(),
-            },
-        }
-    }
-
-    pub(in crate::routing) fn agent_membership_cascade(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        initiator_id: arkret_wire::ActorId,
-        device_id: impl Into<String>,
-        event_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            actor_id,
-            session_actor_id: initiator_id.signing_principal_id().to_string(),
-            kind: arkret_wire::EventKind::MemberState.as_str().to_owned(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::AgentMembershipCascade {
-                event_id: event_id.into(),
-                initiator_id,
-            },
-        }
-    }
-
-    pub(in crate::routing) fn peer_federated_event(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        device_id: impl Into<String>,
-        event_id: impl Into<String>,
-        producer_verification_method: arkret_wire::DidUrl,
-        producer_signing_key: arkret_wire::DidKey,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: actor_id.signing_principal_id().to_string(),
-            actor_id,
-            kind: String::new(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::PeerFederatedEvent {
-                event_id: event_id.into(),
-                producer_verification_method,
-                producer_signing_key,
-            },
-        }
-    }
-
-    pub(in crate::routing) fn proof_authenticated_event(
-        event: &arkret_wire::Event,
-        device_id: impl Into<String>,
-        producer_signing_key: arkret_wire::DidKey,
-    ) -> Self {
-        let signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
-        Self {
-            realm_id: event.realm_id.to_string(),
-            actor_id: event.actor_id.clone(),
-            session_actor_id: signer.signing_principal_id().to_string(),
-            kind: event.kind.as_str().to_owned(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::ProofAuthenticatedEvent {
-                event_id: event.event_id.to_string(),
-                producer_verification_method: event
-                    .producer_proof
-                    .as_ref()
-                    .expect("validated producer proof")
-                    .verification_method
-                    .clone(),
-                producer_signing_key,
-            },
-        }
-    }
-
-    pub(in crate::routing) fn peer_agent_membership_cascade(
-        realm_id: impl Into<String>,
-        actor_id: arkret_wire::ActorId,
-        initiator_id: arkret_wire::ActorId,
-        device_id: impl Into<String>,
-        event_id: impl Into<String>,
-        producer_verification_method: arkret_wire::DidUrl,
-        producer_signing_key: arkret_wire::DidKey,
-    ) -> Self {
-        Self {
-            realm_id: realm_id.into(),
-            session_actor_id: initiator_id.signing_principal_id().to_string(),
-            actor_id,
-            kind: arkret_wire::EventKind::MemberState.as_str().to_owned(),
-            device_id: device_id.into(),
-            binding: InternalEventBinding::PeerAgentMembershipCascade {
-                event_id: event_id.into(),
-                initiator_id,
-                producer_verification_method,
-                producer_signing_key,
             },
         }
     }
@@ -511,41 +298,6 @@ impl InternalEventAdmission {
             })
     }
 
-    pub(in crate::routing::events::event_log) fn federated_producer_signing_key(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-        verification_method: &str,
-    ) -> Option<&arkret_wire::DidKey> {
-        if !self.matches(session, object) {
-            return None;
-        }
-        match &self.binding {
-            InternalEventBinding::PeerFederatedEvent {
-                producer_verification_method,
-                producer_signing_key,
-                ..
-            } if producer_verification_method.as_str() == verification_method => {
-                Some(producer_signing_key)
-            }
-            InternalEventBinding::PeerAgentMembershipCascade {
-                producer_verification_method,
-                producer_signing_key,
-                ..
-            } if producer_verification_method.as_str() == verification_method => {
-                Some(producer_signing_key)
-            }
-            InternalEventBinding::ProofAuthenticatedEvent {
-                producer_verification_method,
-                producer_signing_key,
-                ..
-            } if producer_verification_method.as_str() == verification_method => {
-                Some(producer_signing_key)
-            }
-            _ => None,
-        }
-    }
-
     pub(in crate::routing::events::event_log) fn applet_formal_producer_signing_key(
         &self,
         session: &SessionRecord,
@@ -566,40 +318,9 @@ impl InternalEventAdmission {
             _ => None,
         }
     }
-
-    pub(in crate::routing::events::event_log) fn authorizes_realm_membership_bypass(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-    ) -> bool {
-        self.matches(session, object)
-            && !matches!(
-                &self.binding,
-                InternalEventBinding::PeerFederatedEvent { .. }
-                    | InternalEventBinding::ProofAuthenticatedEvent { .. }
-            )
-    }
-
-    pub(in crate::routing::events::event_log) fn is_sidecar_ensure(
-        &self,
-        session: &SessionRecord,
-        object: &serde_json::Map<String, Value>,
-    ) -> bool {
-        matches!(self.binding, InternalEventBinding::SidecarEnsure { .. })
-            && self.matches(session, object)
-    }
 }
 
 impl SubmitOneError {
-    /// Carry an admission rejection that was already shaped as an `AppError`
-    /// without flattening its wire code into prose.
-    pub(in crate::routing) fn from_app_error(error: AppError) -> Self {
-        Self::Rejected {
-            error: Box::new(error),
-            details: None,
-        }
-    }
-
     pub(in crate::routing) fn new(
         status: StatusCode,
         code: impl Into<String>,
@@ -628,16 +349,20 @@ impl SubmitOneError {
     }
 
     pub(in crate::routing) fn with_details(mut self, details: impl serde::Serialize) -> Self {
-        if let Self::Rejected {
-            details: wire_details,
-            ..
-        } = &mut self
-        {
-            *wire_details = serde_json::to_value(details).ok();
+        match &mut self {
+            Self::Rejected {
+                details: wire_details,
+                ..
+            } => {
+                *wire_details = serde_json::to_value(details).ok();
+            }
+            #[cfg(test)]
+            Self::Quarantined { .. } => {}
         }
         self
     }
 
+    #[cfg(test)]
     /// A registered operation-semantic rejection is always a schema violation
     /// at the top level, while its stable machine discriminator belongs in
     /// `error.details.reason_code`. Keeping this mapping here prevents each
@@ -660,6 +385,7 @@ impl SubmitOneError {
         }))
     }
 
+    #[cfg(test)]
     pub(in crate::routing) fn quarantine(
         event_id: impl Into<String>,
         code: impl Into<String>,
@@ -675,32 +401,23 @@ impl SubmitOneError {
     pub(in crate::routing) fn rejection(&self) -> Option<&AppError> {
         match self {
             Self::Rejected { error, .. } => Some(error),
+            #[cfg(test)]
             Self::Quarantined { .. } => None,
         }
     }
 
-    pub(in crate::routing) fn direct_conversation_admission_reason(&self) -> Option<&str> {
-        let Self::Rejected { error, details } = self else {
-            return None;
-        };
-        details
-            .as_ref()
-            .and_then(Value::as_object)
-            .and_then(|details| details.get("reason_code"))
-            .and_then(Value::as_str)
-            .or(error.reason_code.as_deref())
-            .filter(|reason| is_direct_conversation_admission_reason(reason))
-    }
-
+    #[cfg(test)]
     pub(in crate::routing) fn details(&self) -> Option<&Value> {
         match self {
             Self::Rejected { details, .. } => details.as_ref(),
+            #[cfg(test)]
             Self::Quarantined { .. } => None,
         }
     }
 
     pub(in crate::routing) fn quarantine_event_id(&self) -> Option<String> {
         match self {
+            #[cfg(test)]
             Self::Quarantined { event_id, .. } => Some(event_id.clone()),
             Self::Rejected { .. } => None,
         }
@@ -718,6 +435,7 @@ impl SubmitOneError {
                 .as_deref()
                 .unwrap_or_else(|| error.wire_code())
                 .to_owned(),
+            #[cfg(test)]
             Self::Quarantined { reason_code, .. } => reason_code.clone(),
         }
     }
@@ -725,38 +443,10 @@ impl SubmitOneError {
     pub(in crate::routing) fn message(&self) -> String {
         match self {
             Self::Rejected { error, .. } => error.message.to_string(),
+            #[cfg(test)]
             Self::Quarantined { message, .. } => message.clone(),
         }
     }
-}
-
-pub(super) fn is_direct_conversation_admission_reason(reason: &str) -> bool {
-    matches!(
-        reason,
-        arkret_wire::ReasonCode::DIRECT_CONVERSATION_BINDING_INVALID
-            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_TERMINAL_FORBIDDEN
-            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_MEMBER_COUNT_INVALID
-            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_THIRD_PARTY_MEMBER_FORBIDDEN
-            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_INVITE_FORBIDDEN
-            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_ROOT_MASK_VIOLATION
-            | arkret_wire::ReasonCode::DIRECT_CONVERSATION_PARTICIPANT_AUTHORITY_DENIED
-    )
-}
-
-pub(super) fn validate_membership_compensation_semantics(
-    event: &arkret_wire::Event,
-    evidence: Option<&arkret_wire::MembershipCompensationSubmissionEvidence>,
-) -> Result<(), SubmitOneError> {
-    let Some(evidence) = evidence else {
-        return Ok(());
-    };
-    evidence.validate_for_event(event).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::CONFLICT,
-            "membership_compensation_conflict",
-            format!("membership compensation evidence is invalid: {error}"),
-        )
-    })
 }
 
 /// Map a rejected Event submission onto the HTTP error family without losing the
@@ -816,21 +506,17 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
     AppError::from_rejection(mapped, message).with_internal_reason(code)
 }
 
-fn cbs_bottom_reject(reason: &'static str) -> (&'static str, &'static str) {
-    if reason == "cell_bottom_state" {
-        ("failed_bottom", "cell_in_bottom_state")
-    } else {
-        (reason, reason)
-    }
-}
-
 impl From<EventValidationError> for SubmitOneError {
     fn from(error: EventValidationError) -> Self {
         let mut rendered = Self::new(error.status, error.code, error.message);
         if let Some(reason_code) = error.reason_code {
             let registered = arkret_wire::ReasonCode::is_registered(reason_code);
-            if let Self::Rejected { error, .. } = &mut rendered {
-                error.attach_internal_reason(reason_code);
+            match &mut rendered {
+                Self::Rejected { error, .. } => {
+                    error.attach_internal_reason(reason_code);
+                }
+                #[cfg(test)]
+                Self::Quarantined { .. } => {}
             }
             let detail_key = if registered {
                 "reason_code"
@@ -1065,45 +751,8 @@ fn identity_creation_control_proof_window_valid(
         && expires_at - issued_at <= Duration::minutes(5)
 }
 
-pub(super) fn event_actor_from_value(value: &Value) -> Option<arkret_wire::ActorId> {
-    serde_json::from_value(value.get("actor_id")?.clone()).ok()
-}
-
-pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
-    value
-        .as_object()
-        .and_then(|object| event_string_field(object, &[field]))
-}
-
-/// Resolve an envelope's Realm id the way the SDK envelope type does.
-///
-/// `ak.realm.create` carries no wire `realm_id` (`zh/models/realm-and-space.md`
-/// section 2.5.0) — the id is derived from the genesis Event itself, and an
-/// envelope that does carry one is rejected upstream with the common
-/// `object_id_not_event_derived` reason. A flat `realm_id` read is therefore *always*
-/// `None` on a genesis create, so every caller that needs a Realm id for a batch
-/// that may begin with one must go through this instead of
-/// `event_string_field_from_value(.., "realm_id")`.
-pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
-    if let Some(realm_id) = event_string_field_from_value(value, "realm_id") {
-        return Some(realm_id);
-    }
-    if event_string_field_from_value(value, "kind").as_deref()
-        != Some(arkret_wire::EventKind::RealmCreate.as_str())
-    {
-        return None;
-    }
-    let event_id =
-        arkret_wire::EventId::new(event_string_field_from_value(value, "event_id")?).ok()?;
-    Some(arkret_wire::derive_genesis_realm_id(&event_id).into_string())
-}
-
-pub(super) mod post_commit;
 mod value;
 
-use post_commit::*;
-pub(super) use value::validate_membership_compensation_live_state;
-use value::*;
 pub(in crate::routing) use value::{
     submit_applet_revoke_event_submission, submit_event_value, submit_initial_event_submission,
 };

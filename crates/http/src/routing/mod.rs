@@ -41,16 +41,23 @@ use events::strand::{
 };
 use events::sync::SyncCursorError;
 use identity::auth::{auth_or_render, authenticated_session};
+#[cfg(test)]
 use identity::device_messages::device_message_envelopes_after;
+#[cfg(test)]
+use soland_http::util::is_valid_hash_digest;
+#[cfg(test)]
+use soland_http::util::query_param_all;
 use soland_http::util::{
-    bearer_token, dpop_token, handle_for_did, is_valid_discoverability, is_valid_hash_digest,
-    is_valid_sha256_hex, normalize_localpart, query_param, query_param_all, render_error,
-    sha256_hex, validate_device_id, validate_did, validate_space_id,
+    bearer_token, dpop_token, handle_for_did, is_valid_sha256_hex, normalize_localpart,
+    query_param, render_error, sha256_hex, validate_device_id, validate_did,
 };
+#[cfg(test)]
+use soland_http::util::{is_valid_discoverability, validate_space_id};
+#[cfg(test)]
+use spaces::space::realm_allows_plaintext_service_for_data_class;
 use spaces::space::{
-    is_realm_deleted, realm_allows_plaintext_service_for_data_class, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_access, realm_id_accessible,
-    touch_realm,
+    is_realm_deleted, realm_discoverability, realm_event_visible_to_session, realm_has_member,
+    realm_history_access, realm_id_accessible,
 };
 use system::extract::AuthArgs;
 

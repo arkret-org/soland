@@ -1,32 +1,26 @@
 use super::*;
 
 mod accountability;
+#[cfg(test)]
 mod agent_participation;
 mod governance;
 mod message_rules;
 mod realm_circle;
 
 use accountability::*;
-pub(crate) use agent_participation::{
-    agent_participation_ceiling_record, validate_agent_participation_ceiling,
-    validate_agent_reply_participation,
-};
+#[cfg(test)]
+pub(crate) use agent_participation::validate_agent_participation_ceiling;
+#[cfg(test)]
+pub(crate) use agent_participation::validate_agent_reply_participation;
 use governance::*;
 #[cfg(test)]
-pub(crate) async fn validate_member_state_policy_for_test(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    governance::validate_member_state_policy(state, operation, false).await
-}
-#[cfg(test)]
 pub(crate) use message_rules::realm_ids_match;
-pub(crate) use message_rules::validate_content_encryption_floor;
 #[cfg(test)]
 pub(super) use message_rules::validate_principal_control_realm_binding;
 use message_rules::*;
 use realm_circle::*;
 
+#[cfg(test)]
 pub(crate) fn validate_trusted_sidecar_create_operation(
     operation: &Operation,
     controller: &str,
@@ -51,6 +45,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
     Ok(())
 }
 
+#[cfg(test)]
 pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, &'static str) {
     if message == "agent_pcr_recovery_not_ready" {
         (
@@ -145,49 +140,6 @@ pub async fn validate_operation_policy(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     validate_operation_policy_common(state, operations, false, false).await
-}
-
-pub async fn validate_operation_policy_with_plaintext_service_binding(
-    state: &AppState,
-    operations: &[Operation],
-    has_plaintext_service_binding: bool,
-) -> Result<(), &'static str> {
-    validate_operation_policy_common(state, operations, has_plaintext_service_binding, false).await
-}
-
-/// Validate one Operation of a submit batch against policy.
-///
-/// Per-Event admission commits each batch member before admitting the next,
-/// so re-running the per-operation gates on not-yet-committed siblings would
-/// judge them against a state their own in-batch predecessors have not
-/// landed. Only the batch-aware validators (history_access × content_scheme,
-/// read-receipt combinations) receive the full sibling slice; every other gate
-/// sees exactly the Operation being admitted.
-pub(crate) async fn validate_single_operation_policy_in_batch(
-    state: &AppState,
-    operation: &Operation,
-    batch: &[Operation],
-    has_plaintext_service_binding: bool,
-) -> Result<(), &'static str> {
-    validate_one_operation_policy(
-        state,
-        operation,
-        batch,
-        has_plaintext_service_binding,
-        false,
-    )
-    .await
-}
-
-/// The agent-membership-cascade half of [`validate_single_operation_policy_in_batch`].
-pub(crate) async fn validate_single_operation_policy_for_agent_membership_cascade(
-    state: &AppState,
-    operation: &Operation,
-    batch: &[Operation],
-    has_plaintext_service_binding: bool,
-) -> Result<(), &'static str> {
-    validate_one_operation_policy(state, operation, batch, has_plaintext_service_binding, true)
-        .await
 }
 
 async fn validate_operation_policy_common(

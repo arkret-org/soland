@@ -6,10 +6,8 @@ use arkret_models_crypto::DeviceStatus;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
-use serde_json::Value;
 use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 
-use super::device_signature_kid_points_to_device_key;
 use crate::state::AppState;
 
 pub(crate) fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {

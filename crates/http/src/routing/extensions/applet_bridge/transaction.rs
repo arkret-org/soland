@@ -1,7 +1,9 @@
 use arkret_identifiers::EventId;
+#[cfg(test)]
+use arkret_models_integration::AppletTransactionStatus;
 use arkret_models_integration::applet_models::AppletEventTransactionRequestBody;
 use arkret_models_integration::{
-    AppletEventRejection, AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionStatus,
+    AppletEventRejection, AppletNamespaceDomain, AppletTransactionOutcome,
     namespace_pattern_matches,
 };
 use arkret_wire::{CommittedEventRef, Event};

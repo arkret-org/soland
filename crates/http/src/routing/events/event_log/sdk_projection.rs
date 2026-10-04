@@ -1,6 +1,7 @@
 use sha2::{Digest, Sha256};
 
 use super::*;
+#[cfg(test)]
 pub(in crate::routing) fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
     max_len: usize,
@@ -111,33 +112,9 @@ pub(in crate::routing) fn event_canonical_bytes(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn is_valid_event_id(value: &str) -> bool {
     EventId::new(value.to_owned()).is_ok()
-}
-
-pub(in crate::routing) fn projection_operation_from_event(
-    parsed: &ValidatedEventEnvelope,
-    envelope: &Value,
-) -> Option<Operation> {
-    projection_operation_from_wire(&parsed.kind, parsed.event_id.as_str(), envelope)
-}
-
-/// Pre-derive the batch-visible Operation for one not-yet-validated submit
-/// envelope.
-///
-/// The sibling-policy scan (`operations::policy_extra`) is defined over the
-/// whole submit batch, but per-Event admission only materializes its own
-/// Operation after envelope validation. Batch surfaces run the same
-/// Event -> Operation contract on each raw envelope up front so the lane can
-/// hand the full sibling set to those validators. An envelope that cannot map
-/// yet is simply absent from the scan and fails its own admission on its
-/// turn, so this never widens what a single Event may pass.
-pub(in crate::routing) fn projection_operation_from_envelope(
-    envelope: &Value,
-) -> Option<Operation> {
-    let kind = envelope.get("kind").and_then(Value::as_str)?;
-    let event_id = envelope.get("event_id").and_then(Value::as_str)?;
-    projection_operation_from_wire(kind, event_id, envelope)
 }
 
 /// The single Event -> `Operation` mapper.
@@ -308,19 +285,7 @@ pub(crate) fn canonical_event_for_read(record: &AcceptedEvent) -> Result<Event, 
     Ok(event)
 }
 
-pub(crate) fn sdk_event_for_state(
-    state: &AppState,
-    record: &AcceptedEvent,
-) -> Result<Event, AppError> {
-    let event = canonical_event_for_read(record)?;
-    if retention_tombstone_for_event(state, &record.event_id).is_some() {
-        return Err(AppError::internal(
-            "Event-only surface cannot materialize a privacy-redacted Event",
-        ));
-    }
-    Ok(event)
-}
-
+#[cfg(test)]
 /// Committed-event read surfaces keep the stream slot without rewriting
 /// signed bytes. Derive Message redaction from accepted history even when no
 /// independent projection row exists, then emit the minimal withheld branch.
@@ -391,6 +356,7 @@ pub(crate) async fn canonical_event_read_row(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn withheld_event_read_row(commit: arkret_wire::RealmCommit) -> CommittedEventView {
     CommittedEventView::Withheld(CommittedEventWithheldView {
         commit,
@@ -398,45 +364,6 @@ pub(crate) fn withheld_event_read_row(commit: arkret_wire::RealmCommit) -> Commi
             status: EventDisclosureStatus::Withheld,
         },
     })
-}
-
-fn event_visibility_metadata(
-    state: &AppState,
-    record: &AcceptedEvent,
-) -> std::collections::BTreeMap<String, Value> {
-    let mut metadata = json!({
-        "event_id": record.event_id.clone(),
-        "actor_id": record.actor_id.clone(),
-        "realm_id": canonical_realm_id_for_record(record),
-        "kind": record.kind.clone(),
-        "schema_id": record.schema_id.clone(),
-        "canonical_digest": record.canonical_digest.clone(),
-        "received_at": record.received_at,
-    });
-    if let Some(scope) = effective_scope_for_envelope(&record.envelope) {
-        metadata["effective_scope"] = json!(scope);
-    }
-    if let Some(tombstone) = retention_tombstone_for_event(state, &record.event_id) {
-        metadata["retention_state"] = json!("tombstoned");
-        metadata["retention_reason"] = json!(tombstone.reason.as_str());
-        metadata["retention_expired_at"] = json!(arkret_canonical::format_timestamp_canonical(
-            tombstone.expired_at
-        ));
-        metadata["retention_tombstoned_at"] = json!(arkret_canonical::format_timestamp_canonical(
-            tombstone.tombstoned_at
-        ));
-        metadata["retention_seal_preserved"] = json!(tombstone.sealed);
-        metadata["physical_delete"] = json!(false);
-        metadata["retention_risk_ui"] = json!(retention_risk_ui_flag(&tombstone));
-        metadata["retention_risk_audit"] = json!(retention_risk_audit_flag(&tombstone));
-        metadata["retention_risk_reason"] = json!(retention_risk_reason(&tombstone));
-    }
-    metadata
-        .as_object()
-        .expect("event visibility metadata is an object")
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
 }
 
 /// SPEC-SOL-003 — pre-acceptance validation for the durable
@@ -598,27 +525,6 @@ fn circle_event_visible_to_session(
             &session_actor.to_string(),
             record.received_at,
         )
-}
-
-/// Settled `realm.read_receipt_policy` facet of `realm_id`, as its typed SDK
-/// policy payload. Returns `None` when no accepted `ak.realm.read_receipt_policy`
-/// Event has written the facet; callers use `ReadReceiptPolicy::default()`.
-///
-/// Used by ephemeral `ak.receipt.read` admission and receipt fanout handlers
-/// to enforce the Realm policy.
-pub async fn effective_read_receipt_policy_for_realm(
-    state: &AppState,
-    realm_id: &str,
-) -> Option<arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy> {
-    let proj = state.projections().snapshot();
-    proj.read_receipt_policy_value(realm_id)
-        .and_then(read_receipt_policy_from_value)
-}
-
-fn read_receipt_policy_from_value(
-    value: &Value,
-) -> Option<arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy> {
-    serde_json::from_value(value.clone()).ok()
 }
 
 #[cfg(test)]

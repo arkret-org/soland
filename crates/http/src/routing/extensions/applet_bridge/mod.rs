@@ -22,7 +22,5 @@ pub use delegated_device::{
     ManagedPrincipalAuthority, ensure_delegated_device_not_fenced, managed_principal_authority,
 };
 pub(in crate::routing::extensions) use endpoints::protocol_router;
+pub(crate) use types::registration_epoch_evidence_from_event;
 pub use types::{AppletRecord, AppletRevokeRecordOutcome, GhostActorRecord};
-pub(crate) use types::{
-    registration_epoch_evidence_from_event, registration_epoch_evidence_from_record,
-};

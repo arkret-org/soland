@@ -8,32 +8,34 @@
 //! rows and typed SDK response models. The retired post-accept Cell/Seal
 //! publisher is intentionally absent.
 
+#[cfg(test)]
+pub(super) use super::is_valid_discoverability;
 pub(super) use super::{
-    discussion_track_for_projection_event, is_valid_discoverability, message_id_from_event_id, now,
-    strand_id_for_projection_event, touch_realm,
+    discussion_track_for_projection_event, message_id_from_event_id, now,
+    strand_id_for_projection_event,
 };
 
+#[cfg(test)]
 mod account_data;
+#[cfg(test)]
 mod apply;
 mod event_json;
+#[cfg(test)]
 mod invite;
-mod message;
+
 mod operation_fields;
-mod realm;
-mod store;
+
 mod timeline;
 
-use account_data::*;
-pub use apply::*;
 pub use event_json::*;
+#[cfg(test)]
 use invite::*;
-pub use message::*;
 pub use operation_fields::*;
-pub use realm::*;
+#[cfg(test)]
 pub use soland_services::projection::tombstone::*;
-pub use store::*;
 pub use timeline::*;
 
+#[cfg(test)]
 pub fn retention_tombstone_for_event(
     state: &crate::state::AppState,
     event_id: &str,

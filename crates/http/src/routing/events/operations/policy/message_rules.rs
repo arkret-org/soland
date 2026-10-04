@@ -362,33 +362,6 @@ pub(crate) fn realm_ids_match(a: &str, b: &str) -> bool {
     a == b
 }
 
-pub async fn validate_content_encryption_floor(
-    state: &AppState,
-    operations: &[Operation],
-) -> Result<(), &'static str> {
-    for operation in operations {
-        if operation_carries_plaintext_private_content(operation) {
-            let scope = {
-                let projection = state.projections().snapshot();
-                match operation_target_scope_circle_id(&projection, operation) {
-                    Some(circle_id) => arkret_wire::ScopeRef::Circle {
-                        realm_id: operation.realm_id.clone(),
-                        circle_id: arkret_wire::CircleId::new(circle_id)
-                            .map_err(|_| "mls_activation_state_unavailable")?,
-                    },
-                    None => arkret_wire::ScopeRef::Realm {
-                        realm_id: operation.realm_id.clone(),
-                    },
-                }
-            };
-            if scope_has_accepted_mls_genesis(state, &scope).await? {
-                return Err(arkret_wire::ReasonCode::MLS_ACTIVATION_REQUIRED);
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod agent_actor_tests {
     use super::*;

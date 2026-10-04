@@ -6,12 +6,15 @@
 
 use std::collections::BTreeSet;
 
-use arkret_wire::{ActorId, DidCoreId};
+#[cfg(test)]
+use arkret_wire::ActorId;
+use arkret_wire::DidCoreId;
 use chrono::Utc;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value;
 use soland_http::error::AppError;
 use soland_services::governance::OrganizationRecord;
@@ -175,76 +178,6 @@ async fn upsert_organization(
     json_ok(organization_record_view(state, &record))
 }
 
-pub(crate) async fn record_realm_organizations_from_event(
-    state: &AppState,
-    realm_id: &str,
-    envelope: &Value,
-) -> soland_services::ServiceResult<()> {
-    let Some(actor) = envelope
-        .get("actor_id")
-        .and_then(|actor| serde_json::from_value::<ActorId>(actor.clone()).ok())
-    else {
-        tracing::warn!(%realm_id, "Realm organization projection lacks a valid actor_id");
-        return Ok(());
-    };
-    // This placeholder's created_by is a display/discovery principal, not
-    // policy authority. Decode the complete Event Actor before projecting it.
-    let created_by = actor.signing_principal_id();
-    let Some(object) = envelope
-        .pointer("/payload/object")
-        .and_then(Value::as_object)
-    else {
-        return Ok(());
-    };
-    let organization_ids = match declared_organization_ids(object) {
-        Ok(organization_ids) => organization_ids,
-        Err(error) => {
-            tracing::warn!(%realm_id, %error, "Realm organization projection contains invalid owning_organization_ids");
-            return Ok(());
-        }
-    };
-    for organization_id in organization_ids {
-        let org_id = organization_id.to_string();
-        ensure_organization_placeholder(state, &org_id, created_by).await?;
-        link_realm_to_organization(state, realm_id, &organization_id).await?;
-    }
-    Ok(())
-}
-
-fn declared_organization_ids(
-    object: &serde_json::Map<String, Value>,
-) -> Result<Vec<DidCoreId>, String> {
-    let Some(value) = object.get("owning_organization_ids") else {
-        return Ok(Vec::new());
-    };
-    let array = value
-        .as_array()
-        .ok_or_else(|| "owning_organization_ids must be an array".to_owned())?;
-    array
-        .iter()
-        .map(|value| {
-            let raw = value
-                .as_str()
-                .ok_or_else(|| "owning_organization_ids entries must be strings".to_owned())?;
-            DidCoreId::new(raw).map_err(|_| {
-                "owning_organization_ids entries must be DID core identifiers".to_owned()
-            })
-        })
-        .collect()
-}
-
-pub(crate) async fn link_realm_to_organization(
-    state: &AppState,
-    realm_id: &str,
-    organization_id: &DidCoreId,
-) -> soland_services::ServiceResult<()> {
-    state
-        .governance()
-        .link_realm_organization(realm_id, organization_id)
-        .await?;
-    Ok(())
-}
-
 /// SOL-ORG-05 — declared `owning_organization_ids` hints for a Realm. Display /
 /// discovery surface ONLY; never use this to drive policy inheritance.
 pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<DidCoreId> {
@@ -335,50 +268,6 @@ pub(crate) async fn organization_policy_blocks_federation(
         .is_err()
 }
 
-pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
-    state
-        .governance()
-        .cached_organizations()
-        .iter()
-        .map(|record| organization_record_json(state, record))
-        .collect()
-}
-
-async fn ensure_organization_placeholder(
-    state: &AppState,
-    organization_id: &str,
-    actor: &DidCoreId,
-) -> soland_services::ServiceResult<()> {
-    if state
-        .governance()
-        .organization(organization_id)
-        .await?
-        .is_some()
-    {
-        return Ok(());
-    }
-    let now = Utc::now();
-    let record = OrganizationRecord {
-        organization_id: organization_id.to_owned(),
-        handle: None,
-        display_name: display_name_from_organization_id(organization_id),
-        // A placeholder record for an organization this server only knows locally:
-        // there is no Event to point at, and `directory-operations.schema.json`
-        // takes an omitted `source_refs` over a minted id for an Event nobody
-        // authored. `policy_revision: "local"` is what marks the entry.
-        source_refs: Vec::new(),
-        policy_revision: "local".to_owned(),
-        verified: false,
-        members: BTreeSet::new(),
-        member_count: 0,
-        created_by: actor.clone(),
-        created_at: now,
-        updated_at: now,
-    };
-    state.governance().store_organization(&record).await?;
-    Ok(())
-}
-
 fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> OrganizationView {
     let organization_id = DidCoreId::new(record.organization_id.clone())
         .expect("stored organization id remains a DID core id");
@@ -402,10 +291,6 @@ fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> Or
         created_at: arkret_canonical::format_timestamp_canonical(record.created_at),
         updated_at: arkret_canonical::format_timestamp_canonical(record.updated_at),
     }
-}
-
-fn organization_record_json(state: &AppState, record: &OrganizationRecord) -> Value {
-    serde_json::to_value(organization_record_view(state, record)).unwrap_or(Value::Null)
 }
 
 fn normalized_organization_id(raw: &str) -> Result<String, AppError> {

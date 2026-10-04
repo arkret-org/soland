@@ -43,9 +43,7 @@ pub use app_state::{
 pub use applet_completion::{
     deliver_pending_applet_completions, spawn_pending_applet_completion_sweeper,
 };
-pub(crate) use authority_contact::{
-    ContactProducer, commit_contact_event_unit, verify_contact_producer,
-};
+pub(crate) use authority_contact::{commit_contact_event_unit, verify_contact_producer};
 #[cfg(feature = "test-support")]
 pub(crate) use authority_forward::{
     admit_forwarded_event, forward_self_event, fresh_producer_device_evidence,
@@ -59,10 +57,11 @@ pub(crate) use authority_self_event_unit::{
     refresh_direct_conversation_peer_claim, submit_applet_event, submit_mimi_binding_event,
     submit_self_moderation_report,
 };
-pub(crate) use member_identity::{
-    HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
-    MemberIdentitySubjectKey,
-};
+#[cfg(test)]
+pub(crate) use member_identity::MemberIdentityReplacementEdge;
+#[cfg(test)]
+pub(crate) use member_identity::MemberIdentitySubjectKey;
+pub(crate) use member_identity::{HandleClaimEvidenceRecord, MemberIdentityEventRecord};
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };

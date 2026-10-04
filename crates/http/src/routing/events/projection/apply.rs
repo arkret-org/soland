@@ -25,7 +25,6 @@ pub(crate) fn accepted_member_state_reducer_operation(operation: &Operation) -> 
     contextual
 }
 
-#[cfg(test)]
 mod tests {
     use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;

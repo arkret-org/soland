@@ -186,12 +186,6 @@ pub(crate) fn registration_epoch_evidence_from_event(
         .map_err(|error| format!("registration Event epoch evidence is invalid: {error}"))
 }
 
-pub(crate) fn registration_epoch_evidence_from_record(
-    record: &AppletRecord,
-) -> Result<arkret_models_integration::AppletRegistrationEpochEvidence, String> {
-    registration_epoch_evidence_from_event(&record.registration_event)
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GhostActorRecord {

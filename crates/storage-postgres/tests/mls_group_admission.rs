@@ -19,7 +19,7 @@ use diesel::sql_types::{BigInt, Binary, Jsonb, Text, Timestamptz};
 use diesel_async::RunQueryDsl;
 use soland_storage::{
     AuthorityCommitStore, ConflictCode, DeviceMessageStore, DeviceRevocationGateSelector,
-    DeviceRevocationStore, EventCommitRequest, EventCommitUnitOfWork, IdentityStoreRegistry,
+    EventCommitRequest, EventCommitUnitOfWork, IdentityStoreRegistry,
     MlsConsumedProposalInstallation, MlsGroupCurrentStore, MlsInstalledBase, MlsKeyPackageStore,
     MlsProposalLeafProvenance, MlsStateInstallation, MlsWelcomeClaimLedgerKey,
     RecipientQueueSelector, VerifiedMlsWelcome,

@@ -149,7 +149,6 @@ async fn authz_check(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
 
     #[test]
     fn effective_grants_query_preserves_explicit_actor_id_variant_and_credential_default() {

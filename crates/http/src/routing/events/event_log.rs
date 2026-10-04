@@ -12,48 +12,51 @@
 //! The validator block (`validate_event_envelope` + helpers) lives in the
 //! `validation` submodule.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use arkret_canonical as canonical;
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{DeviceId, DidCoreId, EventId, Hash, Hlc, OperationId, RealmId};
-use arkret_wire::{
-    CommittedEventFullView, CommittedEventView, CommittedEventWithheldView, Event, EventDisclosure,
-    EventDisclosureStatus, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_RESOLVE, MAX_EVENT_SUBMIT_BATCH,
-    MAX_SEMANTIC_REFS,
-};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(test)]
+use arkret_identifiers::DeviceId;
+#[cfg(test)]
+use arkret_identifiers::DidCoreId;
+use arkret_identifiers::{EventId, OperationId, RealmId};
+#[cfg(test)]
+use arkret_wire::CommittedEventWithheldView;
+#[cfg(test)]
+use arkret_wire::EventDisclosure;
+#[cfg(test)]
+use arkret_wire::EventDisclosureStatus;
+use arkret_wire::{CommittedEventFullView, CommittedEventView, Event};
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode, error_http_status};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
+#[cfg(test)]
+use soland_http::error::error_http_status;
+use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
-use soland_services::{operation_semantics as kinds, protocol_artifacts as artifacts};
-pub(in crate::routing) use validation::validate_join_gate_proof_signatures;
 
-use super::projection::{
-    retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag,
-    retention_tombstone_for_event,
-};
-use super::{
-    append_audit_log, auth_or_render, now, realm_allows_plaintext_service_for_data_class,
-    realm_event_visible_to_session, realm_has_member, render_error, sha256_hex,
-    validate_agent_participation_ceiling, validate_agent_reply_participation,
-    validate_content_encryption_floor, validate_operation_policy,
-    validate_operation_policy_with_plaintext_service_binding, validate_operation_semantics,
-    validate_space_id,
-};
-use crate::routing::organizations;
+#[cfg(test)]
+use super::now;
+#[cfg(test)]
+use super::projection::retention_tombstone_for_event;
+#[cfg(test)]
+use super::projection::{retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag};
+#[cfg(test)]
+use super::realm_allows_plaintext_service_for_data_class;
+use super::realm_event_visible_to_session;
+#[cfg(test)]
+use super::validate_space_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::describe;
 
+#[cfg(test)]
 fn current_query_error(error: arkret_wire::WireError) -> AppError {
     let code = match error.error_code() {
         Some(ErrorCode::PayloadTooLarge) => ErrorCode::PayloadTooLarge,
@@ -62,6 +65,7 @@ fn current_query_error(error: arkret_wire::WireError) -> AppError {
     AppError::from_rejection(code, error.to_string())
 }
 
+#[cfg(test)]
 fn current_result_error(error: arkret_wire::WireError, fallback: ErrorCode) -> AppError {
     let code = match error.error_code() {
         Some(ErrorCode::LimitExceeded) => ErrorCode::LimitExceeded,
@@ -111,66 +115,53 @@ mod current_budget_error_tests {
     }
 }
 
-/// Match a human session's exact AccountId against its durable PCR lineage.
-///
-/// Registration commits this record before the rebuildable projection catches
-/// up, so every self PCR authorization surface must use the same durable
-/// source. Looking up by the complete AccountId also keeps equal principals at
-/// different Stations isolated.
-async fn durable_account_owns_pcr(
-    state: &AppState,
-    actor: &arkret_wire::ActorId,
-    realm_id: &RealmId,
-) -> Result<bool, AppError> {
-    let Some(account_id) = actor.as_account_id() else {
-        return Ok(false);
-    };
-    state
-        .persistence()
-        .principal_resolution_by_account_id(account_id)
-        .await
-        .map(|resolution| resolution.is_some_and(|record| record.pcr_realm_id == *realm_id))
-        .map_err(|error| AppError::internal(format!("principal resolution lookup failed: {error}")))
-}
-
 // scalability-constraints.md §2: prev_refs ≤ 128 (with MUST-dedup), refs[] total
 // ≤ 128, and the `authorized_by` role ≤ 64 within that total. These are the v1
 // interop maxima a conformant receiver MUST accept; a stricter local cap would
 // reject another node's valid wire object (spec §1).
+#[cfg(test)]
 mod admission;
-use admission::policy_bundle_value_from_state_payload;
-pub use admission::{frozen_realm_check, realm_policy_bundle_check, terminal_realm_check};
+
+#[cfg(test)]
+pub use admission::frozen_realm_check;
+#[cfg(test)]
+pub use admission::realm_policy_bundle_check;
+#[cfg(test)]
+pub use admission::terminal_realm_check;
 
 pub(crate) mod endpoints;
-pub(crate) mod governance_proof;
+
 pub(in crate::routing::events) use endpoints::router;
 
+#[cfg(test)]
 mod inception;
-use inception::{canonical_value_digest, require_object_field, resolve_event_root_anchor_method};
+#[cfg(test)]
+use inception::canonical_value_digest;
+#[cfg(test)]
+use inception::resolve_event_root_anchor_method;
 
 mod realm_index;
-pub(in crate::routing) use realm_index::realm_is_indexed;
-use realm_index::{
-    bootstrap_realm_member_index, event_string_field,
-    invite_claim_actor_claims_pending_third_party_invite, invite_create_actor_is_inviter,
-    invitee_cancels_pending_invite, member_join_accepts_pending_invite, member_self_knock,
-    realm_create_actor_is_creator, realm_exists_in_index,
-};
+
+#[cfg(test)]
+use realm_index::event_string_field;
+use realm_index::invite_create_actor_is_inviter;
 
 mod submit;
+#[cfg(test)]
+use arkret_wire::MAX_SEMANTIC_REFS;
+#[cfg(test)]
+use submit::RealmBootstrapBatchContext;
+#[cfg(test)]
+pub(in crate::routing) use submit::ValidatedEventEnvelope;
+use submit::event_validation_error;
 pub(in crate::routing) use submit::{
-    EventCommitIdempotency, EventValidationError, InternalEventAdmission, ValidatedEventEnvelope,
-    applet_committed_ref, service_event_authoring_lock, submit_agent_membership_cascade,
-    submit_applet_authoring_unit, submit_applet_revoke_event_submission, submit_event_value,
-    submit_initial_event_submission, submit_one_error_to_app_error, submit_peer_pcr_genesis,
-    submit_sidecar_ensure_batch,
-};
-use submit::{
-    IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError, SubmittedEventOutcome,
-    event_validation_error, is_direct_conversation_admission_reason,
+    EventValidationError, applet_committed_ref, submit_applet_authoring_unit,
+    submit_applet_revoke_event_submission, submit_event_value, submit_initial_event_submission,
+    submit_one_error_to_app_error, submit_peer_pcr_genesis, submit_sidecar_ensure_batch,
 };
 
 mod validation;
+#[cfg(test)]
 use validation::*;
 pub(in crate::routing) use validation::{PrivateInviteEnvelope, validate_private_invite_envelope};
 mod sdk_projection;

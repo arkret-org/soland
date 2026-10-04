@@ -1396,7 +1396,6 @@ mod consent_proof_tests {
         Audience, EventAdmissionSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
     };
     use soland_http::error::ErrorCode;
-    use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
     use soland_storage_postgres::Db;
 
     use super::*;

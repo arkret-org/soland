@@ -27,20 +27,14 @@ use arkret_wire::{
 };
 
 use super::{
-    Array, AsyncPgConnection, Bool, PersistenceError, PersistenceResult, QueryableByName,
-    RunQueryDsl, Text, sql_query,
+    Array, AsyncPgConnection, PersistenceError, PersistenceResult, QueryableByName, RunQueryDsl,
+    Text, sql_query,
 };
 
 #[derive(QueryableByName)]
 struct WithheldRow {
     #[diesel(sql_type = Text)]
     commit_id: String,
-}
-
-#[derive(QueryableByName)]
-struct AllowedRow {
-    #[diesel(sql_type = Bool)]
-    allowed: bool,
 }
 
 /// Complete canonical private sources cannot be redacted in place. Keep the

@@ -2,6 +2,7 @@ use soland_storage_postgres::Db;
 
 use super::*;
 use crate::config::{AppConfig, ObjectStorageConfig};
+use crate::routing::events::operations::validate_operation_policy;
 
 pub(super) fn make_state(development_mode: bool) -> AppState {
     let config = AppConfig {
@@ -628,7 +629,7 @@ fn top_level_effective_scope_is_reducer_managed() {
 
 #[test]
 fn event_canonical_bytes_use_sdk_canonical_json() {
-    let mut event = crate::test_event::raw_event(
+    let event = crate::test_event::raw_event(
         "ak.test.canonical",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(

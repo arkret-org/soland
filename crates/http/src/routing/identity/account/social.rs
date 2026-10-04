@@ -847,27 +847,6 @@ pub(super) fn accepted_contact_has_fact_refs(contact: &ContactRecord) -> bool {
         && contact.tombstone_event_ref.is_none()
 }
 
-fn contact_fact_refs(contact: &ContactRecord) -> Vec<String> {
-    if let Some(bundle) = contact.contact_round_evidence.as_ref()
-        && let arkret_models_collaboration::contact_operations::ContactRound::Glare {
-            requests, ..
-        } = &bundle.contact_round
-    {
-        return requests
-            .iter()
-            .map(|request| request.request_event_ref.to_string())
-            .collect();
-    }
-    [
-        contact.request_event_ref.as_ref(),
-        contact.response_event_ref.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    .map(ToString::to_string)
-    .collect()
-}
-
 fn valid_contact_event_ref(event_ref: &str) -> bool {
     EventId::new(event_ref.to_owned()).is_ok()
 }

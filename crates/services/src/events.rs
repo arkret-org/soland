@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use arkret_identifiers::{DidCoreId, RealmId};
 use arkret_models_collaboration::events_payloads::ContentBlock;
-use arkret_models_crypto::MlsGovernanceBindingPayload;
 use arkret_wire::ScopeRef;
 use chrono::{DateTime, Utc};
 use serde_json::Value;

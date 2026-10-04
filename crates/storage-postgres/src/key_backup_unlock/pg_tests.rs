@@ -18,7 +18,6 @@ struct Fixture {
     store: crate::key_backup::PgKeyBackupStore,
     policy: Value,
     backup: Value,
-    basis: Value,
     holder: String,
     policy_expiry: chrono::DateTime<Utc>,
 }
@@ -170,13 +169,6 @@ impl Fixture {
         let basis_event_id =
             wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [82u8; 32]);
         let basis_commit_id = wire::RealmCommitId::from_digest([83u8; 32]);
-        let committed_ref = wire::CommittedEventRef {
-            event_id: basis_event_id.clone(),
-            commit_id: basis_commit_id.clone(),
-            stream_ref: stream_ref.clone(),
-            stream_position: 0,
-        };
-        let basis = json!({ "committed_ref": committed_ref });
         let basis_commit = wire::RealmCommit {
             commit_id: basis_commit_id.clone(),
             realm_id: realm.clone(),
@@ -363,7 +355,6 @@ impl Fixture {
             store: crate::key_backup::PgKeyBackupStore { pool },
             policy,
             backup,
-            basis,
             holder,
             policy_expiry,
         }

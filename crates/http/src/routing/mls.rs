@@ -4103,27 +4103,6 @@ async fn verify_device_keypackage_signature(
     .map_err(|_| AppError::param_invalid("device_signature_invalid"))
 }
 
-async fn current_device_authorization_matches(
-    state: &AppState,
-    principal: &arkret_wire::DidCoreId,
-    device_id: &str,
-    authorize_event_id: &str,
-) -> bool {
-    state
-        .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: principal.to_string(),
-            device_id: device_id.to_owned(),
-        })
-        .await
-        .ok()
-        .flatten()
-        .and_then(|device| device_authorize_trust_binding(&device))
-        .and_then(|binding| binding.device_authorize_event_id)
-        .as_deref()
-        == Some(authorize_event_id)
-}
-
 async fn verify_session_keypackage_write_signature(
     state: &AppState,
     session: &SessionRecord,
@@ -4927,7 +4906,6 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
 #[cfg(test)]
 mod trust_binding_tests {
     use serde_json::json;
-    use soland_test_support::AppStateTestExt as _;
 
     use super::*;
 

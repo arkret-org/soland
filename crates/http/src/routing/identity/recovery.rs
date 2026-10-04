@@ -70,22 +70,6 @@ use validation::*;
 mod wire;
 use wire::*;
 
-/// Return the proof kind and canonical transcript digest recorded by a
-/// verified recovery session. Key-backup release uses this exact helper so it
-/// cannot drift from recovery-session proof verification.
-pub(super) fn recovery_session_proof_kind_and_digest(
-    record: &soland_services::identity::RecoverySessionState,
-) -> Option<(String, String)> {
-    let summary = recovery_proof_summary(record)?;
-    let kind = match summary.kind {
-        RecoveryProofKind::DidRoot => "did_root",
-        RecoveryProofKind::RecoveryUnlock => "recovery_unlock",
-        RecoveryProofKind::DeviceQuorum => "device_quorum",
-        RecoveryProofKind::TrustedRecoveryService => "trusted_recovery_service",
-    };
-    Some((kind.to_owned(), summary.proof_digest.to_string()))
-}
-
 /// Resolve the recovery-policy key that authenticated this recovery session.
 /// Recovery-key possession is rooted in the signed policy, not in a DID
 /// document that may contain no device methods after every device is lost.

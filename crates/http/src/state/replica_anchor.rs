@@ -48,13 +48,6 @@ const PENDING_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_se
 static IN_FLIGHT: LazyLock<Mutex<BTreeSet<(String, String)>>> =
     LazyLock::new(|| Mutex::new(BTreeSet::new()));
 
-/// Converge this Station's held replica of `realm_id` in the background:
-/// anchor it when it is pending, then fill it up to the governing Station's
-/// head. At most one convergence per Realm runs at a time.
-pub(crate) fn spawn_converge(state: &AppState, realm_id: RealmId) {
-    spawn_converge_stream(state, CommitStreamRef::Realm { realm_id });
-}
-
 pub(crate) fn spawn_converge_stream(state: &AppState, stream: CommitStreamRef) {
     let key = (
         state.service_id().to_owned(),

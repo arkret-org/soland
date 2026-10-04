@@ -124,7 +124,6 @@ pub(super) async fn project_account_data_set(
     }
 }
 
-#[cfg(test)]
 mod tests {
     use serde_json::json;
 

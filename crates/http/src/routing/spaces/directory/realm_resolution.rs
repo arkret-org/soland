@@ -80,8 +80,3 @@ pub(super) async fn resolve_realm(
         .ok_or_else(|| AppError::not_found("not found"))?;
     json_ok(resolved)
 }
-
-pub(crate) fn realm_join_rule(state: &AppState, realm_id: &str) -> String {
-    let projection = state.projections().snapshot();
-    projection.realm_default_join_rule(realm_id).to_owned()
-}

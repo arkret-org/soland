@@ -284,7 +284,6 @@ fn manage_others_audit_error(message: impl Into<String>) -> EventValidationError
     )
 }
 
-#[cfg(test)]
 mod tests {
     use super::*;
 

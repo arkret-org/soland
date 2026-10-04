@@ -51,6 +51,7 @@ pub use routing::{
     router, router_with_rate_limiter_and_request_size_config, router_with_rate_limiter_config,
 };
 
+#[cfg(test)]
 pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String> {
     arkret_canonical::canonical_sha256(value).ok()
 }

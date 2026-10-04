@@ -1,48 +1,12 @@
 use super::super::*;
-use super::audit::{validate_audit_accessed_payload, validate_strand_watch_manage_others_levels};
-use super::enrollment::validate_device_authorization_binding;
-use super::mls_governance::projected_media_plaintext_service_present;
-use super::payload_shape::{
-    validate_event_audience_fields, validate_pre_schema_wire_shape,
-    validate_space_container_lifecycle_payload,
-};
+#[cfg(test)]
+use super::payload_shape::validate_event_audience_fields;
+#[cfg(test)]
+use super::payload_shape::validate_pre_schema_wire_shape;
+#[cfg(test)]
+use super::payload_shape::validate_space_container_lifecycle_payload;
 
-pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {
-    canonical::canonical_sha256(value).ok()
-}
-
-pub(super) async fn event_digest_suite(
-    _state: &AppState,
-    _kind: &str,
-    _realm_id: &str,
-    _object: &serde_json::Map<String, Value>,
-    _realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
-) -> Result<String, EventValidationError> {
-    // Current v1 fixes Event and RealmCommit identities to JCS + SHA-256.
-    // Realm state cannot select another identity suite.
-    Ok("sha256".to_owned())
-}
-
-pub(super) fn event_digest_for_suite(
-    bytes: &[u8],
-    suite: &str,
-) -> Result<String, EventValidationError> {
-    if suite != "sha256" {
-        return Err(unsupported_digest_algorithm_error(suite));
-    }
-    arkret_canonical::canonical_digest_with_suite(bytes, suite)
-        .map_err(|_| unsupported_digest_algorithm_error(suite))
-}
-
-fn unsupported_digest_algorithm_error(suite: &str) -> EventValidationError {
-    let code = arkret_wire::ErrorCode::UnsupportedDigestAlgorithm;
-    event_validation_error(
-        error_http_status(code),
-        code.as_str(),
-        format!("unsupported digest algorithm: {suite}"),
-    )
-}
-
+#[cfg(test)]
 fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, EventValidationError> {
     // Spec zh/models/realm-and-space.md section 2.5.0: `ak.realm.create` is the
     // one kind that MUST NOT carry `realm_id`. The Realm's id is derived from
@@ -85,6 +49,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
     ))
 }
 
+#[cfg(test)]
 /// Derive this genesis Event's Realm id from its own signed content.
 ///
 /// Two branches, both pure functions of the signed Event, so the id stays
@@ -152,20 +117,22 @@ mod event_derived_id_tests {
     }
 }
 
+#[cfg(test)]
 mod applet;
+#[cfg(test)]
 mod capability_grant;
-mod control_move;
-mod envelope_core;
-mod features_schema;
-mod join_gate_proofs;
-mod proofs;
-mod realm_authority_root;
 
-use applet::*;
-use control_move::*;
+mod envelope_core;
+#[cfg(test)]
+mod features_schema;
+
+#[cfg(test)]
+mod proofs;
+
 pub(in crate::routing) use envelope_core::{
     PrivateInviteEnvelope, validate_private_invite_envelope,
 };
+#[cfg(test)]
 pub(crate) use features_schema::validate_event_schema_and_payload;
-pub(crate) use join_gate_proofs::validate_join_gate_proof_signatures;
+#[cfg(test)]
 pub(crate) use proofs::validate_event_proofs;

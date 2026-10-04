@@ -52,17 +52,6 @@ pub(crate) fn assertion_tag(event_id: &arkret_wire::EventId) -> String {
     format!("{event_id}:0")
 }
 
-/// The Event id half of one assertion tag.
-pub(crate) fn tag_event_id(tag: &str) -> PersistenceResult<arkret_wire::EventId> {
-    let (event_id, index) = tag
-        .rsplit_once(':')
-        .ok_or_else(|| corrupt("assertion tag has no write index"))?;
-    if index != "0" {
-        return Err(corrupt("assertion tag names an unregistered write index"));
-    }
-    arkret_wire::EventId::new(event_id.to_owned()).map_err(corrupt)
-}
-
 /// The stored assertions of `target_ref`, locked for this transaction.
 async fn locked_state(
     conn: &mut AsyncPgConnection,

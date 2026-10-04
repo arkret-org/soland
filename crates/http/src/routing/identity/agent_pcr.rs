@@ -2,7 +2,7 @@ use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::agent_scope::agent_requested_scope_digest;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
-use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Event};
+use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_http::error::AppError;
@@ -286,18 +286,6 @@ pub(crate) async fn agent_record_for_actor(
     Ok(Some(record))
 }
 
-pub(crate) async fn controller_manages_agent_pcr(
-    state: &AppState,
-    controller_principal_id: &str,
-    pcr_id: &str,
-) -> Result<bool, AppError> {
-    Ok(
-        agent_record_for_controller_pcr(state, controller_principal_id, pcr_id)
-            .await?
-            .is_some(),
-    )
-}
-
 pub(crate) async fn agent_record_for_controller_pcr(
     state: &AppState,
     controller_principal_id: &str,
@@ -467,87 +455,7 @@ async fn validate_active_agent_accountability(
     Ok(())
 }
 
-pub(crate) async fn validate_delegated_agent_envelope(
-    state: &AppState,
-    envelope: &serde_json::Map<String, Value>,
-    controller_principal_id: &str,
-) -> Result<(), AppError> {
-    if agent_envelope_uses_root_anchor(envelope) {
-        return Err(failed_precondition(
-            "Agent Events cannot use self-principal root anchors",
-            "agent_root_anchor_forbidden",
-        ));
-    }
-    // Realm-create wire envelopes intentionally omit `realm_id`; the receiver
-    // derives a PCR id from the typed Event actor. Decode once here so the
-    // delegation gate compares that canonical derived id instead of probing a
-    // field which must not exist on the wire.
-    let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(envelope.clone()))
-        .map_err(|error| schema_error(format!("delegated Agent Event is invalid: {error}")))?;
-    let agent_id = event.actor_id.signing_principal_id().as_str();
-    let record = agent_record(state, agent_id).await?;
-    let controller_core_id = managed_controller_core_id(controller_principal_id)?;
-    if managed_controller_core_id(&record.controller_principal_id)? != controller_core_id
-        || event
-            .executed_by
-            .as_ref()
-            .map(|actor| actor.signing_principal_id().as_str())
-            != Some(controller_core_id.as_str())
-        || event.realm_id.as_str() != record.principal_control_realm_id
-        || event.authorization_ref.as_deref() != Some(record.controller_authorization_ref.as_str())
-    {
-        return Err(failed_precondition(
-            "delegated Agent Event does not match the controller/PCR binding",
-            "agent_delegation_mismatch",
-        ));
-    }
-    let kind = event.kind.as_str();
-    let kind_is_delegated_control = matches!(
-        kind,
-        arkret_wire::event_kind_str::REALM_CREATE
-            | arkret_wire::event_kind_str::MLS_GENESIS
-            | arkret_wire::event_kind_str::MLS_COMMIT
-            | arkret_wire::event_kind_str::PROFILE_CREATE
-            | arkret_wire::event_kind_str::PROFILE_UPDATE
-            | arkret_wire::event_kind_str::AGENT_KEY_AUTHORIZE
-            | arkret_wire::event_kind_str::AGENT_KEY_REVOKE
-            | arkret_wire::event_kind_str::SELF_AGENT_PAUSE
-            | arkret_wire::event_kind_str::SELF_AGENT_RESUME
-            | arkret_wire::event_kind_str::SELF_AGENT_DEACTIVATE
-    );
-    if !kind_is_delegated_control {
-        return Err(failed_precondition(
-            "controller delegation does not cover this Agent Event kind",
-            "agent_delegation_scope",
-        ));
-    }
-    if kind == arkret_wire::EventKind::RealmCreate.as_str() {
-        let object = event
-            .payload
-            .get("object")
-            .ok_or_else(|| schema_error("Agent PCR genesis object is missing"))?;
-        validate_agent_pcr_genesis_object(
-            object,
-            agent_id,
-            controller_principal_id,
-            record.principal_control_realm_id.as_str(),
-            state.config().trust_domain.as_str(),
-            &agent_initial_resolution_for_record(&record)?,
-        )?;
-        let realm_id =
-            RealmId::new(record.principal_control_realm_id.clone()).map_err(|error| {
-                schema_error(format!(
-                    "Agent PCR binding contains an invalid Realm id: {error}"
-                ))
-            })?;
-        validate_agent_pcr_genesis_effect(envelope, &realm_id)?;
-        requested_scope_digest_for_record(&record)?;
-        validate_active_agent_accountability(state, &record, Utc::now()).await?;
-        return Ok(());
-    }
-    validate_agent_controller_binding(state, &record, Utc::now()).await
-}
-
+#[cfg(test)]
 fn agent_envelope_uses_root_anchor(envelope: &serde_json::Map<String, Value>) -> bool {
     envelope
         .get("semantic_refs")
@@ -563,6 +471,7 @@ fn agent_envelope_uses_root_anchor(envelope: &serde_json::Map<String, Value>) ->
         })
 }
 
+#[cfg(test)]
 fn validate_agent_pcr_genesis_effect(
     envelope: &serde_json::Map<String, Value>,
     realm_id: &RealmId,

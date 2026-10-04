@@ -5,8 +5,7 @@ use super::{
     DirectConversationFoundingSlotRecord, DirectConversationMemberCurrent, EventStore, ExistsRow,
     FederationOutboxRecord, IdentityAnchorAccountSlot, Jsonb, MessageRecord, MessageStore,
     Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RealmEventStats, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn,
-    sql_query, sql_types,
+    RealmEventStats, RunQueryDsl, Text, Timestamptz, Value, async_trait, ids, pg_conn, sql_query,
 };
 use crate::federation::{FederationOutboxRow, qualified_outbox_columns};
 use crate::{AsyncConnection, PgTransactionError};
@@ -188,12 +187,6 @@ struct RealmEventStatsRow {
     event_count: i64,
     #[diesel(sql_type = BigInt)]
     canonical_bytes: i64,
-}
-
-#[derive(QueryableByName)]
-struct PkRow {
-    #[diesel(sql_type = BigInt)]
-    pk: i64,
 }
 
 #[derive(QueryableByName)]

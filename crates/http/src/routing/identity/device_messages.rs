@@ -1034,6 +1034,7 @@ async fn ack_device_messages(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn device_message_envelopes_after(
     state: &AppState,
     messages: &[DeviceMessageState],
@@ -1071,6 +1072,7 @@ async fn recipient_authorization(
     })
 }
 
+#[cfg(test)]
 fn device_message_envelope_from_record(
     state: &AppState,
     message: &DeviceMessageState,

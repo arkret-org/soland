@@ -395,22 +395,4 @@ mod received_at_stamp_tests {
 
 mod internal_event_admission_tests {
     use super::*;
-
-    fn internal_session(actor: &str, device_id: &str) -> SessionRecord {
-        let now = Utc::now();
-        SessionRecord {
-            account_pk: None,
-            token_hash: "internal-session".to_owned(),
-            actor: actor.to_owned(),
-            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
-                device_id: device_id.to_owned(),
-            },
-            audience: "soland".to_owned(),
-            session_public_key: None,
-            session_grant: None,
-            expires_at: now + Duration::minutes(5),
-            created_at: now,
-            revoked_at: None,
-        }
-    }
 }

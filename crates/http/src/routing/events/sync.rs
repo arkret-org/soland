@@ -27,7 +27,7 @@
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_identifiers::{Cursor, RealmId};
+pub(crate) use arkret_identifiers::RealmId;
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use bytes::Bytes;
@@ -36,18 +36,18 @@ pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
+#[cfg(test)]
 pub(crate) use soland_domain::reducer::ProjectionState;
+#[cfg(test)]
 pub(crate) use soland_services::events::ProjectedEvent;
 pub(crate) use soland_services::identity::SessionIdentityState;
 pub(crate) use soland_services::sync::CursorState;
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 #[cfg(test)]
-pub(crate) use super::strand::strand_id_from_realm_id;
+use super::realm_event_visible_to_session;
 use super::{
-    authenticated_session, device_message_envelopes_after, is_realm_deleted, now,
-    projected_event_page_for_realms_through, projected_event_replay_upper_bound,
-    projection_event_json, query_param, realm_event_visible_to_session, realm_id_accessible,
+    authenticated_session, is_realm_deleted, now, query_param, realm_id_accessible,
     realm_state_snapshot_manifest_for_realm, render_error, sha256_hex,
 };
 pub(crate) use crate::ids;
@@ -69,7 +69,7 @@ const ACCOUNT_DATA_CHANGE_RETENTION_DAYS: i64 = 90;
 const ACCOUNT_DATA_CHANGE_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
 
 mod snapshot;
-mod timeline_window;
+
 pub(crate) use snapshot::*;
 mod current_details;
 mod cursor;
@@ -133,15 +133,6 @@ pub(crate) fn scope_selector_to_realm_id(
     Err(soland_http::error::AppError::param_invalid(
         "invalid realm_id",
     ))
-}
-
-pub(crate) fn normalize_scope_selectors(
-    values: Vec<String>,
-) -> Result<Vec<String>, soland_http::error::AppError> {
-    values
-        .into_iter()
-        .map(|value| scope_selector_to_realm_id(&value))
-        .collect()
 }
 
 #[cfg(test)]

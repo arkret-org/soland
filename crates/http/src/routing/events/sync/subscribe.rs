@@ -26,6 +26,7 @@ const ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 /// the read-amplification of busy Realms bounded at the cost of up to this
 /// much extra delivery latency per long-poll turn.
 const SUBSCRIBE_REBUILD_DEBOUNCE_MS: u64 = 150;
+#[cfg(test)]
 /// Pure predicate: do the `Authorization` header value and/or query string
 /// carry authentication material? Split out from the `Request` so the
 /// degrade-vs-propagate decision is unit-testable without a live request.
@@ -37,41 +38,6 @@ pub(crate) fn auth_material_present(authorization: Option<&str>, query: Option<&
         .is_some_and(|value| value.starts_with("Bearer ") || value.starts_with("bearer "));
     let query_token = query.is_some_and(arkret_wire::contains_query_auth_material);
     header_bearer || query_token
-}
-
-/// True when the request carries authentication material in any position the
-/// auth layer inspects. The subscribe handlers use this to tell a genuinely
-/// anonymous client (no material at all) apart from one presenting a bad /
-/// expired credential.
-pub(crate) fn request_presents_auth_material(req: &Request) -> bool {
-    let authorization = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok());
-    auth_material_present(authorization, req.uri().query())
-}
-
-/// Resolve the optional session for subscribe surfaces that allow anonymous
-/// public-Realm reads.
-///
-/// A request presenting bad auth material must surface its auth error instead
-/// of degrading to anonymous, because sync cursors are principal-bound.
-pub(crate) async fn subscribe_session_or_render(
-    state: &AppState,
-    req: &Request,
-    res: &mut Response,
-) -> Option<Option<SessionIdentityState>> {
-    match authenticated_session(state, req).await {
-        Ok(session) => Some(Some(session)),
-        Err((status, code, message)) => {
-            if request_presents_auth_material(req) {
-                render_error(res, status, code, message);
-                None
-            } else {
-                Some(None)
-            }
-        }
-    }
 }
 
 /// Resolve the required session for account subscribe long-poll.

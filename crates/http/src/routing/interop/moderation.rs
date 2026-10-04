@@ -3,6 +3,7 @@
 //! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report.v1`) — submit the
 //!   caller-authored signed report Event through ordinary Event admission.
 
+#[cfg(test)]
 use std::collections::BTreeSet;
 
 use arkret_identifiers::{EventId, RealmId};
@@ -22,6 +23,7 @@ use soland_services::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_B
 
 #[cfg(test)]
 use super::now;
+#[cfg(test)]
 use super::sha256_hex;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -39,50 +41,6 @@ fn authored_event_wire_value(
 }
 
 #[cfg(test)]
-fn author_franking_proof_event(
-    proof: FrankingProof,
-    service_actor_id: arkret_wire::DidCoreId,
-    created_at: chrono::DateTime<chrono::Utc>,
-    digest_suite: arkret_canonical::DigestSuite,
-) -> arkret_event_draft::Result<arkret_wire::AuthoredEvent> {
-    arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::ModerationFrankingProof>::new(
-        ScopeRef::Realm {
-            realm_id: proof.realm_id.clone(),
-        },
-        arkret_wire::ActorId::service(service_actor_id),
-        proof,
-    )?
-    .author_with_digest_suite(created_at, digest_suite)
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ModerationReportSafety {
-    pub effective_scope: Value,
-    pub evidence_package: Option<Value>,
-    pub franking_proof: Option<Value>,
-}
-
-pub(super) fn moderation_request_source_ip_hash(req: &Request) -> String {
-    // Shared with the rate limiter. The local copy this replaced differed on
-    // both halves: it required the trust flag to be exactly `"1"` (so `=true`
-    // silently disabled it here while the limiter honoured it), and it took
-    // the *leftmost* `X-Forwarded-For` token without checking it parses as an
-    // IP — a caller-supplied value, which made the recorded report provenance
-    // forgeable whenever the flag was on.
-    let source = crate::ratelimit::trusted_forwarded_client(req)
-        .unwrap_or_else(|| req.remote_addr().to_string());
-    sha256_hex(source.as_bytes())
-}
-
-pub(super) fn moderation_request_source_service(req: &Request) -> Option<String> {
-    req.headers()
-        .get("source-service-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 pub(super) async fn validate_moderation_report_safety(
     state: &AppState,
     realm_id: &str,
@@ -94,7 +52,7 @@ pub(super) async fn validate_moderation_report_safety(
     franking_proof: &Value,
     source_service: Option<&str>,
     source_ip_hash: &str,
-) -> Result<ModerationReportSafety, AppError> {
+) -> Result<(), AppError> {
     let rate_reporter = reporter_actor
         .map(ToString::to_string)
         .unwrap_or_else(|| reporter_id.to_owned());
@@ -138,22 +96,17 @@ async fn validate_signed_moderation_report_safety(
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
     franking_proof: &Value,
-) -> Result<ModerationReportSafety, AppError> {
+) -> Result<(), AppError> {
     // Target visibility and exact scope are decided by the accepting current writer,
     // after the governing cut is locked; no reducer projection authorizes a report.
     let _ = (reporter_actor, target_ref);
     let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
-    let evidence_package =
-        validate_moderation_evidence_package(evidence_package, &effective_scope)?;
-    let franking_proof =
-        validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
-    Ok(ModerationReportSafety {
-        effective_scope,
-        evidence_package,
-        franking_proof,
-    })
+    validate_moderation_evidence_package(evidence_package, &effective_scope)?;
+    validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
+    Ok(())
 }
 
+#[cfg(test)]
 async fn validate_moderation_report_content_safety(
     state: &AppState,
     realm_id: &str,
@@ -162,22 +115,16 @@ async fn validate_moderation_report_content_safety(
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
     franking_proof: &Value,
-) -> Result<ModerationReportSafety, AppError> {
+) -> Result<(), AppError> {
     let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
     let target_scope =
         moderation_target_effective_scope_value(state, realm_id, reporter_actor, target_ref)?;
     if target_scope != effective_scope {
         return Err(moderation_target_not_found());
     }
-    let evidence_package =
-        validate_moderation_evidence_package(evidence_package, &effective_scope)?;
-    let franking_proof =
-        validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
-    Ok(ModerationReportSafety {
-        effective_scope,
-        evidence_package,
-        franking_proof,
-    })
+    validate_moderation_evidence_package(evidence_package, &effective_scope)?;
+    validate_moderation_franking_proof(state, realm_id, franking_proof).await?;
+    Ok(())
 }
 
 fn moderation_effective_scope_value(
@@ -219,10 +166,12 @@ fn moderation_effective_scope_value(
     }
 }
 
+#[cfg(test)]
 fn moderation_target_not_found() -> AppError {
     AppError::not_found("moderation target not found")
 }
 
+#[cfg(test)]
 fn moderation_target_effective_scope_value(
     state: &AppState,
     realm_id: &str,
@@ -283,6 +232,7 @@ fn moderation_target_effective_scope_value(
     Ok(json!({"kind": "realm", "realm_id": realm_id}))
 }
 
+#[cfg(test)]
 fn moderation_target_message<'a>(
     projection: &'a soland_domain::reducer::ProjectionState,
     target_ref: &str,

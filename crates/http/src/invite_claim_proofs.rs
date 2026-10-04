@@ -197,13 +197,6 @@ fn decode_signature(value: Option<&str>) -> Result<Signature, String> {
     Ok(signature)
 }
 
-fn trimmed_string(value: Option<&Value>) -> Option<&str> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

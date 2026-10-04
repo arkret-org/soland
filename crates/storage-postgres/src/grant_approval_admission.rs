@@ -16,8 +16,6 @@ pub(crate) struct SatisfiedGrantApproval {
     pub grant_id: GrantId,
     pub constraint_digest: String,
     pub accepted: Vec<QualifiedApproval>,
-    pub eligible_principals: Vec<arkret_wire::DidCoreId>,
-    pub quorum: u64,
 }
 
 fn missing(action: CapabilityActionId, quorum: u64, count: usize) -> PersistenceError {
@@ -170,8 +168,6 @@ pub(crate) async fn require_grant_approvals(
             grant_id: grant.id.clone(),
             constraint_digest,
             accepted,
-            eligible_principals: qualified.into_keys().collect(),
-            quorum,
         });
     }
     Ok(requirements)

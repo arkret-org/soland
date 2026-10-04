@@ -14,29 +14,38 @@ pub(crate) mod projection;
 pub(super) mod projection_query;
 pub(crate) mod strand;
 pub(crate) mod sync;
-pub(crate) mod test_chaos;
 
-use operations::{
-    validate_agent_participation_ceiling, validate_agent_reply_participation,
-    validate_content_encryption_floor, validate_operation_policy,
-    validate_operation_policy_with_plaintext_service_binding, validate_operation_semantics,
-};
-use projection::{
-    projected_event_page_for_realms_through, projected_event_replay_upper_bound,
-    projection_event_json,
-};
+#[cfg(test)]
+use operations::validate_agent_participation_ceiling;
+#[cfg(test)]
+use operations::validate_agent_reply_participation;
+#[cfg(test)]
+use operations::validate_operation_policy;
+#[cfg(test)]
+use operations::validate_operation_semantics;
+#[cfg(test)]
+use projection::projection_event_json;
 use strand::{
     discussion_track_for_projection_event, message_id_from_event_id, strand_id_for_projection_event,
 };
 
+#[cfg(test)]
+use super::append_audit_log;
+#[cfg(test)]
+use super::auth_or_render;
+#[cfg(test)]
+use super::device_message_envelopes_after;
+#[cfg(test)]
+use super::realm_allows_plaintext_service_for_data_class;
+#[cfg(test)]
+use super::realm_has_member;
 use super::{
-    append_audit_log, auth_or_render, authenticated_session, device_message_envelopes_after,
-    is_realm_deleted, is_valid_discoverability, is_valid_hash_digest, now, query_param,
-    query_param_all, realm_allows_plaintext_service_for_data_class, realm_discoverability,
-    realm_event_visible_to_session, realm_has_member, realm_history_access, realm_id_accessible,
-    realm_state_snapshot_manifest_for_realm, render_error, sha256_hex, touch_realm, validate_did,
-    validate_space_id,
+    authenticated_session, is_realm_deleted, now, query_param, realm_discoverability,
+    realm_event_visible_to_session, realm_history_access, realm_id_accessible,
+    realm_state_snapshot_manifest_for_realm, render_error, sha256_hex, validate_did,
 };
+#[cfg(test)]
+use super::{is_valid_discoverability, validate_space_id};
 
 pub fn router() -> Router {
     Router::new()

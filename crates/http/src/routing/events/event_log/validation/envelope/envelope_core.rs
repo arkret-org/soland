@@ -4,7 +4,6 @@ use super::*;
 /// It is not an Event admission or a Realm authority position.
 pub(in crate::routing) struct PrivateInviteEnvelope {
     pub(in crate::routing) event_id: EventId,
-    pub(in crate::routing) actor: arkret_wire::ActorId,
     pub(in crate::routing) realm_id: RealmId,
     pub(in crate::routing) canonical_digest: String,
 }
@@ -56,7 +55,6 @@ pub(in crate::routing) async fn validate_private_invite_envelope(
         })?;
     Ok(PrivateInviteEnvelope {
         event_id: event.event_id,
-        actor: event.actor_id,
         realm_id: event.realm_id,
         canonical_digest,
     })

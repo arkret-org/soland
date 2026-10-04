@@ -458,7 +458,6 @@ pub(crate) fn test_state() -> AppState {
 pub(crate) const ROSTER_REALM: &str = "ak:realm:AQKdkfI-I4MXIS2hxLXbb_FK57j-jE497FF66I5NPGPE";
 const ROSTER_ACTOR_DID: &str = "did:web:alice.example";
 pub(crate) const ROSTER_ACTOR: &str = "ak:did_core:web:alice.example";
-const ROSTER_SUBJECT: &str = "ak:did_core:web:alice-principal.example";
 pub(crate) const ROSTER_CALLER: &str = "ak:did_core:web:bob.example";
 
 fn roster_body(_audience: &str) -> SyncRequestBody {

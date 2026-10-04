@@ -594,15 +594,6 @@ fn encode_mls_contract<T: serde::Serialize>(
     })
 }
 
-fn decode_mls_contract<T: serde::de::DeserializeOwned>(
-    value: serde_json::Value,
-    field: &str,
-) -> crate::ServiceResult<T> {
-    serde_json::from_value(value).map_err(|error| {
-        crate::ServiceError::Internal(format!("stored MLS {field} is invalid: {error}"))
-    })
-}
-
 #[async_trait::async_trait]
 impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMaintenance {
     async fn store_key_package(

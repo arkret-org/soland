@@ -587,6 +587,7 @@ pub(super) fn moderation_actor<'a>(
     Ok(Some(&operation.context.sender))
 }
 
+#[cfg(test)]
 pub(super) async fn active_direct_conversation_binding_for_realm(
     state: &AppState,
     realm_id: &str,

@@ -5,10 +5,7 @@ pub(super) mod directory;
 mod read_cursor;
 pub(super) mod space;
 
-use super::{
-    AuthArgs, authenticated_session, handle_for_did, is_realm_deleted, now, realm_discoverability,
-    realm_has_member, realm_history_access,
-};
+use super::AuthArgs;
 
 /// `self`-segment spaces surface. The directory surface is split out into
 /// [`find_router`] because directory discovery belongs to the `find` trust

@@ -65,10 +65,6 @@ pub(crate) enum HeaderViolation {
 }
 
 impl HeaderViolation {
-    pub(crate) fn error_code(&self) -> &'static str {
-        arkret_wire::ErrorCode::SCHEMA_VIOLATION
-    }
-
     pub(crate) fn message(&self) -> String {
         match self {
             Self::Missing(name) => format!("required federation header {name} missing"),

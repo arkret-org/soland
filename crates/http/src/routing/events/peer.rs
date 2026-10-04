@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::account_lifecycle::{
@@ -18,13 +20,18 @@ use arkret_models_collaboration::principal_operations::{
 };
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
 use arkret_wire::{SignalRelayOutcome, SignalRelayRequest};
-use chrono::{DateTime, Duration, Utc};
+#[cfg(test)]
+use chrono::DateTime;
+use chrono::{Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
-use soland_services::events::{AcceptedEvent, RealmMetadata as RealmMetaRecord};
+#[cfg(test)]
+use soland_services::events::AcceptedEvent;
+#[cfg(test)]
+use soland_services::events::RealmMetadata as RealmMetaRecord;
 
 use super::{render_error, validate_did};
 use crate::state::AppState;
@@ -131,36 +138,10 @@ pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<Did
 /// Built only from explicit deployment configuration plus this Station's own
 /// verified identity. Nothing in it comes from the request.
 pub(crate) struct RegisteredInternalChannel {
-    /// Exact controller-gate endpoint derived and origin-bound at startup.
-    controller_gate_url: String,
     credential: String,
 }
 
-impl RegisteredInternalChannel {
-    /// The shared credential, for the outbound half of this same edge.
-    ///
-    /// Deliberately not public beyond `crate::routing`: it authenticates only
-    /// the registered operations of this one channel and is never a general
-    /// deployment bearer.
-    pub(in crate::routing) fn credential(&self) -> &str {
-        &self.credential
-    }
-
-    pub(in crate::routing) fn controller_gate_url(&self) -> &str {
-        &self.controller_gate_url
-    }
-}
-
-/// Resolve the registered channel, or fail closed.
-///
-/// A missing Account Authority endpoint, source trust domain or shared
-/// credential means no channel is registered. The registered operations then
-/// fail instead of degrading to an anonymous or self-reported identity.
-pub(crate) async fn registered_internal_authority_channel(
-    state: &AppState,
-) -> Result<RegisteredInternalChannel, AppError> {
-    registered_internal_authority_channel_from_config(state.config())
-}
+impl RegisteredInternalChannel {}
 
 fn registered_internal_authority_channel_from_config(
     config: &crate::config::AppConfig,
@@ -180,7 +161,6 @@ fn registered_internal_authority_channel_from_config(
         )
     })?;
     Ok(RegisteredInternalChannel {
-        controller_gate_url: channel_config.controller_gate_url().to_owned(),
         credential: channel_config.credential().to_owned(),
     })
 }
@@ -1047,6 +1027,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct PeerReadAuthz {
     source_id: String,
@@ -1057,18 +1038,21 @@ struct PeerReadAuthz {
     circle_members: BTreeMap<String, BTreeMap<String, PeerMembership>>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct PeerMembership {
     joined_at: DateTime<Utc>,
     invited_at: Option<DateTime<Utc>>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct PendingPeerInvite {
     invitee_account_id: arkret_wire::AccountId,
     invited_at: DateTime<Utc>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct PeerCircleState {
     realm_id: String,
@@ -1076,61 +1060,8 @@ struct PeerCircleState {
     active: bool,
 }
 
+#[cfg(test)]
 impl PeerReadAuthz {
-    async fn build(
-        state: &AppState,
-        source_id: &str,
-        records: &[AcceptedEvent],
-    ) -> Result<Self, AppError> {
-        let realm_meta = state
-            .realms()
-            .realm_metadata_list()
-            .await
-            .map_err(|error| AppError::internal(format!("peer realm metadata: {error}")))?
-            .into_iter()
-            .collect::<BTreeMap<_, _>>();
-        let circles = state
-            .projections()
-            .snapshot()
-            .circles
-            .iter()
-            .map(|(circle_id, circle)| {
-                (
-                    circle_id.clone(),
-                    PeerCircleState {
-                        realm_id: circle.realm_id.clone(),
-                        history_access: circle.history_access.clone(),
-                        active: circle.state.as_str() == "active",
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let mut authz = Self {
-            source_id: source_id.to_owned(),
-            realm_meta,
-            realm_members: BTreeMap::new(),
-            pending_realm_invites: BTreeMap::new(),
-            circles,
-            circle_members: BTreeMap::new(),
-        };
-        let mut ordered = records.iter().collect::<Vec<_>>();
-        ordered.sort_by(|left, right| {
-            left.received_at
-                .cmp(&right.received_at)
-                .then_with(|| left.event_id.cmp(&right.event_id))
-        });
-        for record in ordered {
-            authz.apply_record(record);
-        }
-        Ok(authz)
-    }
-
-    fn apply_record(&mut self, record: &AcceptedEvent) {
-        self.apply_invite_record(record);
-        self.apply_member_record(record);
-        self.apply_circle_member_record(record);
-    }
-
     fn apply_invite_record(&mut self, record: &AcceptedEvent) {
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
             return;
@@ -1187,101 +1118,6 @@ impl PeerReadAuthz {
             }
             _ => {}
         }
-    }
-
-    fn record_visible(&self, record: &AcceptedEvent) -> bool {
-        let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
-            return false;
-        };
-        let Some(meta) = self.realm_meta.get(&realm_id) else {
-            return false;
-        };
-        if meta.deleted {
-            return false;
-        }
-        if !self.source_has_realm_scope(&realm_id) {
-            return false;
-        }
-        let event_time = record_event_time(record);
-        let needs_plaintext = record_requires_private_plaintext_visibility(record);
-        if needs_plaintext && !self.source_can_receive_plaintext(&realm_id) {
-            return false;
-        }
-        if let Some(circle_id) = record_scope_circle_id(record) {
-            return self.circle_record_visible(&realm_id, &circle_id, event_time);
-        }
-        self.realm_record_visible(&realm_id, meta, event_time, needs_plaintext)
-    }
-
-    fn frontier_visible_for_realm(&self, realm_id: &str) -> bool {
-        self.realm_meta
-            .get(realm_id)
-            .is_some_and(|meta| !meta.deleted)
-            && self
-                .realm_members
-                .get(realm_id)
-                .is_some_and(|members| !members.is_empty())
-    }
-
-    fn source_has_realm_scope(&self, realm_id: &str) -> bool {
-        self.realm_members
-            .get(realm_id)
-            .is_some_and(|members| !members.is_empty())
-    }
-
-    fn realm_record_visible(
-        &self,
-        realm_id: &str,
-        meta: &RealmMetaRecord,
-        event_time: DateTime<Utc>,
-        _needs_plaintext: bool,
-    ) -> bool {
-        self.realm_members.get(realm_id).is_some_and(|members| {
-            members.values().any(|member| {
-                history_access_allows(meta.history_access.as_str(), member, event_time)
-            })
-        })
-    }
-
-    fn circle_record_visible(
-        &self,
-        realm_id: &str,
-        circle_id: &str,
-        event_time: DateTime<Utc>,
-    ) -> bool {
-        let Some(circle) = self.circles.get(circle_id) else {
-            return false;
-        };
-        if !circle.active || circle.realm_id != realm_id {
-            return false;
-        }
-        let Some(realm_members) = self.realm_members.get(realm_id) else {
-            return false;
-        };
-        let Some(circle_members) = self.circle_members.get(circle_id) else {
-            return false;
-        };
-        realm_members.iter().any(|(actor, realm_member)| {
-            circle_members.get(actor).is_some_and(|circle_member| {
-                history_access_allows(circle.history_access.as_str(), circle_member, event_time)
-                    && history_access_allows("since_join", realm_member, event_time)
-            })
-        })
-    }
-
-    fn source_can_receive_plaintext(&self, realm_id: &str) -> bool {
-        let Some(meta) = self.realm_meta.get(realm_id) else {
-            return false;
-        };
-        if !meta
-            .plaintext_visible_services
-            .contains(self.source_id.as_str())
-        {
-            return false;
-        }
-        self.realm_members
-            .get(realm_id)
-            .is_some_and(|members| !members.is_empty())
     }
 
     fn apply_member_record(&mut self, record: &AcceptedEvent) {
@@ -1417,18 +1253,7 @@ impl PeerReadAuthz {
     }
 }
 
-fn history_access_allows(
-    history_access: &str,
-    member: &PeerMembership,
-    event_time: DateTime<Utc>,
-) -> bool {
-    match history_access {
-        "all_history_for_current_members" => true,
-        "since_join" => event_time >= member.joined_at,
-        _ => false,
-    }
-}
-
+#[cfg(test)]
 fn record_requires_private_plaintext_visibility(record: &AcceptedEvent) -> bool {
     if serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
         .ok()
@@ -1450,23 +1275,12 @@ fn record_requires_private_plaintext_visibility(record: &AcceptedEvent) -> bool 
     !(payload.get("encrypted_content").is_some() || payload.get("encrypted_payload").is_some())
 }
 
-fn record_scope_circle_id(record: &AcceptedEvent) -> Option<String> {
-    let object = record.envelope.as_object()?;
-    let scope = object.get("scope_ref")?.as_object()?;
-    if scope.get("kind").and_then(Value::as_str) != Some("circle") {
-        return None;
-    }
-    scope
-        .get("circle_id")
-        .and_then(Value::as_str)
-        .filter(|scope| scope.starts_with("ak:circle:"))
-        .map(ToOwned::to_owned)
-}
-
+#[cfg(test)]
 fn record_payload(record: &AcceptedEvent) -> Option<&serde_json::Map<String, Value>> {
     record.envelope.get("payload").and_then(Value::as_object)
 }
 
+#[cfg(test)]
 fn record_event_time(record: &AcceptedEvent) -> DateTime<Utc> {
     record
         .envelope
@@ -1476,6 +1290,7 @@ fn record_event_time(record: &AcceptedEvent) -> DateTime<Utc> {
         .unwrap_or(record.received_at)
 }
 
+#[cfg(test)]
 fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
@@ -1586,81 +1401,6 @@ pub(in crate::routing) async fn authenticated_peer_context(
     Ok(soland_services::authority_commit::AuthenticatedPeerContext { source_service_id })
 }
 
-/// Freeze the producer's caller-visible policy on the same accepted snapshot
-/// used for reduction. Actor routing retains the complete account/station key.
-pub(in crate::routing) async fn frontier_disclosure_snapshot(
-    state: &AppState,
-    source_id: &str,
-    realm_id: &str,
-    records: &[AcceptedEvent],
-) -> Result<(Vec<AcceptedEvent>, BTreeSet<String>), AppError> {
-    let authz = PeerReadAuthz::build(state, source_id, records).await?;
-    let visible = records
-        .iter()
-        .filter(|record| {
-            super::event_log::canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
-                && authz.record_visible(record)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    // A peer may legitimately lag behind our outbox. Only its own already
-    // admitted, mutually visible actors imply that it must disclose that actor.
-    let mut required = BTreeSet::new();
-    for record in &visible {
-        let actor: arkret_wire::ActorId = serde_json::from_str(&record.actor_id)
-            .map_err(|error| AppError::internal(format!("stored frontier actor: {error}")))?;
-        if actor.route_service_id().as_str() == source_id {
-            required.insert(actor.to_string());
-        }
-    }
-    Ok((visible, required))
-}
-
-/// Authorize a near-current peer query for the exact MLS security scope.
-/// Sidecar and genesis scopes are deliberately not exposed through the
-/// federation surface, matching the self governance-proof visibility rules.
-pub(in crate::routing) async fn peer_mls_scope_visibility(
-    state: &AppState,
-    source_id: &str,
-    scope: &arkret_wire::ScopeRef,
-) -> Result<bool, AppError> {
-    let records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| AppError::internal(format!("peer MLS scope visibility: {error}")))?;
-    let authz = PeerReadAuthz::build(state, source_id, &records).await?;
-    Ok(match scope {
-        arkret_wire::ScopeRef::Realm { realm_id } => {
-            authz.frontier_visible_for_realm(realm_id.as_str())
-        }
-        arkret_wire::ScopeRef::Circle {
-            realm_id,
-            circle_id,
-        } => {
-            authz.frontier_visible_for_realm(realm_id.as_str())
-                && authz
-                    .circles
-                    .get(circle_id.as_str())
-                    .is_some_and(|circle| circle.active && circle.realm_id == realm_id.as_str())
-                && authz
-                    .circle_members
-                    .get(circle_id.as_str())
-                    .is_some_and(|circle_members| {
-                        authz
-                            .realm_members
-                            .get(realm_id.as_str())
-                            .is_some_and(|realm_members| {
-                                circle_members
-                                    .keys()
-                                    .any(|actor| realm_members.contains_key(actor))
-                            })
-                    })
-        }
-        _ => false,
-    })
-}
-
 pub(in crate::routing) fn source_id_from_request(req: &Request) -> Result<String, AppError> {
     required_header(req, HEADER_SOURCE_SERVICE_ID)
 }
@@ -1727,10 +1467,7 @@ mod internal_channel_tests {
     }
 
     fn channel() -> RegisteredInternalChannel {
-        let config = configured_app();
-        let configured_channel = config.internal_authority_channel.unwrap();
         RegisteredInternalChannel {
-            controller_gate_url: configured_channel.controller_gate_url().to_owned(),
             credential: CREDENTIAL.to_owned(),
         }
     }

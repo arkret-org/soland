@@ -4,12 +4,6 @@ use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 
 use super::*;
 
-#[derive(Clone, Debug)]
-pub struct ProjectedEventPage {
-    pub items: Vec<ProjectionEventRecord>,
-    pub has_more: bool,
-}
-
 pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value {
     let strand_id = strand_id_for_projection_event(event);
     let track = discussion_track_for_projection_event(event, strand_id.as_deref());

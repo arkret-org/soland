@@ -27,6 +27,7 @@ pub struct SyncCursor {
     pub detail_next_realm: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct EventsQueryCursor {
     pub event_id: String,
@@ -127,6 +128,7 @@ pub(crate) async fn parse_committed_stream_cursor(
     ))
 }
 pub(crate) const DEVICE_MESSAGES_CURSOR_PURPOSE: &str = "ak.self.device_messages.read.list.v1";
+#[cfg(test)]
 pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
 pub(crate) const BARRIER_CURSOR_PURPOSE: &str = "barrier";
 
@@ -306,6 +308,7 @@ pub(crate) async fn sync_token_for_account_positions(
         .map_err(|_| SyncCursorError::Integrity("cannot encode account cursor"))
 }
 
+#[cfg(test)]
 pub(crate) async fn sync_token_for_events_query(
     state: &AppState,
     session: Option<&SessionIdentityState>,
@@ -336,47 +339,6 @@ pub(crate) async fn sync_token_for_events_query(
             purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: None,
             target: Some(target),
-            issued_at_ms,
-            expires_at_ms,
-        },
-    )
-    .await;
-    cursor.encode().expect("SDK cursor encoding cannot fail")
-}
-
-pub(crate) async fn sync_token_for_state(state: &AppState) -> String {
-    sync_token_for_state_positions(state, BTreeMap::new()).await
-}
-
-async fn sync_token_for_state_positions(
-    state: &AppState,
-    realms_positions: BTreeMap<String, i64>,
-) -> String {
-    let issued_at = chrono::Utc::now();
-    let binding = service_cursor_handle_binding(state.service_id(), &realms_positions);
-    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
-    let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
-        .expect("one-hour stream cursor is valid")
-        .with_stateful_handle(handle.clone());
-    let issued_at_ms = cursor.issued_at.timestamp_millis();
-    let expires_at_ms = cursor.expires_at.timestamp_millis();
-    upsert_sync_cursor_record(
-        state,
-        CursorState {
-            handle: handle.clone(),
-            binding_subject: None,
-            device_id: None,
-            service_id: DidCoreId::new(state.service_id().clone())
-                .expect("AppState service_id must be a validated DID core id"),
-            filter_digest: None,
-            purpose: STREAM_CURSOR_PURPOSE.to_owned(),
-            positions: Some(json!({
-                "realms": realms_positions,
-                "account_realms": {},
-                "devices": {},
-                "to_device": 0
-            })),
-            target: None,
             issued_at_ms,
             expires_at_ms,
         },
@@ -434,6 +396,7 @@ pub(crate) fn account_cursor_handle_binding(
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
+#[cfg(test)]
 pub(crate) fn events_query_cursor_handle_binding(
     account_id: Option<&arkret_wire::AccountId>,
     device_id: &str,
@@ -446,27 +409,6 @@ pub(crate) fn events_query_cursor_handle_binding(
         "filter_digest": filter_digest,
         "purpose": STREAM_CURSOR_PURPOSE,
         "target": target,
-    });
-    arkret_canonical::canonical_json_bytes(&binding)
-        .unwrap_or_else(|_| binding.to_string().into_bytes())
-}
-
-/// Canonical byte string the GENERIC service-level cursor handle is derived
-/// from (`sync_token_for_state`: empty positions, no session binding). Shaped
-/// differently from the stream binding so the two namespaces
-/// can never collide.
-fn service_cursor_handle_binding(
-    service_id: &str,
-    realms_positions: &BTreeMap<String, i64>,
-) -> Vec<u8> {
-    let binding = json!({
-        "kind": "generic",
-        "purpose": STREAM_CURSOR_PURPOSE,
-        "service_id": service_id,
-        "realms": realms_positions,
-        "account_realms": {},
-        "device_lists": {},
-        "to_device": 0,
     });
     arkret_canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
@@ -529,6 +471,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
     std::sync::Arc::new(task)
 }
 
+#[cfg(test)]
 /// Persist (or expiry-refresh) the handle row behind a freshly-minted cursor.
 ///
 /// A failed write is downgraded to a warning rather than failing the sync
@@ -619,6 +562,7 @@ fn cursor_position_map(
         .collect())
 }
 
+#[cfg(test)]
 pub async fn parse_and_validate_sync_cursor(
     token: &str,
     state: &AppState,
@@ -841,6 +785,7 @@ mod account_position_shape_tests {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn parse_and_validate_events_query_cursor(
     token: &str,
     state: &AppState,

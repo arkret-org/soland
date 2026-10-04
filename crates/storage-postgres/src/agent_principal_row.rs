@@ -1,5 +1,4 @@
 use arkret_identifiers::{Did, DidCoreId, project_did_to_core_id};
-use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_wire::{DidUrl, OpaqueLocalId};
 use chrono::{DateTime, Utc};
 use diesel::{AsChangeset, Insertable, Queryable, Selectable};

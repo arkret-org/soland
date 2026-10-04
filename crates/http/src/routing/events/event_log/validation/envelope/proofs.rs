@@ -54,6 +54,7 @@ async fn verify_with_historical_signer_evidence(
         "accepted historical producer signer evidence is unavailable",
     ))
 }
+
 pub(crate) async fn validate_event_proofs(
     object: &serde_json::Map<String, Value>,
     state: &AppState,
@@ -557,7 +558,6 @@ pub(super) fn event_proof_binding_bytes(
     Ok((proof, actor_id.clone(), bytes))
 }
 
-#[cfg(test)]
 mod tests {
     use serde_json::json;
     use soland_storage_postgres::Db;

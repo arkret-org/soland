@@ -6,22 +6,20 @@
 //!
 //! Production gaps: `validation_class` instead of bool and revocation fanout.
 
-use salvo::prelude::*;
-
 pub(crate) mod erasure_receipts;
 mod outbound;
 pub mod outbox;
 pub mod outbox_operator;
-mod profile_intersection;
+
 mod signature;
 pub(crate) mod well_known;
 mod wire;
 
+#[cfg(test)]
+pub(crate) use outbound::peer_url_for_service_id;
 pub(crate) use outbound::{
-    configured_peer_targets, peer_url_for_service_id, resolved_peer_base_url, resolved_peer_route,
-    resolved_peer_target,
+    configured_peer_targets, resolved_peer_base_url, resolved_peer_route, resolved_peer_target,
 };
-pub(crate) use profile_intersection::federation_profile_intersection_for_peer;
 #[cfg(test)]
 use salvo::http::StatusCode;
 // SPEC-CR-001 — `signature_authority` / `signature_target_uri` are reused by
@@ -34,8 +32,6 @@ pub(in crate::routing) use signature::{
 use signature::{validate_federation_headers, validate_signature_input};
 pub use well_known::well_known_arkret_router;
 pub(crate) use wire::FederationTrustHeaders;
-
-use super::AuthArgs;
 
 #[cfg(test)]
 #[path = "federation_tests.rs"]

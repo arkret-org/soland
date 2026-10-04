@@ -143,19 +143,6 @@ pub(crate) fn demo_realm_id() -> &'static str {
 /// `SOLAND_TURN_SHARED_SECRET`.
 pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared-secret-0123456789";
 pub(crate) const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
-pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
-static DEMO_REALM_ACTOR_FRONTIER: OnceLock<(String, u64)> = OnceLock::new();
-static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
-    let key = SigningKey::from_bytes(&[21_u8; 32]);
-    format!(
-        "did:key:{}",
-        arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
-    )
-});
-
-pub(crate) fn test_event_signer_did() -> &'static str {
-    TEST_EVENT_SIGNER_DID.as_str()
-}
 
 /// Project a fixture's DID onto its signing principal. Account-scoped payloads
 /// and projection keys use the complete Account/Actor helpers below.
@@ -199,19 +186,6 @@ pub(crate) fn test_config() -> AppConfig {
         seed_demo_data: true,
         ..soland_test_support::app_config()
     }
-}
-
-pub(crate) fn test_state_with_service_id(service_id: &str) -> AppState {
-    if let Ok(did) = arkret_wire::Did::new(service_id.to_owned()) {
-        return soland_test_support::app_state_with_service_did(test_config(), did);
-    }
-    let state = soland_test_support::app_state(test_config());
-    assert_eq!(
-        state.service_id(),
-        service_id,
-        "a core-only test service id must match the fixture identity"
-    );
-    state
 }
 
 pub(crate) fn app() -> salvo::Service {
@@ -358,33 +332,11 @@ where
     run_on_deep_stack_with(name, RuntimeFlavor::CurrentThread, body);
 }
 
-/// [`run_on_deep_stack`] for a test that needs
-/// `#[tokio::test(flavor = "multi_thread")]` semantics.
-pub(crate) fn run_on_deep_stack_multi_thread<F>(
-    name: &'static str,
-    body: impl FnOnce() -> F + Send + 'static,
-) where
-    F: Future<Output = ()>,
-{
-    run_on_deep_stack_with(name, RuntimeFlavor::MultiThread, body);
-}
-
 #[derive(Clone, Copy)]
 enum RuntimeFlavor {
     CurrentThread,
     CurrentThreadPaused,
     MultiThread,
-}
-
-/// [`run_on_deep_stack`] for a test that needs `#[tokio::test(start_paused = true)]`
-/// semantics.
-pub(crate) fn run_on_deep_stack_paused<F>(
-    name: &'static str,
-    body: impl FnOnce() -> F + Send + 'static,
-) where
-    F: Future<Output = ()>,
-{
-    run_on_deep_stack_with(name, RuntimeFlavor::CurrentThreadPaused, body);
 }
 
 fn run_on_deep_stack_with<F>(

@@ -40,10 +40,6 @@ pub fn frozen_realm_check(realm_frozen: bool, kind: &str, payload: &Value) -> Op
     None
 }
 
-pub(super) fn policy_bundle_value_from_state_payload(payload: &Value) -> &Value {
-    payload.get("value").unwrap_or(payload)
-}
-
 /// Validate a `ak.realm.policy_bundle` payload against the current media
 /// plaintext authorization dependency.
 ///

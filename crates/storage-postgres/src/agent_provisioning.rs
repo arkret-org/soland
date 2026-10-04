@@ -26,12 +26,6 @@ use crate::{AsyncPgConnection, PgTransactionError};
 
 const WHAT: &str = "Agent provision";
 
-#[derive(QueryableByName)]
-struct DeclaredRow {
-    #[diesel(sql_type = Text)]
-    realm_id: String,
-}
-
 /// The four values `event` projects, with the Commit that accepted it.
 fn record(
     event: &arkret_wire::Event,
@@ -98,29 +92,29 @@ pub(crate) async fn admit_agent_provision_in_connection(
     // The controller PCR lock taken above serializes every provision of this
     // PCR, so a missing row here stays missing until this unit commits.
     let already = sql_query(
-        "SELECT realm_id FROM agent_provisioning_current_results \
+        "SELECT TRUE AS present FROM agent_provisioning_current_results \
          WHERE realm_id=$1 AND agent_id=$2 FOR UPDATE",
     )
     .bind::<Text, _>(event.realm_id.as_str())
     .bind::<Text, _>(payload.agent_id.as_str())
-    .get_result::<DeclaredRow>(&mut *conn)
+    .get_result::<crate::ExistsRow>(&mut *conn)
     .await
     .optional()?;
-    if already.is_some() {
+    if already.is_some_and(|row| row.present) {
         return Err(rejected(
             ConflictCode::AgentProvisioningAlreadyDeclared,
             "an accepted provision in this controller PCR already declares the Agent",
         ));
     }
     let claimed = sql_query(
-        "SELECT realm_id FROM agent_pcr_genesis_declaration_current_results \
+        "SELECT TRUE AS present FROM agent_pcr_genesis_declaration_current_results \
          WHERE principal_control_realm_id=$1 FOR UPDATE",
     )
     .bind::<Text, _>(payload.principal_control_realm_id.as_str())
-    .get_result::<DeclaredRow>(&mut *conn)
+    .get_result::<crate::ExistsRow>(&mut *conn)
     .await
     .optional()?;
-    if claimed.is_some() {
+    if claimed.is_some_and(|row| row.present) {
         return Err(rejected(
             ConflictCode::AgentPcrGenesisDeclarationConflict,
             "an accepted provision already declares this Agent PCR id",

@@ -13,10 +13,13 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{RealmId, SpaceId};
+use arkret_identifiers::RealmId;
+#[cfg(test)]
+use arkret_identifiers::SpaceId;
 use arkret_models_collaboration::governance::realm_governance::{
     RealmExport, RealmExportSchema, RealmLifecycleView,
 };
+#[cfg(test)]
 use arkret_wire::PlaintextDataClassKind;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::PathParam;
@@ -184,11 +187,6 @@ async fn export_realm(
     })
 }
 
-fn validate_child_order_subject(space_id: &str) -> Result<(), AppError> {
-    SpaceId::new(space_id.to_owned()).map_err(|_| AppError::param_invalid("invalid space_id"))?;
-    Ok(())
-}
-
 // ── Helpers shared with the parent module ───────────────────────────────────
 //
 // Each is re-exported from `crate::routing::*` so sibling modules use the
@@ -246,28 +244,12 @@ pub async fn realm_lifecycle_response(
     })
 }
 
-pub async fn touch_realm_meta(state: &AppState, realm_id: &str) {
-    let service = state.realms();
-    if let Ok(Some(mut record)) = service.realm_metadata(realm_id).await {
-        record.updated_at = now();
-        if let Err(error) = service.store_realm_metadata(realm_id, record).await {
-            tracing::warn!(%error, "failed to touch realm meta");
-        }
-    }
-}
-
 // ── Visibility + membership query helpers ─────────────────────────────────
 
 pub fn realm_scope_to_realm_id(scope_id: &str) -> Option<String> {
     RealmId::new(scope_id.to_owned())
         .ok()
         .map(|realm_id| realm_id.as_str().to_owned())
-}
-
-pub async fn touch_realm(state: &AppState, realm_or_internal_id: &str) {
-    if let Some(realm_id) = realm_scope_to_realm_id(realm_or_internal_id) {
-        touch_realm_meta(state, &realm_id).await;
-    }
 }
 
 pub async fn is_realm_deleted(state: &AppState, realm_or_internal_id: &str) -> bool {
@@ -384,6 +366,7 @@ pub async fn realm_event_visible_to_session(
     }
 }
 
+#[cfg(test)]
 pub async fn realm_allows_plaintext_service_for_data_class(
     state: &AppState,
     realm_or_internal_id: &str,
@@ -593,63 +576,6 @@ pub async fn realm_member_joined_at_for_id(
     None
 }
 
-pub async fn realm_member_invited_or_joined_at(
-    state: &AppState,
-    realm_or_internal_id: &str,
-    actor: &str,
-) -> Option<DateTime<Utc>> {
-    match realm_scope_to_realm_id(realm_or_internal_id) {
-        Some(realm_id) => realm_member_invited_or_joined_at_for_id(state, &realm_id, actor).await,
-        None => None,
-    }
-}
-
-pub async fn realm_member_invited_or_joined_at_for_id(
-    state: &AppState,
-    realm_id: &str,
-    actor: &str,
-) -> Option<DateTime<Utc>> {
-    let actor_id = serde_json::from_str::<arkret_wire::ActorId>(actor).ok()?;
-    {
-        let projection = state.projections().snapshot();
-        if let Some(member) = projection.member(realm_id, actor) {
-            if let Some(invited_at) = member.invited_at {
-                return Some(invited_at);
-            }
-            if member.state == "join" {
-                return Some(member.updated_at);
-            }
-        }
-    }
-    // A private invite delivery is deliberately not projected as shared
-    // Realm membership state, but it is still the invitee_id's authoritative
-    // pre-join evidence. Account-client authoring surfaces must recognize it
-    // so the invitee_id can obtain an empty actor frontier and submit the
-    // invite-accept Control Move without widening general Realm reads.
-    if let (Some(account), Ok(realm)) = (
-        actor_id.as_account_id(),
-        arkret_wire::RealmId::new(realm_id.to_owned()),
-    ) {
-        if let Ok(invites) = state
-            .persistence()
-            .open_directed_invites_for_invitee(account, Some(&realm))
-            .await
-        {
-            if let Some(invited_at) = invites
-                .into_iter()
-                .filter(|invite| {
-                    invite.state == arkret_wire::InviteState::Pending && invite.expires_at > now()
-                })
-                .map(|invite| invite.created_at)
-                .min()
-            {
-                return Some(invited_at);
-            }
-        }
-    }
-    realm_member_joined_at_for_id(state, realm_id, actor).await
-}
-
 async fn realm_active_member_at_read_time(
     state: &AppState,
     realm_or_internal_id: &str,
@@ -669,6 +595,7 @@ async fn realm_active_member_at_read_time(
     }
 }
 
+#[cfg(test)]
 /// Whether the Realm's current `plaintext_visible_services` declaration in
 /// this Station's accepted typed current -- governing or held as an anchored
 /// replica -- lists this Station for `data_class`, unexpired. The

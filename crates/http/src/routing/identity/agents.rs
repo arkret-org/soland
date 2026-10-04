@@ -25,12 +25,13 @@
 //! audit-log row matching the canonical event-kind name so the existing admin /
 //! federation projections stay in sync ahead of the reducer rewrite.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
+#[cfg(test)]
 use arkret_event_draft::ProjectedEventOperation as Operation;
 #[cfg(test)]
 use arkret_identifiers::Did;
-use arkret_identifiers::{BlobRef, DidCoreId, EventId, GrantId, Hash, RealmId};
+use arkret_identifiers::{BlobRef, DidCoreId, EventId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentKeyPairActivationState, AgentKeyPairOutcome,
     AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState, AgentList,
@@ -218,52 +219,3 @@ pub(crate) fn open_router() -> Router {
 #[cfg(test)]
 #[path = "agents/tests.rs"]
 mod tests;
-
-/// Restart-safe pairing activation; reads never own this state transition.
-pub(crate) fn spawn_pairing_activation_worker(state: AppState) {
-    tokio::spawn(async move {
-        let mut cursor = String::new();
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tick.tick().await;
-            let rows = match state
-                .agent_pairings()
-                .pending_pairings_after(&cursor, 128)
-                .await
-            {
-                Ok(rows) => rows,
-                Err(error) => {
-                    tracing::warn!(%error, "Agent activation scan failed");
-                    continue;
-                }
-            };
-            if rows.is_empty() {
-                cursor.clear();
-                continue;
-            }
-            for record in rows {
-                cursor = record.id.clone();
-                let record = match lifecycle::lazily_expire_pairing(&state, record).await {
-                    Ok(record) => record,
-                    Err(error) => {
-                        tracing::warn!(%error, "Agent pairing expiry failed");
-                        continue;
-                    }
-                };
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    pairing::reconcile_accepted_agent_authorization(&state, record),
-                )
-                .await
-                {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(error)) => {
-                        tracing::debug!(%error, "Agent authorization remains pending or cancelled")
-                    }
-                    Err(_) => tracing::warn!("Agent activation reconciliation timed out"),
-                }
-            }
-        }
-    });
-}

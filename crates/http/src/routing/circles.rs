@@ -71,6 +71,7 @@ where
         .map_err(|e| AppError::internal(format!("stored circle {field}: {e}")))
 }
 
+#[cfg(test)]
 fn parse_stored_circle_actor(value: &str) -> Result<ActorId, AppError> {
     serde_json::from_str(value)
         .map_err(|error| AppError::internal(format!("stored circle ActorId: {error}")))

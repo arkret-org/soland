@@ -746,23 +746,6 @@ fn upsert_call_entry(entries: &mut Vec<Value>, keys: &[&str], value: Value, tag_
     entries.push(serde_json::json!({ "tag_id": tag_id, "value": value }));
 }
 
-/// Remove the entry a later delta observed. Returns false when the observed tag
-/// is absent or does not name the entry the delta describes.
-fn remove_call_entry(
-    entries: &mut Vec<Value>,
-    observed_tag: &str,
-    describes: impl Fn(&Value) -> bool,
-) -> bool {
-    let Some(index) = entries.iter().position(|entry| {
-        entry.get("tag_id").and_then(Value::as_str) == Some(observed_tag)
-            && entry.get("value").is_some_and(&describes)
-    }) else {
-        return false;
-    };
-    entries.remove(index);
-    true
-}
-
 /// join-policy.md 2: `restricted` and `knock_restricted` promise an entry gate.
 /// A policy carrying only `principal_admission` / `cooldown` hard gates admits
 /// exactly the set `public` admits, so the pair is a contradictory declaration

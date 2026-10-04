@@ -242,7 +242,7 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
             let mut status = selector_comparison_status(&request, current)
                 .unwrap_or(DeviceRevocationGateStatus::Active);
             if matches!(status, DeviceRevocationGateStatus::Active)
-                && let Some(selector) = current
+                && current.is_some()
                 && let Some(row) = sql_query(
                     "SELECT selector, committed_ref, committed_at FROM device_revocation_targets \
                      WHERE selector=$1 ORDER BY committed_at DESC LIMIT 1",

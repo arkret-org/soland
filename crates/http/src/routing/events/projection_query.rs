@@ -34,10 +34,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{MorphId, RealmId, RelationId, SpaceId, StrandId};
+#[cfg(test)]
+use arkret_models_collaboration::objects::query_projection::ProjectionAssignedToRelation;
 use arkret_models_collaboration::objects::query_projection::{
-    DocumentMorphProjectionOutcome, ProjectionAssignedToRelation, ProjectionMorphList,
-    ProjectionMorphRow, ProjectionSpaceList, ProjectionSpaceRow, ProjectionStrandList,
-    ProjectionStrandRow, ReferenceProjectionState,
+    DocumentMorphProjectionOutcome, ProjectionMorphList, ProjectionMorphRow, ProjectionSpaceList,
+    ProjectionStrandList, ReferenceProjectionState,
 };
 use arkret_models_collaboration::objects::relation::RelationEndpoint;
 use arkret_wire::ObjectState;
@@ -151,6 +152,7 @@ fn projection_row_visible_to_session(
     })
 }
 
+#[cfg(test)]
 /// Current object projections are a baseline, not an Event-history window.
 ///
 /// `history_access=since_join` limits historical Event bodies and old object
@@ -241,6 +243,7 @@ fn strand_position_fields(
     Ok((board_space_id, list_space_id, rank))
 }
 
+#[cfg(test)]
 fn strand_assigned_to_relations(
     projection: &ProjectionState,
     strand_id: &str,

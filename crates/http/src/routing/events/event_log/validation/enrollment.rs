@@ -292,7 +292,6 @@ fn device_authorization_invalid(message: impl Into<String>) -> EventValidationEr
     event_validation_error(StatusCode::CONFLICT, "failed_precondition", message)
 }
 
-#[cfg(test)]
 mod applet_managed_delegation_tests {
     use arkret_models_collaboration::events_payloads::SignatureMaterial;
     use arkret_models_collaboration::events_payloads::device_identity::{

@@ -1565,6 +1565,7 @@ fn envelope_actor(envelope: &Value, field: &str) -> Option<arkret_wire::ActorId>
     serde_json::from_value(envelope.get(field)?.clone()).ok()
 }
 
+#[cfg(test)]
 pub(super) fn ensure_key_authorize_event_matches_request(
     envelope: &Value,
     controller: &str,
@@ -1991,6 +1992,7 @@ pub(super) fn runtime_public_key_digest(
         .map_err(|error| AppError::param_invalid(format!("public_key is invalid: {error}")))
 }
 
+#[cfg(test)]
 pub(super) fn ensure_authorize_event_scope_within_requested(
     agent_record: &AgentPrincipalRecord,
     payload: &Value,

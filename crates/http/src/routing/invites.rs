@@ -15,6 +15,7 @@ use arkret_models_collaboration::governance::invite_addressing::{
     PrincipalLocator, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
     SelfInviteDispatchRequestBody,
 };
+#[cfg(test)]
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
 use arkret_models_collaboration::governance::realm_join_intake::{
     AuthorityLocatorSource, RealmJoinCandidate, RealmJoinCandidateServiceKind,
@@ -1787,6 +1788,7 @@ fn verified_locator_for_recipient(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn evaluate_contact_receive(
     state: &AppState,
     policy: &InviteReceivePolicy,
@@ -2428,7 +2430,7 @@ fn invite_locator_not_found() -> AppError {
 
 #[cfg(test)]
 mod invite_locator_security_tests {
-    use salvo::test::{ResponseExt, TestClient};
+
     use soland_services::identity::AccountProfileState;
     use soland_test_support::AppStateTestExt as _;
     use soland_test_support::pcr_genesis::PcrGenesisFixture;

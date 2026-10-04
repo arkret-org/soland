@@ -749,7 +749,6 @@ async fn terminal_target_keeps_canonical_position_without_breaking_the_joined_re
         space_payload(&realm, &actor, at, "list", "B", Some(&board_id), json!({})),
         at,
     );
-    let list_b_id = arkret_wire::SpaceId::from_event_id(&list_b.authority_commit.event.event_id);
     uow.commit_event(list_b.clone()).await.unwrap();
 
     let first = next_request(

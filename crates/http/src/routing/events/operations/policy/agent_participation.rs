@@ -195,22 +195,6 @@ pub async fn validate_agent_participation_ceiling(
     Ok(())
 }
 
-/// The `agent_participation_ceiling` row to UPSERT after an event with a
-/// ceiling change is accepted (projection write), or None.
-pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Option<Value> {
-    let (scope_kind, scope_key, child, _parents) = agent_participation_ceiling_change(operation)?;
-    Some(serde_json::json!({
-        "scope_kind": scope_kind,
-        "scope_key": scope_key,
-        "realm_id": operation.realm_id.as_str(),
-        "reply_message": child.reply_message,
-        "reaction_add": child.reaction_add,
-        "reaction_remove": child.reaction_remove,
-        "accept_third_party_mention": child.accept_third_party_mention,
-        "act_on_behalf": child.act_on_behalf,
-    }))
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AgentParticipationMode {
     ReplyMessage,

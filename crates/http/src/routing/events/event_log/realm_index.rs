@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 pub(super) fn event_string_field(
     object: &serde_json::Map<String, Value>,
     keys: &[&str],
@@ -7,20 +8,6 @@ pub(super) fn event_string_field(
     keys.iter()
         .find_map(|key| object.get(*key).and_then(Value::as_str))
         .map(ToOwned::to_owned)
-}
-
-/// True iff `ak.realm.create` is authored by the authenticated envelope actor.
-/// The genesis payload no longer duplicates `created_by`; creator membership
-/// is an explicit later slot in the atomic bootstrap unit.
-pub(super) fn realm_create_actor_is_creator(
-    object: &serde_json::Map<String, Value>,
-    actor: &str,
-) -> bool {
-    object
-        .get("actor_id")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
-        .is_some_and(|author| author.signing_principal_id().as_str() == actor)
 }
 
 /// True when an invite is authored by the authenticated inviter Account.
@@ -77,6 +64,7 @@ mod private_invite_tests {
     }
 }
 
+#[cfg(test)]
 /// True when a `ak.member.state` event is a self-authored join-policy entry by
 /// a not-yet-member applicant:
 ///   - `membership=knock` — stage 1 of the application-review path (join-policy.md §7.1); and
@@ -120,6 +108,7 @@ pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: 
     })
 }
 
+#[cfg(test)]
 /// Invite membership exemptions belong to the authenticated exact Account,
 /// never another Station's account or a service actor with the same signer.
 fn invite_event_account<'a>(
@@ -136,6 +125,7 @@ fn invite_event_account<'a>(
     actor.as_account_id()
 }
 
+#[cfg(test)]
 async fn directed_pending_invite_matches(
     state: &AppState,
     realm_id: &str,
@@ -164,6 +154,7 @@ async fn directed_pending_invite_matches(
         })
 }
 
+#[cfg(test)]
 pub(super) async fn member_join_accepts_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
@@ -196,6 +187,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     directed_pending_invite_matches(state, realm_id, invite_id, account).await
 }
 
+#[cfg(test)]
 pub(super) async fn invitee_cancels_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
@@ -219,6 +211,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     directed_pending_invite_matches(state, realm_id, invite_id, account).await
 }
 
+#[cfg(test)]
 pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
@@ -279,28 +272,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
         .is_none_or(|invitee_id| invitee_id == account)
 }
 
-/// Quick existence probe against the in-memory `state.realms` index used
-/// by the regular `realm_has_member` check. The envelope validator uses it
-/// to fail duplicate `ak.realm.create` with `realm_already_exists` before
-/// applying the genesis-member bootstrap exception.
-pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
-    let Ok(realm_id_typed) = arkret_identifiers::RealmId::new(realm_id.to_owned()) else {
-        return false;
-    };
-    state
-        .realm_directory()
-        .snapshot()
-        .get(&realm_id_typed)
-        .is_some()
-}
-
-/// AKP-0008 — public read of the realm index used by the dev provisioning
-/// fan-out (`ensure_self_realm`) to decide whether the controller self realm
-/// genesis event still needs to be submitted.
-pub(in crate::routing) fn realm_is_indexed(state: &AppState, realm_id: &str) -> bool {
-    realm_exists_in_index(state, realm_id)
-}
-
+#[cfg(test)]
 /// When an `ak.realm.create` Event commits, materialise the in-memory Realm
 /// directory entry. Ordinary Collaboration genesis does not seed creator
 /// membership here: its final explicit `ak.member.state(join)` slot is the

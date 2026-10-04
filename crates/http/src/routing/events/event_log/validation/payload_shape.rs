@@ -23,6 +23,7 @@ use super::super::*;
 /// values exist only in the entry's prose notes, so they stay spelled out
 /// here until the registry projects them.
 const SIDECAR_FORBIDDEN_WIRE_CONTEXT: &str = "plaintext_metadata_or_shared_scope_payload";
+
 const SIDECAR_FORBIDDEN_WIRE_STRING_VALUES: &[&str] = &[
     arkret_wire::SchemaId::AGENT_SIDECAR_EVENT_EXCHANGE_BINDING_V1,
     arkret_wire::SchemaId::AGENT_SIDECAR_EXCHANGE_CONTROL_V1,
@@ -224,7 +225,6 @@ pub(super) fn validate_event_audience_fields(
     Ok(())
 }
 
-#[cfg(test)]
 mod tests {
     use super::*;
 

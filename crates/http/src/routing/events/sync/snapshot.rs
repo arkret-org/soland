@@ -257,6 +257,7 @@ pub(crate) async fn build_sync_snapshot(
     response
 }
 
+#[cfg(test)]
 pub(crate) async fn projection_record_visible_to_session(
     state: &AppState,
     event: &ProjectedEvent,
@@ -313,29 +314,7 @@ pub(crate) async fn projection_record_visible_to_session(
     )
 }
 
-pub(crate) async fn projection_event_value_visible_to_session(
-    state: &AppState,
-    event: &Value,
-    session: Option<&SessionIdentityState>,
-) -> bool {
-    let Some(realm_id) = event.get("realm_id").and_then(Value::as_str) else {
-        return false;
-    };
-    let Some(created_at) = event
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| {
-            DateTime::parse_from_rfc3339(value)
-                .ok()
-                .map(|dt| dt.with_timezone(&Utc))
-        })
-    else {
-        return false;
-    };
-    let sender = event.get("sender").and_then(Value::as_str);
-    realm_event_visible_to_session(state, realm_id, created_at, sender, session).await
-}
-
+#[cfg(test)]
 fn projection_event_scope_circle_id(
     projection: &ProjectionState,
     event: &ProjectedEvent,
@@ -393,6 +372,7 @@ fn projection_event_scope_circle_id(
     None
 }
 
+#[cfg(test)]
 pub(super) fn circle_scope_visible_to_session(
     state: &AppState,
     projection: &ProjectionState,

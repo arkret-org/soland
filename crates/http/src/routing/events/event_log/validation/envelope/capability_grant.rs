@@ -32,7 +32,6 @@ pub(super) fn validate_capability_grant_body(
     Ok(())
 }
 
-#[cfg(test)]
 mod tests {
     use serde_json::json;
 

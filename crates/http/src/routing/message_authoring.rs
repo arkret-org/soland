@@ -409,13 +409,6 @@ mod tests {
         }
     }
 
-    fn test_actor(state: &AppState) -> ActorId {
-        ActorId::account(AccountId::new(
-            DidCoreId::new(LEADER).unwrap(),
-            state.service_core_id(),
-        ))
-    }
-
     fn event_ref(seed: u8) -> EventId {
         EventId::from_digest(DigestSuite::Sha256, [seed; 32])
     }

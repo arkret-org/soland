@@ -1,17 +1,18 @@
+#[cfg(test)]
 mod audit;
+#[cfg(test)]
 mod enrollment;
 mod envelope;
+#[cfg(test)]
 mod mls_governance;
+#[cfg(test)]
 mod payload_shape;
 
-pub(crate) use audit::is_encrypted_message;
-pub(in crate::routing) use audit::validate_watch_set_others_audit_pairs;
-pub(crate) use envelope::canonical_json_hash;
-pub(in crate::routing) use envelope::{
-    PrivateInviteEnvelope, validate_join_gate_proof_signatures, validate_private_invite_envelope,
-};
 #[cfg(test)]
-pub(super) use envelope::{validate_event_proofs, validate_event_schema_and_payload};
+pub(super) use envelope::validate_event_proofs;
+#[cfg(test)]
+pub(super) use envelope::validate_event_schema_and_payload;
+pub(in crate::routing) use envelope::{PrivateInviteEnvelope, validate_private_invite_envelope};
 #[cfg(test)]
 pub(crate) use mls_governance::payload_declares_media_plaintext_service;
 #[cfg(test)]

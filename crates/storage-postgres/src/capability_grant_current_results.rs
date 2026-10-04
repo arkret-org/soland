@@ -330,26 +330,6 @@ pub(crate) fn grant_is_active_at(
             .is_none_or(|value| value > accepted_at)
 }
 
-/// Whether `actor` may exercise one of `actions` over the whole Realm at this
-/// transaction's cut: it is the current Realm root controller, or an active
-/// covering Capability Grant names it (see
-/// [`crate::realm_authorization_cut::RealmAuthorizationCut::grants_cover_any`]).
-///
-/// The Realm root and every grant are Realm-stream typed current results, so a
-/// commit transaction holding the Realm authority lock reads a stable cut, and
-/// a REPEATABLE READ snapshot reads the same cut without row locks.
-pub(crate) async fn actor_holds_realm_action_in_connection(
-    conn: &mut AsyncPgConnection,
-    realm_id: &RealmId,
-    actor: &ActorId,
-    actions: &[&str],
-    at: chrono::DateTime<chrono::Utc>,
-) -> PersistenceResult<bool> {
-    let cut =
-        crate::realm_authorization_cut::RealmAuthorizationCut::read(conn, realm_id, actor).await?;
-    Ok(cut.actor_is_root_controller() || cut.grants_cover_any(actions, at))
-}
-
 fn root_sort_key(root: &AuthorityRootRef) -> PersistenceResult<Vec<u8>> {
     arkret_canonical::canonical_json_bytes(root).map_err(PersistenceError::database)
 }

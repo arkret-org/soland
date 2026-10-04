@@ -25,6 +25,7 @@ use super::{
     sql_query,
 };
 
+#[cfg(test)]
 /// Event kinds whose admission writes only disclosed current families. Any
 /// other accepted kind refuses the cut rather than risk an omitted result.
 pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[

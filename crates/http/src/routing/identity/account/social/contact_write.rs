@@ -3138,7 +3138,7 @@ mod device_authorization_account_tests {
             use arkret_models_collaboration::contact_operations::{
                 ContactProducerSigner, RequestAcceptanceReceiptCore,
             };
-            use ed25519_dalek::Signer as _;
+
             let source_key = ed25519_dalek::SigningKey::from_bytes(&[31; 32]);
             let holder_key = ed25519_dalek::SigningKey::from_bytes(&[29; 32]);
             let accepted_at = chrono::DateTime::parse_from_rfc3339("2026-09-09T00:00:00.000Z")

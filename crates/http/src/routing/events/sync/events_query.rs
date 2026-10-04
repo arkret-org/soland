@@ -63,17 +63,6 @@ pub(crate) fn events_subscribe_filter_digest(
     })))
 }
 
-fn events_subscribe_scope_key(
-    req: &Request,
-    session: Option<&SessionIdentityState>,
-    filter_digest: &str,
-) -> String {
-    format!(
-        "ak.self.committed_event.stream.subscribe.v1|{}|filter={filter_digest}",
-        subscribe_subject(req, session)
-    )
-}
-
 pub(crate) fn canonical_actor_selectors(
     actors: &[String],
 ) -> Result<BTreeSet<String>, soland_http::error::AppError> {
@@ -209,6 +198,7 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
     );
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 struct EventsQueryParts {
     realms: Vec<String>,
@@ -218,80 +208,6 @@ struct EventsQueryParts {
     order: String,
     limit: usize,
     filters: Option<Value>,
-}
-
-fn validate_events_query_order(order: &str) -> Result<(), soland_http::error::AppError> {
-    match order {
-        "default" | "ascending" | "descending" => Ok(()),
-        _ => Err(soland_http::error::AppError::param_invalid(
-            "order must be default, ascending, or descending",
-        )),
-    }
-}
-
-fn reject_events_query_filter_digest_pseudo_fields(
-    filters: Option<&Value>,
-) -> Result<(), soland_http::error::AppError> {
-    if filters.is_some_and(value_contains_filter_digest_pseudo_field) {
-        return Err(soland_http::error::AppError::param_invalid(
-            "filters must not contain cursor filter_digest fields",
-        ));
-    }
-    Ok(())
-}
-
-fn value_contains_filter_digest_pseudo_field(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => {
-            object.contains_key("_filter_digest")
-                || object.contains_key("filter_digest")
-                || object
-                    .values()
-                    .any(value_contains_filter_digest_pseudo_field)
-        }
-        Value::Array(values) => values.iter().any(value_contains_filter_digest_pseudo_field),
-        _ => false,
-    }
-}
-
-fn events_query_scope_digest(
-    realms: &[String],
-    actors: &[String],
-    filters: Option<&Value>,
-    order: &str,
-) -> String {
-    let realms = realms
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let actors = actors
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let binding = json!({
-        "operation_id": arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1,
-        "realms": realms,
-        "actors": actors,
-        "filters": filters.cloned().unwrap_or_else(|| json!({})),
-        "order": order,
-    });
-    sync_filter_digest(Some(&binding))
-}
-
-/// Scope digest an `ak.self.committed_event.read.scan.v1` backfill of one Realm's older
-/// history hashes to.
-///
-/// A window's `prev_cursor` MUST round-trip as that request's `before=`, and
-/// this path validates a presented cursor against the digest it recomputes from
-/// the request itself. Minting against the same function is what keeps the two
-/// from drifting apart: a plain Realm-scoped scan with no actor selector, no
-/// filters and the default order.
-pub(super) fn realm_history_scan_digest(realm: &RealmId) -> String {
-    events_query_scope_digest(&[realm.to_string()], &[], None, "default")
 }
 
 pub(super) fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
@@ -310,53 +226,18 @@ pub(super) fn events_query_cursor_error(error: SyncCursorError) -> soland_http::
     }
 }
 
-async fn events_query_cursor_target(
-    state: &AppState,
-    session: Option<&SessionIdentityState>,
-    filter_digest: &str,
-    cursor: Option<&str>,
-) -> Result<Option<String>, soland_http::error::AppError> {
-    let Some(cursor) = cursor else {
-        return Ok(None);
-    };
-    parse_and_validate_events_query_cursor(
-        cursor,
-        state,
-        session,
-        filter_digest,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .map(|cursor| Some(cursor.event_id))
-    .map_err(events_query_cursor_error)
-}
-
+#[cfg(test)]
 fn events_query_direction(parts: &EventsQueryParts) -> bool {
     parts.order == "descending"
         || (parts.order == "default" && (parts.before.is_some() || parts.after.is_none()))
 }
 
-fn events_query_cursor_and_stop(
-    parts: &EventsQueryParts,
-) -> (Option<String>, Option<String>, bool) {
-    let backward = events_query_direction(parts);
-    let cursor = if backward {
-        parts.before.clone().or_else(|| parts.after.clone())
-    } else {
-        parts.after.clone()
-    };
-    let stop = if backward {
-        parts.after.clone()
-    } else {
-        parts.before.clone()
-    };
-    (cursor, stop, backward)
-}
-
+#[cfg(test)]
 fn event_kind_visible_in_shared_realm_query(kind: &arkret_wire::EventKind) -> bool {
     *kind != arkret_wire::EventKind::ReadCursorAdvance
 }
 
+#[cfg(test)]
 /// Bounds are absolute canonical positions; order controls presentation only.
 fn canonical_query_page(
     ids: &[&str],
@@ -393,26 +274,8 @@ fn canonical_query_page(
         .map_or(after.is_some() && start > 1, |index| *index > 0);
     Ok((indices, has_more))
 }
-#[cfg(test)]
-async fn projection_matches_actor_selectors(
-    state: &AppState,
-    event: &soland_services::events::ProjectedEvent,
-    actors: &BTreeSet<String>,
-) -> Result<bool, soland_http::error::AppError> {
-    if actors.is_empty() {
-        return Ok(true);
-    }
-    let record = state
-        .event_queries()
-        .canonical_event(&event.event_id)
-        .await
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
-        .ok_or_else(|| {
-            soland_http::error::AppError::internal("actor filter requires the canonical Event")
-        })?;
-    Ok(actors.contains(&canonical_record_actor_key(&record)?))
-}
 
+#[cfg(test)]
 /// Enrich visible projection rows to the closed `CommittedEventView` union.
 /// Canonical rows return the complete signed Event and Commit. Content-hidden
 /// rows keep their stream slot with only the Commit and minimal withheld marker.
@@ -431,6 +294,7 @@ async fn full_events_from_projection_json(
     Ok(events)
 }
 
+#[cfg(test)]
 async fn event_read_row_from_projection_json(
     state: &AppState,
     row: &Value,
@@ -466,28 +330,7 @@ async fn event_read_row_from_projection_json(
     ))
 }
 
-/// Materialize the full Event envelope required by an `event` subscribe
-/// frame. Projection rows are useful for visibility filtering and pagination,
-/// but are not wire Event envelopes (`event_kind` vs `kind`, no actor_seq,
-/// prev_refs, proofs, ...). A redacted projection has no valid full Event
-/// representation, so it is omitted from this Event-only stream rather than
-/// mutating its canonical payload while retaining stale proofs and Event id.
-pub(crate) async fn full_event_from_projection_json(
-    state: &AppState,
-    row: &Value,
-) -> Option<arkret_wire::Event> {
-    if projection_row_is_redacted_message_tombstone(row) {
-        return None;
-    }
-    let event_id = row.get("event_id").and_then(Value::as_str)?;
-    if let Ok(Some(record)) = state.event_queries().canonical_event(event_id).await
-        && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
-    {
-        return Some(event);
-    }
-    None
-}
-
+#[cfg(test)]
 fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     row.get("event_kind")
         .and_then(Value::as_str)
@@ -509,7 +352,6 @@ mod tests {
     use super::*;
 
     const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
-    const TEST_ACTOR: &str = "did:web:alice.example";
     const TEST_ACTOR_CORE: &str = "ak:did_core:web:alice.example";
 
     #[test]
@@ -675,45 +517,6 @@ mod tests {
         assert_eq!(error.code, soland_http::error::ErrorCode::InternalError);
         assert!(error.message.contains("has no canonical Event record"));
     }
-}
-
-fn canonical_record_actor_key(
-    record: &soland_services::events::AcceptedEvent,
-) -> Result<String, soland_http::error::AppError> {
-    let actor: arkret_wire::ActorId = serde_json::from_value(
-        record
-            .envelope
-            .get("actor_id")
-            .cloned()
-            .unwrap_or(Value::Null),
-    )
-    .map_err(|error| {
-        soland_http::error::AppError::internal(format!("canonical Event actor is invalid: {error}"))
-    })?;
-    let key = actor.to_string();
-    if key != record.actor_id {
-        return Err(soland_http::error::AppError::internal(
-            "canonical Event actor index differs from its signed identity",
-        ));
-    }
-    Ok(key)
-}
-
-/// The old actor-wide replay cursor names only an Event id. The current
-/// authority-commit protocol has independent stream positions and no global
-/// actor order, so replay cannot assign a successor until the subscriber uses
-/// a stream-scoped Commit cursor.
-pub(crate) async fn actor_subscription_replay(
-    _state: &AppState,
-    _actors: &BTreeSet<String>,
-    after: Option<&str>,
-) -> Result<Option<(Vec<arkret_wire::Event>, bool)>, soland_http::error::AppError> {
-    let Some(_after) = after else {
-        return Ok(None);
-    };
-    Err(soland_http::error::AppError::internal(
-        "actor replay requires stream-scoped RealmCommit cursors",
-    ))
 }
 
 #[endpoint(operation_id = "ak.self.realm_state_snapshot.read.manifest_head")]

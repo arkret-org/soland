@@ -3,7 +3,7 @@ mod confirmed;
 use std::hash::{Hash as _, Hasher};
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{DeviceId, EventId, RealmId};
+use arkret_identifiers::RealmId;
 pub(crate) use confirmed::{ConfirmedDeviceHistory, load_confirmed_device_history};
 use serde_json::Value;
 use soland_services::ServiceError;
@@ -52,29 +52,6 @@ pub async fn current_device_generation(
         .map(|generation| DeviceGenerationView {
             current_ref: generation.current_device_generation_ref,
         }))
-}
-
-/// Recover the device mirror independently of generic timeline progress. No
-/// individual member of a mixed unit is published by this source-only rebuild.
-pub(crate) async fn recover_confirmed_device_projection(
-    state: &AppState,
-    realm_id: &RealmId,
-) -> Result<(), String> {
-    let Some(binding) = state
-        .persistence()
-        .principal_resolution_for_realm(realm_id)
-        .await
-        .map_err(|error| error.to_string())?
-    else {
-        return Ok(());
-    };
-    if binding.account_id.station_id != state.service_core_id() {
-        return Ok(());
-    }
-    load_confirmed_device_history(state, &binding.account_id)
-        .await?
-        .ok_or_else(|| "accepted PCR has no committed device history".to_owned())?;
-    Ok(())
 }
 
 fn generation_fenced(detail: &str) -> ServiceError {

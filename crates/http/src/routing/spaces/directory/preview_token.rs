@@ -231,6 +231,7 @@ pub(super) fn policy_array_contains(policy: &Value, field: &str, expected: &str)
 // Converged to the single crate-root canonical-digest helper (delegates
 // to SDK `canonical_sha256`); re-exported so directory call sites keep
 // referencing `canonical_value_digest`.
+#[cfg(test)]
 pub(super) use crate::canonical_value_digest;
 
 #[cfg(test)]

@@ -53,6 +53,7 @@ pub(crate) fn participation_from_value(row: &Value) -> ParticipationBits {
     }
 }
 
+#[cfg(test)]
 fn projected_strand_circle_id(state: &AppState, strand_id: &str) -> Option<Option<String>> {
     {
         let projection = state.projections().snapshot();
@@ -67,6 +68,7 @@ fn projected_strand_circle_id(state: &AppState, strand_id: &str) -> Option<Optio
     }
 }
 
+#[cfg(test)]
 pub(crate) fn scope_keys_for_message(
     state: &AppState,
     realm_id: &str,

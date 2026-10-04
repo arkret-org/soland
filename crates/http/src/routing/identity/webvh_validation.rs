@@ -353,30 +353,6 @@ pub fn validate_rotation_authorization_for_log(
     verify_sdk_chain(log)
 }
 
-pub fn validate_active_controller_proof(entry: &WebvhLogEntry) -> Result<(), WebvhValidationError> {
-    arkret_identity::verify_did_webvh_entry_controller_proofs(&entry.payload).map_err(|error| {
-        WebvhValidationError::RotationNotAuthorized {
-            at_index: 0,
-            reason: error.to_string(),
-        }
-    })
-}
-
-pub fn active_update_verification_methods(entry: &WebvhLogEntry) -> Vec<String> {
-    entry
-        .payload
-        .pointer("/parameters/updateKeys")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(|key| {
-            let key = key.strip_prefix("did:key:").unwrap_or(key);
-            format!("did:key:{key}#{key}")
-        })
-        .collect()
-}
-
 pub fn verify_webvh_log_proof(entry: &Value) -> Result<(), String> {
     arkret_identity::verify_did_webvh_entry_controller_proofs(entry)
         .map_err(|error| error.to_string())

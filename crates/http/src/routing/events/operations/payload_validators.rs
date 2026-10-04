@@ -437,6 +437,7 @@ pub(crate) fn validate_device_authorize_payload(operation: &Operation) -> Result
     payload.validate_wire_constraints()
 }
 
+#[cfg(test)]
 pub fn validate_encrypted_payload_envelope(
     content: &serde_json::Value,
 ) -> Result<(), &'static str> {

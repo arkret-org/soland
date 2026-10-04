@@ -73,11 +73,6 @@ pub(crate) enum AgentSignerEvidenceQuerySelector {
         actor: ActorId,
         verification_method: DidUrl,
     },
-    HistoricalEvent {
-        actor: ActorId,
-        verification_method: DidUrl,
-        event_id: EventId,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,10 +115,7 @@ pub(crate) async fn current_authenticated_agent_signer_evidence_for_record(
     let AgentSignerEvidenceQuerySelector::CurrentAdmission {
         actor,
         verification_method,
-    } = selector
-    else {
-        return Err(missing());
-    };
+    } = selector;
     let agent_id = &actor.as_account_id().ok_or_else(missing)?.principal_id;
     let owned;
     let agent = match frozen_agent {

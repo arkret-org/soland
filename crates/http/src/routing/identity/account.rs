@@ -141,45 +141,23 @@ pub(crate) async fn account_primary_handle_claim_for(
     }
 }
 
-/// Re-derive the registered local account's primary handle claim for
-/// `subject`, bound to `audience`. `None` when `subject` is not a known local
-/// account or has no primary localpart binding. Lets the
-/// historical directory subject-handle projection stayed consistent with the
-/// account viewer's `primary_handle_claim` so an account's own handle resolves
-/// through both read paths.
-pub(crate) async fn local_account_primary_handle_claim(
-    state: &AppState,
-    subject: &str,
-    audience: &str,
-) -> Option<Value> {
-    let principal_id = DidCoreId::new(subject.to_owned()).ok()?;
-    let account_id = arkret_wire::AccountId::new(principal_id, state.service_core_id().clone());
-    let account = state
-        .identities()
-        .account(&account_id)
-        .await
-        .ok()
-        .flatten()?;
-    account_primary_handle_claim_for(state, &account, audience).await
-}
 use crate::{JsonResult, json_ok};
 
 mod current_principal;
 mod social;
+#[cfg(test)]
+pub(crate) use social::direct_binding_matches_projection;
 use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, canonical_contact_digest, contact_assertion_signer,
-    contact_detached_jws, direct_binding_matches_projection, direction_version,
-    local_direction_current, local_requester_current_proof, materialize_contact_completions,
+    contact_detached_jws, direction_version, local_direction_current,
+    local_requester_current_proof, materialize_contact_completions,
     validate_request_receipt_cryptography, verify_contact_service_signature,
     verify_contact_service_signature_bytes,
 };
 pub(crate) mod lifecycle;
 // Re-export the lifecycle surface used by sibling routing modules.
-pub(crate) use lifecycle::{
-    AccountLifecycleChange, deactivation_peer_service_targets_for_account,
-    set_account_lifecycle_state,
-};
+pub(crate) use lifecycle::{AccountLifecycleChange, set_account_lifecycle_state};
 
 /// Deployment-private Account Authority projection edge. The canonical
 /// `ak.gate.account.command.register.v1` operation is owned by the Account
@@ -654,64 +632,6 @@ async fn enforce_account_registration_policy(
     )
 }
 
-pub(crate) async fn current_direct_founding_evidence(
-    state: &AppState,
-    founder: &arkret_wire::ActorId,
-    peer: &arkret_wire::ActorId,
-) -> Result<DirectConversationFoundingAuthorityEvidence, AppError> {
-    if let Some(basis) = agent_direct_authorization_basis(
-        state,
-        founder.signing_principal_id().as_str(),
-        peer.signing_principal_id().as_str(),
-    )
-    .await?
-    {
-        for event_ref in basis.event_refs {
-            let Some(accepted) = state
-                .event_queries()
-                .accepted_event(event_ref.as_str())
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-            else {
-                continue;
-            };
-            if accepted.kind != arkret_wire::EventKind::AgentProvision.as_str() {
-                continue;
-            }
-            let payload: arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload =
-                serde_json::from_value(accepted.envelope.get("payload").cloned().unwrap_or(Value::Null))
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-            if payload.agent_id != *peer.signing_principal_id()
-                || payload.controller_principal_id != *founder.signing_principal_id()
-                || accepted.actor_id != founder.to_string()
-                || accepted.canonical_digest != event_ref.event_digest().as_str()
-            {
-                return Err(AppError::internal(
-                    "accepted provision does not bind the founding pair",
-                ));
-            }
-            return DirectConversationFoundingAuthorityEvidence::from_agent_provision(
-                event_ref, &payload,
-            )
-            .map_err(|error| AppError::internal(error.to_string()));
-        }
-    } else if let Some(contact) =
-        accepted_contact_for_pair(state, founder, peer, "direct_message").await?
-    {
-        if let Some(evidence) =
-            social::direct::fresh_direct_contact_evidence(state, &contact).await?
-        {
-            return Ok(DirectConversationFoundingAuthorityEvidence::Human {
-                contact_round_evidence: evidence,
-                contact_round_continuity_chains: contact.contact_round_evidence_history.clone(),
-            });
-        }
-    }
-    Err(direct_resolve_precondition(
-        arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-        "current founding evidence is unavailable",
-    ))
-}
 
 async fn agent_direct_authorization_basis(
     state: &AppState,
@@ -2203,16 +2123,6 @@ async fn account_device_summary(
         .validate()
         .map_err(|error| AppError::internal(format!("device summary is invalid: {error}")))?;
     Ok(summary)
-}
-
-pub(crate) fn device_revocation_gate_record(
-    _record: soland_storage::DeviceRevocationTargetRecord,
-) -> Option<Result<arkret_wire::DeviceRevocationGateRecord, AppError>> {
-    // The old Control proposal/Seal snapshot has been retired. Its pending
-    // decision fields and generation sequence cannot be reconstructed from
-    // the accepted revoke Commit alone. Keep the legacy adapter fail closed
-    // until the caller consumes the typed current revocation result directly.
-    None
 }
 
 #[cfg(test)]

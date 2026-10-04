@@ -2,26 +2,8 @@ use super::*;
 pub(super) use crate::canonical_value_digest;
 
 const DID_INCEPTION_REF_ROLE: &str = "did_inception";
-const DID_RECOVERY_ANCHOR_REF_ROLE: &str = "did_recovery_anchor";
 
-pub(super) fn require_object_field(
-    object: &serde_json::Map<String, Value>,
-    key: &'static str,
-) -> Result<(), EventValidationError> {
-    match object.get(key) {
-        Some(Value::Object(_)) => Ok(()),
-        Some(_) => Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "event payload must be a JSON object",
-        )),
-        None => Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "param_missing",
-            "event payload is required",
-        )),
-    }
-}
+const DID_RECOVERY_ANCHOR_REF_ROLE: &str = "did_recovery_anchor";
 
 pub(super) fn principal_control_genesis_shape(
     object: &serde_json::Map<String, Value>,
@@ -216,7 +198,6 @@ fn principal_control_genesis_resolution_did(
     Ok(did)
 }
 
-#[cfg(test)]
 mod tests {
     use serde_json::json;
 

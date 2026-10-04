@@ -3,12 +3,16 @@ use arkret_identifiers::SidecarId;
 use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, AgentSidecarList, AgentSidecarView,
 };
+#[cfg(test)]
+use arkret_models_collaboration::agent_sidecar::SidecarAccessProvisioningPhase;
 use arkret_models_collaboration::agent_sidecar::{
     AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarMlsContext, AgentSidecarState,
-    PendingSidecarAccessReconciliation, SidecarAccessProvisioningPhase,
+    PendingSidecarAccessReconciliation,
 };
+#[cfg(test)]
+use arkret_models_collaboration::events_payloads::sidecar::AgentSidecarExchangeControlPayload;
 use arkret_models_collaboration::events_payloads::sidecar::{
-    AgentSidecarExchangeControlPayload, SidecarContextAttachPayload, SidecarCreatePayload,
+    SidecarContextAttachPayload, SidecarCreatePayload,
 };
 use arkret_models_collaboration::prepared_event_draft::PreparedEventDraft;
 use arkret_models_collaboration::sidecar_operations::{
@@ -17,7 +21,9 @@ use arkret_models_collaboration::sidecar_operations::{
     SidecarEnsureOutcome, SidecarEnsurePreparedExistingOutcome, SidecarEnsurePreparedNewOutcome,
     SidecarEnsurePreparedStatus, SidecarEnsureRequestBody,
 };
-use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
+#[cfg(test)]
+use arkret_models_crypto::MlsGovernanceBindingPayload;
+use arkret_models_crypto::SidecarMlsBinding;
 use arkret_wire::NonEmptyString;
 use salvo::oapi::extract::QueryParam;
 use soland_services::identity::{
@@ -264,77 +270,7 @@ fn sidecar_access_readiness(
     }
 }
 
-fn typed_agent_ids(agent_ids: &[String]) -> Result<Vec<arkret_wire::DidCoreId>, AppError> {
-    agent_ids
-        .iter()
-        .cloned()
-        .map(arkret_wire::DidCoreId::new)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))
-}
-
-pub(crate) async fn expected_sidecar_mls_binding(
-    state: &AppState,
-    record: &AgentSidecarRecord,
-) -> Result<SidecarMlsBinding, AppError> {
-    let realm =
-        RealmId::new(&record.realm_id).map_err(|error| AppError::internal(error.to_string()))?;
-    let sidecar = SidecarId::new(&record.sidecar_id)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let cut = state
-        .authority_commits()
-        .sidecar_participant_authority_cut(&realm, &sidecar, &record.controller_account_id)
-        .await
-        .map_err(|error| AppError::internal(format!("Sidecar accepted authority cut: {error}")))?
-        .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
-    Ok(SidecarMlsBinding {
-        sidecar_id: cut.sidecar_id,
-        participant_authority_digest: cut.participant_authority_digest,
-        authority_stream_head: cut.authority_stream_head,
-    })
-}
-
-/// Admission gate for `ak.agent.sidecar.exchange.control`. The Event is legal
-/// only for an attached native Sidecar source context and only from that
-/// Sidecar's controller; the service never decrypts the control plaintext. Every
-/// failure returns one uniform reason so unauthorized callers cannot probe
-/// Sidecar existence.
-pub(crate) fn validate_sidecar_exchange_control_event(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if operation.event_kind.as_str() != arkret_wire::EventKind::AgentSidecarExchangeControl.as_str()
-    {
-        return Ok(());
-    }
-    const REASON: &str = "sidecar_exchange_control_forbidden";
-    let mut wire_payload = operation.payload.clone();
-    if let Some(object) = wire_payload.as_object_mut() {
-        for field in ["event_id", "sender", "hlc"] {
-            object.remove(field);
-        }
-    }
-    let payload = serde_json::from_value::<AgentSidecarExchangeControlPayload>(wire_payload)
-        .map_err(|_| REASON)?;
-    let projection = state.projections().snapshot();
-    let sidecar = projection
-        .sidecars
-        .get(payload.sidecar_id.as_str())
-        .ok_or(REASON)?;
-    let normalized_context_ref =
-        serde_json::to_value(&payload.source_context_ref).map_err(|_| REASON)?;
-    if operation.context.sender.as_account_id() != Some(&sidecar.controller_account_id)
-        || sidecar.realm_id != operation.realm_id.as_str()
-        || !projection.sidecar_contexts.values().any(|context| {
-            context.sidecar_id == payload.sidecar_id.as_str()
-                && context.normalized_context_ref == normalized_context_ref
-        })
-    {
-        return Err(REASON);
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 /// Decode one signed MLS governance binding and apply its closed member rules:
 /// the five shared members, plus `participant_authority_digest` and
 /// `authority_stream_head` exactly for Sidecar scope, where the head holds
@@ -352,99 +288,7 @@ fn decode_mls_governance_binding(
     Ok(binding)
 }
 
-pub(crate) async fn validate_sidecar_mls_event_binding(
-    state: &AppState,
-    controller_device_id: &str,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if !matches!(
-        &operation.event_kind,
-        arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
-    ) {
-        return Ok(());
-    }
-    // Public MLS events name the binding `governance_binding`.
-    let binding_value = crate::routing::mls::payload_fields::governance_binding(&operation.payload)
-        .ok_or("mls_governance_binding_missing")?;
-    let binding = decode_mls_governance_binding(binding_value)?;
-    let Some(sidecar_id) = binding.sidecar_id() else {
-        return Ok(());
-    };
-    let sidecar_projection = state
-        .projections()
-        .snapshot()
-        .sidecars
-        .get(sidecar_id.as_str())
-        .cloned()
-        .ok_or("mls_sidecar_binding_mismatch")?;
-    let supplied = binding
-        .sidecar_binding()
-        .ok_or("mls_sidecar_binding_missing")?;
-    if supplied.sidecar_id.as_str() != sidecar_projection.sidecar_id {
-        return Err("mls_sidecar_binding_mismatch");
-    }
-    let record = state
-        .agent_pairings()
-        .sidecar(&sidecar_projection.sidecar_id)
-        .await
-        .map_err(|_| "mls_sidecar_binding_state_unavailable")?
-        .ok_or("mls_sidecar_binding_mismatch")?;
-    let _sidecar_guard = lock_sidecar_ensure(&record.realm_id, &record.controller_account_id).await;
-    let expected = expected_sidecar_mls_binding(state, &record)
-        .await
-        .map_err(|_| "mls_sidecar_binding_state_unavailable")?;
-    if supplied != expected {
-        return Err("mls_sidecar_binding_stale");
-    }
-    let payload_group_id = crate::routing::mls::payload_fields::mls_group_id(&operation.payload)
-        .ok_or("mls_group_id_missing")?;
-    if binding
-        .mls_group_id()
-        .map_err(|_| "mls_sidecar_binding_invalid")?
-        .as_str()
-        != payload_group_id.as_str()
-    {
-        return Err("mls_sidecar_binding_mismatch");
-    }
-    let current_group = state
-        .mls_groups()
-        .current(binding.effective_scope())
-        .await
-        .map_err(|_| "mls_sidecar_binding_state_unavailable")?
-        .map(|current| {
-            current
-                .value
-                .effective_scope
-                .canonical_mls_group_id()
-                .map(|group_id| group_id.to_string())
-        })
-        .transpose()
-        .map_err(|_| "mls_sidecar_binding_invalid")?;
-    match operation.event_kind.clone() {
-        arkret_wire::EventKind::MlsGenesis => {
-            if current_group.is_some()
-                || operation.context.sender.as_account_id()
-                    != Some(&sidecar_projection.controller_account_id)
-                || !device_coordinates_match(
-                    operation
-                        .context
-                        .producer_device_id
-                        .as_ref()
-                        .map(|device_id| device_id.as_str()),
-                    controller_device_id,
-                )
-            {
-                return Err("mls_sidecar_genesis_authority_mismatch");
-            }
-        }
-        _ if current_group.as_deref() != Some(payload_group_id.as_str()) => {
-            return Err("mls_sidecar_group_mismatch");
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn device_coordinates_match(projected: Option<&str>, authenticated: &str) -> bool {
     !authenticated.is_empty()
         && projected.is_some_and(|projected| !projected.is_empty() && projected == authenticated)

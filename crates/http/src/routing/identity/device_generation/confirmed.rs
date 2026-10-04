@@ -31,10 +31,6 @@ impl ConfirmedDeviceAuthorization {
         &self.event_id
     }
 
-    pub(crate) fn device_id(&self) -> &DeviceId {
-        &self.device_id
-    }
-
     pub(crate) fn authorized_generation_ref(&self) -> u64 {
         self.generation
     }
@@ -56,10 +52,6 @@ impl ConfirmedDeviceHistory {
 
     pub(crate) fn confirmed_head(&self) -> &CommitStreamHead {
         &self.head
-    }
-
-    pub(crate) fn current_generation(&self) -> u64 {
-        self.current_generation
     }
 
     pub(crate) fn current_authorization(

@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+#[cfg(test)]
 pub(crate) fn mls_group_id(payload: &Value) -> Option<String> {
     let scope = group_state_effective_scope(payload)?;
     serde_json::from_value::<arkret_wire::ScopeRef>(scope)
@@ -17,10 +18,12 @@ pub(crate) fn governance_binding(value: &Value) -> Option<&Value> {
     value.get("governance_binding")
 }
 
+#[cfg(test)]
 pub(crate) fn commit_base_epoch(payload: &Value) -> Option<u64> {
     governance_binding(payload)?.get("previous_epoch")?.as_u64()
 }
 
+#[cfg(test)]
 pub(crate) fn group_state_effective_scope(payload: &Value) -> Option<Value> {
     governance_binding(payload)?.get("effective_scope").cloned()
 }
