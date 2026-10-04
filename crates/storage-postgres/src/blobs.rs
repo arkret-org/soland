@@ -85,6 +85,40 @@ impl BlobStore for PgBlobStore {
         })
     }
 
+    async fn put_if_absent(&self, blob_ref: &str, record: &BlobRecord) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::realm_identity::ensure_optional_realm_pk(&mut conn, record.realm_id.as_deref())
+            .await?;
+        let payload = serde_json::json!({"encryption": record.encryption.clone()});
+        let written = sql_query(
+            "INSERT INTO blobs \
+             (id,sha256,media_type,filename,uploaded_by,realm_id,size_bytes, \
+              storage_backend,storage_key,payload,legal_hold,redacted,visibility,created_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) \
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind::<Text, _>(blob_ref)
+        .bind::<Text, _>(&record.sha256)
+        .bind::<Text, _>(&record.media_type)
+        .bind::<Nullable<Text>, _>(&record.filename)
+        .bind::<Text, _>(&record.uploaded_by)
+        .bind::<Nullable<Text>, _>(record.realm_id.as_deref())
+        .bind::<BigInt, _>(record.size_bytes)
+        .bind::<Text, _>(&record.storage_backend)
+        .bind::<Text, _>(&record.storage_key)
+        .bind::<Jsonb, _>(&payload)
+        .bind::<Bool, _>(record.legal_hold)
+        .bind::<Bool, _>(record.redacted)
+        .bind::<Text, _>(record.visibility.as_str())
+        .bind::<Timestamptz, _>(record.created_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(written == 1)
+    }
+
     async fn delete(&self, blob_ref: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -172,5 +206,63 @@ impl TryFrom<BlobRow> for BlobRecord {
             uploaded_by: row.uploaded_by,
             created_at: row.created_at,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_models_collaboration::objects::blob::BlobVisibility;
+
+    use super::*;
+    use crate::test_database::TestDatabase;
+
+    #[tokio::test]
+    async fn public_material_cache_is_create_only_and_preserves_redaction_and_metadata() {
+        let database = TestDatabase::lease().await;
+        let store = PgBlobStore {
+            pool: database.pool(),
+        };
+        let digest = arkret_canonical::sha256_digest(b"public cache fixture");
+        let blob_ref = format!("ak:blob:{digest}");
+        let original = BlobRecord {
+            sha256: digest.trim_start_matches("sha256:").into(),
+            size_bytes: 20,
+            storage_backend: "local".into(),
+            storage_key: "existing-public-material".into(),
+            media_type: "application/octet-stream".into(),
+            filename: Some("original".into()),
+            realm_id: None,
+            encryption: None,
+            legal_hold: true,
+            redacted: true,
+            visibility: BlobVisibility::Public,
+            uploaded_by: "ak:did_core:web:original.example".into(),
+            created_at: chrono::Utc::now(),
+        };
+        store.put(&blob_ref, &original).await.unwrap();
+        let mut cached = original.clone();
+        cached.legal_hold = false;
+        cached.redacted = false;
+        cached.filename = None;
+        cached.storage_key = "replacement".into();
+        cached.uploaded_by = "ak:did_core:web:replacement.example".into();
+        assert!(!store.put_if_absent(&blob_ref, &cached).await.unwrap());
+        let retained = store.get(&blob_ref).await.unwrap().unwrap();
+        assert!(retained.redacted && retained.legal_hold);
+        assert_eq!(retained.filename, original.filename);
+        assert_eq!(retained.storage_key, original.storage_key);
+        assert_eq!(retained.uploaded_by, original.uploaded_by);
+        assert_eq!(retained.visibility, original.visibility);
+        let new_ref = format!(
+            "ak:blob:{}",
+            arkret_canonical::sha256_digest(b"new public cache fixture")
+        );
+        let (first, second) = tokio::join!(
+            store.put_if_absent(&new_ref, &cached),
+            store.put_if_absent(&new_ref, &cached)
+        );
+        assert_ne!(first.unwrap(), second.unwrap());
+        assert!(!store.put_if_absent(&new_ref, &original).await.unwrap());
+        assert!(!store.get(&new_ref).await.unwrap().unwrap().redacted);
     }
 }

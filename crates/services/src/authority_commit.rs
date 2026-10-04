@@ -1537,6 +1537,19 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    pub async fn direct_conversation_replica_cut(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        pair_key: &arkret_wire::Hash,
+        participants: &[arkret_wire::ActorId; 2],
+    ) -> ServiceResult<Option<soland_storage::DirectConversationReplicaCut>> {
+        Ok(self
+            .store()
+            .direct_conversation_replica_cut(realm_id, account, pair_key, participants)
+            .await?)
+    }
+
     pub async fn object_projection_lists_for_actor(
         &self,
         realm_id: &arkret_wire::RealmId,

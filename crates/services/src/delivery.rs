@@ -115,6 +115,7 @@ pub use soland_storage::{
 pub trait BlobPort: Send + Sync {
     async fn blob(&self, blob_ref: &str) -> ServiceResult<Option<BlobState>>;
     async fn store_blob(&self, blob_ref: &str, blob: BlobState) -> ServiceResult<()>;
+    async fn store_blob_if_absent(&self, blob_ref: &str, blob: BlobState) -> ServiceResult<bool>;
     async fn blobs(&self) -> ServiceResult<Vec<BlobState>>;
 }
 
@@ -501,6 +502,13 @@ impl DeliveryService {
     pub async fn store_blob(&self, blob_ref: &str, blob: BlobState) -> ServiceResult<()> {
         self.blobs.store_blob(blob_ref, blob).await
     }
+    pub async fn store_blob_if_absent(
+        &self,
+        blob_ref: &str,
+        blob: BlobState,
+    ) -> ServiceResult<bool> {
+        self.blobs.store_blob_if_absent(blob_ref, blob).await
+    }
     pub async fn blobs(&self) -> ServiceResult<Vec<BlobState>> {
         self.blobs.blobs().await
     }
@@ -564,6 +572,13 @@ mod tests {
         }
         async fn store_blob(&self, _blob_ref: &str, _blob: BlobState) -> ServiceResult<()> {
             Ok(())
+        }
+        async fn store_blob_if_absent(
+            &self,
+            _blob_ref: &str,
+            _blob: BlobState,
+        ) -> ServiceResult<bool> {
+            Ok(false)
         }
         async fn blobs(&self) -> ServiceResult<Vec<BlobState>> {
             Ok(Vec::new())

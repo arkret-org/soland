@@ -3800,6 +3800,62 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .await
     }
 
+    async fn direct_conversation_replica_cut(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        pair_key: &arkret_wire::Hash,
+        participants: &[arkret_wire::ActorId; 2],
+    ) -> PersistenceResult<Option<soland_storage::DirectConversationReplicaCut>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            let caller = arkret_wire::ActorId::account(account.clone());
+            if participants[0] == participants[1]
+                || !participants.contains(&caller)
+                || crate::account_stream_scan::snapshot_realm_floor_in_connection(
+                    conn, realm_id, &caller,
+                )
+                .await?
+                .is_none()
+            {
+                return Ok(None);
+            }
+            let Some(authority) = sql_query(
+                "SELECT realm_id, generation, service_id, authority_ref, last_handoff_ref \
+                 FROM realm_authorities WHERE realm_id=$1",
+            )
+            .bind::<Text, _>(realm_id.as_str())
+            .get_result::<AuthorityRow>(&mut *conn)
+            .await
+            .optional()?
+            .map(authority_from_row)
+            .transpose()?
+            else {
+                return Ok(None);
+            };
+            let Some((head, entries)) = crate::replica_authorization::direct_current_evidence(
+                conn,
+                realm_id,
+                pair_key,
+                participants,
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(soland_storage::DirectConversationReplicaCut {
+                authority,
+                head,
+                current_state_entries: entries,
+            }))
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn sidecar_access_cut(
         &self,
         realm: &arkret_wire::RealmId,

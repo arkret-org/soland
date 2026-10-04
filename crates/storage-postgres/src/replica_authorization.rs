@@ -269,6 +269,405 @@ struct CurrentEvidenceRow {
     entry_json: serde_json::Value,
 }
 
+#[derive(diesel::QueryableByName)]
+struct MemberEvidenceRow {
+    #[diesel(sql_type = Text)]
+    member_id: String,
+    #[diesel(sql_type = Text)]
+    current_commit_id: String,
+    #[diesel(sql_type = BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type = Jsonb)]
+    value: serde_json::Value,
+}
+
+/// Point reads from the verified native prefix; unrelated object and message
+/// rows are neither loaded nor included in the resolver's change fence.
+pub(crate) async fn direct_current_evidence(
+    conn: &mut AsyncPgConnection,
+    realm: &RealmId,
+    pair_key: &arkret_wire::Hash,
+    participants: &[ActorId; 2],
+) -> PersistenceResult<Option<(arkret_wire::CommitStreamHead, Vec<TypedCurrentResult>)>> {
+    let stream = arkret_wire::CommitStreamRef::Realm {
+        realm_id: realm.clone(),
+    };
+    let Some(head) = verified_head(conn, &stream).await? else {
+        return Ok(None);
+    };
+    let known = diesel::sql_query(
+        "SELECT commit_id AS head_commit_id,stream_position AS head_stream_position \
+         FROM realm_commits WHERE stream_key=$1 \
+         UNION ALL SELECT anchor_commit_id AS head_commit_id,anchor_stream_position AS head_stream_position \
+         FROM replica_stream_anchors WHERE stream_key=$1 AND anchor_commit_id IS NOT NULL \
+         ORDER BY head_stream_position DESC LIMIT 1",
+    )
+    .bind::<Text, _>(crate::authority_commit::stream_key(&stream)?)
+    .get_result::<CutRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if known.is_none_or(|known| {
+        known.head_stream_position != i64::try_from(head.stream_position).unwrap_or(-1)
+            || known.head_commit_id != head.commit_id.as_str()
+    }) {
+        return Ok(None);
+    }
+    let mut members = diesel::sql_query(
+        "SELECT member_id,current_commit_id,current_stream_position,value \
+         FROM member_state_current_results WHERE realm_id=$1 AND member_id IN ($2,$3) \
+         ORDER BY member_id",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .bind::<Text, _>(participants[0].to_string())
+    .bind::<Text, _>(participants[1].to_string())
+    .load::<MemberEvidenceRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if members.len() != 2 {
+        return Ok(None);
+    }
+    // One witness is enough to prove that the immutable pair is no longer
+    // the complete joined roster. The existing membership index bounds it.
+    let additional = diesel::sql_query(
+        "SELECT member_id,current_commit_id,current_stream_position,value \
+         FROM member_state_current_results WHERE realm_id=$1 AND membership='join' \
+         AND member_id NOT IN ($2,$3) ORDER BY member_id LIMIT 1",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .bind::<Text, _>(participants[0].to_string())
+    .bind::<Text, _>(participants[1].to_string())
+    .get_result::<MemberEvidenceRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    members.extend(additional);
+    members.sort_by(|left, right| left.member_id.cmp(&right.member_id));
+    let mut selectors = vec![
+        CurrentSelector::DirectConversationBinding {
+            pair_key: pair_key.clone(),
+        },
+        CurrentSelector::MlsGroup {
+            scope_ref: ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+        },
+    ];
+    for member in &members {
+        selectors.push(CurrentSelector::MemberState {
+            actor_id: serde_json::from_str(&member.member_id).map_err(invalid)?,
+        });
+    }
+    let mut entries = Vec::with_capacity(selectors.len());
+    for selector in selectors {
+        let Some(row) = diesel::sql_query(
+            "SELECT jsonb_build_object('selector',selector,'source_stream_ref',source_stream_ref, \
+             'revision',jsonb_build_object('commit_id',current_commit_id,'stream_position',current_stream_position), \
+             'value',value) AS entry_json FROM replica_authorization_rows WHERE realm_id=$1 AND selector=$2",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .bind::<Jsonb, _>(serde_json::to_value(&selector).map_err(invalid)?)
+        .get_result::<CurrentEvidenceRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        else {
+            return Ok(None);
+        };
+        let entry: TypedCurrentResult = serde_json::from_value(row.entry_json).map_err(invalid)?;
+        let TypedCurrentResult::Value {
+            selector: found,
+            source_stream_ref,
+            revision,
+            value,
+        } = &entry;
+        if *found != selector
+            || *source_stream_ref != stream
+            || revision.stream_position > head.stream_position
+            || (revision.stream_position == head.stream_position
+                && revision.commit_id != head.commit_id)
+        {
+            return Ok(None);
+        }
+        if let CurrentSelector::MemberState { actor_id } = found {
+            let member = members
+                .iter()
+                .find(|member| member.member_id == actor_id.to_string())
+                .ok_or_else(|| invalid("selected member is outside the bounded roster"))?;
+            let _: arkret_wire::MemberStateCurrent =
+                serde_json::from_value(value.clone()).map_err(invalid)?;
+            if member.current_commit_id != revision.commit_id.as_str()
+                || u64::try_from(member.current_stream_position).ok()
+                    != Some(revision.stream_position)
+                || member.value != *value
+            {
+                return Ok(None);
+            }
+        }
+        entries.push(entry);
+    }
+    Ok(Some((head, entries)))
+}
+
+#[cfg(test)]
+mod direct_evidence_tests {
+    use super::*;
+    use crate::test_database::TestDatabase;
+    use crate::{RunQueryDsl, pg_conn};
+
+    #[tokio::test]
+    async fn bounded_direct_cut_ignores_other_objects_and_detects_roster_and_prefix_changes() {
+        let database = TestDatabase::lease().await;
+        let mut conn = pg_conn(&database.pool()).await.unwrap();
+        let genesis =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [1; 32]);
+        let realm = RealmId::from_event_id(&genesis);
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let key = crate::authority_commit::stream_key(&stream).unwrap();
+        let commit = arkret_wire::RealmCommitId::from_digest([2; 32]);
+        let next_commit = arkret_wire::RealmCommitId::from_digest([3; 32]);
+        let pair_key =
+            arkret_wire::Hash::new(arkret_canonical::sha256_digest(b"bounded pair")).unwrap();
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let actor = |name: &str| {
+            ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap(),
+                station.clone(),
+            ))
+        };
+        let pair = [actor("alice"), actor("bob")];
+        let mut head = arkret_wire::CommitStreamHead {
+            stream_ref: stream.clone(),
+            commit_id: commit.clone(),
+            stream_position: 0,
+        };
+        let at = chrono::Utc::now();
+        // This is a storage read fixture, not a signed MLS/product fixture.
+        diesel::sql_query("INSERT INTO realm_commits(commit_id,realm_id,stream_key,stream_ref,stream_position,governance_generation,commit_json,committed_at) VALUES($1,$2,$3,$4,0,0,'{}',$5)")
+            .bind::<Text,_>(commit.as_str()).bind::<Text,_>(realm.as_str()).bind::<Text,_>(&key)
+            .bind::<Jsonb,_>(serde_json::to_value(&stream).unwrap()).bind::<Timestamptz,_>(at)
+            .execute(&mut *conn).await.unwrap();
+        let entry =
+            |selector: CurrentSelector, value: serde_json::Value| TypedCurrentResult::Value {
+                selector,
+                source_stream_ref: stream.clone(),
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: commit.clone(),
+                    stream_position: 0,
+                },
+                value,
+            };
+        for selector in [
+            CurrentSelector::DirectConversationBinding {
+                pair_key: pair_key.clone(),
+            },
+            CurrentSelector::MlsGroup {
+                scope_ref: ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+            },
+        ] {
+            save_row(
+                &mut conn,
+                &realm,
+                &entry(selector, serde_json::json!({})),
+                at,
+            )
+            .await
+            .unwrap();
+        }
+        for member in &pair {
+            let value = serde_json::json!({"membership":"join"});
+            save_row(
+                &mut conn,
+                &realm,
+                &entry(
+                    CurrentSelector::MemberState {
+                        actor_id: member.clone(),
+                    },
+                    value.clone(),
+                ),
+                at,
+            )
+            .await
+            .unwrap();
+            diesel::sql_query("INSERT INTO member_state_current_results(realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,'join',$3,0,$4,$5)")
+                .bind::<Text,_>(realm.as_str()).bind::<Text,_>(member.to_string()).bind::<Text,_>(commit.as_str())
+                .bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(at).execute(&mut *conn).await.unwrap();
+        }
+        assert!(
+            direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        install_verified_head(&mut conn, &head, at).await.unwrap();
+        let (_, original) = direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(original.len(), 4);
+        let original_cut = soland_storage::DirectConversationReplicaCut {
+            authority: soland_storage::CurrentRealmAuthority {
+                realm_id: realm.clone(),
+                generation: 0,
+                service_id: station.clone(),
+                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(genesis),
+                last_handoff_ref: None,
+            },
+            head: head.clone(),
+            current_state_entries: original.clone(),
+        };
+        // A malformed unrelated selector/value must never be read or decoded.
+        diesel::sql_query("INSERT INTO replica_authorization_rows(realm_id,selector,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) SELECT $1,jsonb_build_object('unrelated_topic',n),$2,$3,0,'null',$4 FROM generate_series(1,1000) n")
+            .bind::<Text,_>(realm.as_str()).bind::<Jsonb,_>(serde_json::to_value(&stream).unwrap())
+            .bind::<Text,_>(commit.as_str()).bind::<Timestamptz,_>(at).execute(&mut *conn).await.unwrap();
+        assert_eq!(
+            direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+                .await
+                .unwrap()
+                .unwrap()
+                .1,
+            original
+        );
+        diesel::sql_query("INSERT INTO realm_commits(commit_id,realm_id,stream_key,stream_ref,stream_position,previous_commit_ref,governance_generation,commit_json,committed_at) VALUES($1,$2,$3,$4,1,$5,0,'{}',$6)")
+            .bind::<Text,_>(next_commit.as_str()).bind::<Text,_>(realm.as_str()).bind::<Text,_>(&key)
+            .bind::<Jsonb,_>(serde_json::to_value(&stream).unwrap()).bind::<Text,_>(commit.as_str()).bind::<Timestamptz,_>(at)
+            .execute(&mut *conn).await.unwrap();
+        assert!(
+            direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        head.commit_id = next_commit;
+        head.stream_position = 1;
+        install_verified_head(&mut conn, &head, at).await.unwrap();
+        let advanced_cut = soland_storage::DirectConversationReplicaCut {
+            head: head.clone(),
+            ..original_cut.clone()
+        };
+        assert!(advanced_cut.retains_resolver_facts(&original_cut));
+        assert!(!original_cut.retains_resolver_facts(&advanced_cut));
+        let mut replaced_cut = advanced_cut.clone();
+        let TypedCurrentResult::Value { revision, .. } = &mut replaced_cut.current_state_entries[0];
+        revision.commit_id = head.commit_id.clone();
+        revision.stream_position = head.stream_position;
+        assert!(!replaced_cut.retains_resolver_facts(&original_cut));
+        replaced_cut = advanced_cut;
+        replaced_cut.authority.generation += 1;
+        assert!(!replaced_cut.retains_resolver_facts(&original_cut));
+        assert_eq!(
+            direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+                .await
+                .unwrap()
+                .unwrap()
+                .1,
+            original
+        );
+        let third = actor("charlie");
+        let value = serde_json::json!({"membership":"join"});
+        diesel::sql_query("INSERT INTO member_state_current_results(realm_id,member_id,membership,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,'join',$3,0,$4,$5)")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(third.to_string()).bind::<Text,_>(commit.as_str())
+            .bind::<Jsonb,_>(&value).bind::<Timestamptz,_>(at).execute(&mut *conn).await.unwrap();
+        assert!(
+            direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        save_row(
+            &mut conn,
+            &realm,
+            &entry(
+                CurrentSelector::MemberState {
+                    actor_id: third.clone(),
+                },
+                value,
+            ),
+            at,
+        )
+        .await
+        .unwrap();
+        let (_, extended) = direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(extended.len(), 5);
+        assert!(extended.iter().any(|entry| matches!(entry,TypedCurrentResult::Value { selector:CurrentSelector::MemberState { actor_id },.. } if actor_id==&third)));
+        let mut bad = entry(
+            CurrentSelector::MemberState {
+                actor_id: pair[0].clone(),
+            },
+            serde_json::json!({"membership":"leave"}),
+        );
+        save_row(&mut conn, &realm, &bad, at).await.unwrap();
+        assert!(
+            direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let TypedCurrentResult::Value {
+            source_stream_ref,
+            value,
+            ..
+        } = &mut bad;
+        *value = serde_json::json!({"membership":"join"});
+        *source_stream_ref = arkret_wire::CommitStreamRef::Realm {
+            realm_id: RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [4; 32],
+            )),
+        };
+        // Foreign source injection is refused by the verified installation boundary.
+        assert!(save_row(&mut conn, &realm, &bad, at).await.is_err());
+        let TypedCurrentResult::Value {
+            source_stream_ref,
+            revision,
+            ..
+        } = &mut bad;
+        *source_stream_ref = stream;
+        revision.stream_position = 2;
+        save_row(&mut conn, &realm, &bad, at).await.unwrap();
+        assert!(
+            direct_current_evidence(&mut conn, &realm, &pair_key, &pair)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let store = crate::authority_commit::PgAuthorityCommitStore {
+            pool: database.pool(),
+        };
+        use soland_storage::AuthorityCommitStore as _;
+        assert!(
+            store
+                .direct_conversation_replica_cut(
+                    &realm,
+                    actor("outsider").as_account_id().unwrap(),
+                    &pair_key,
+                    &pair
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .direct_conversation_replica_cut(
+                    &realm,
+                    pair[0].as_account_id().unwrap(),
+                    &pair_key,
+                    &pair
+                )
+                .await
+                .is_err()
+        );
+    }
+}
+
 /// Exact current evidence retained by verified bootstrap and contiguous
 /// replica folding. A stale or unverified stream cannot prove a missing
 /// historical Commit, and its row is excluded rather than reconstructed.

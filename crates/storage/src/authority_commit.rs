@@ -191,6 +191,27 @@ pub struct RealmStateSnapshotMaterial {
     pub retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor,
 }
 
+/// Bounded native evidence for a member Station's Direct resolver. Values
+/// remain SDK typed current; this carrier is never serialized or signed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DirectConversationReplicaCut {
+    pub authority: CurrentRealmAuthority,
+    pub head: CommitStreamHead,
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+}
+
+impl DirectConversationReplicaCut {
+    /// Unrelated accepted Events may advance the head while the exact
+    /// binding, MLS and membership revisions remain unchanged.
+    pub fn retains_resolver_facts(&self, previous: &Self) -> bool {
+        self.authority == previous.authority
+            && self.current_state_entries == previous.current_state_entries
+            && self.head.stream_ref == previous.head.stream_ref
+            && (self.head.stream_position > previous.head.stream_position
+                || self.head == previous.head)
+    }
+}
+
 /// Signs the exact material proved at an issuance cut. It runs inside that
 /// cut, so it must be synchronous and must not read other state.
 pub type RealmStateSnapshotSigner<'a> = &'a (
@@ -1944,6 +1965,21 @@ pub trait AuthorityCommitStore: Send + Sync {
         realm_id: &arkret_wire::RealmId,
         account: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
+
+    /// Read only the exact binding, Realm MLS group, two participant rows
+    /// and at most one additional joined member from a verified held cut.
+    /// The Account's existing readable interval must be proved at that cut.
+    async fn direct_conversation_replica_cut(
+        &self,
+        _realm_id: &arkret_wire::RealmId,
+        _account: &arkret_wire::AccountId,
+        _pair_key: &arkret_wire::Hash,
+        _participants: &[arkret_wire::ActorId; 2],
+    ) -> PersistenceResult<Option<DirectConversationReplicaCut>> {
+        Err(crate::PersistenceError::Internal(
+            "bounded Direct replica evidence is unavailable".into(),
+        ))
+    }
 
     /// Canonical object list DTOs derived from durable current at one caller
     /// membership/scope cut. This is an internal read API, not new wire state.

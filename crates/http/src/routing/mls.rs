@@ -431,8 +431,6 @@ async fn resolve_self_mls_group_state_material(
     req: &mut Request,
 ) -> JsonResult<arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialOutcome>
 {
-    use soland_storage::MlsMemberGroupStateMaterialRead as Read;
-
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let caller =
@@ -444,6 +442,17 @@ async fn resolve_self_mls_group_state_material(
     if request.caller_actor_id != caller || caller.route_service_id() != &state.service_core_id() {
         return Err(mls_group_state_material_not_found());
     }
+    json_ok(read_member_group_state_material(state, &request).await?)
+}
+
+pub(crate) async fn read_member_group_state_material(
+    state: &AppState,
+    request: &arkret_models_collaboration::mls_group_state_material::MlsMemberGroupStateMaterialReadRequestBody,
+) -> Result<
+    arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialOutcome,
+    AppError,
+> {
+    use soland_storage::MlsMemberGroupStateMaterialRead as Read;
     let peer_request = request.as_peer_request();
     let local_read = state
         .authority_commits()
@@ -465,7 +474,7 @@ async fn resolve_self_mls_group_state_material(
         .ok_or_else(mls_group_state_material_not_found)?;
     if authority.service_id == state.service_core_id() {
         let event = genesis.ok_or_else(mls_group_state_material_revision_unavailable)?;
-        return json_ok(serve_group_state_material(state, &peer_request, &event.event).await?);
+        return serve_group_state_material(state, &peer_request, &event.event).await;
     }
 
     crate::routing::realm_join::resolve_verified_authority_of_service(
@@ -503,7 +512,7 @@ async fn resolve_self_mls_group_state_material(
     outcome
         .validate_for_request(&peer_request)
         .map_err(|_| mls_group_state_material_revision_unavailable())?;
-    json_ok(outcome)
+    Ok(outcome)
 }
 
 // The body is parsed by hand after the peer trust check, so the extractor does

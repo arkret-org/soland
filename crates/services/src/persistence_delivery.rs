@@ -175,6 +175,13 @@ impl crate::delivery::BlobPort for PersistenceBlobs {
         self.0.blobs().put(blob_ref, &blob).await?;
         Ok(())
     }
+    async fn store_blob_if_absent(
+        &self,
+        blob_ref: &str,
+        blob: crate::delivery::BlobState,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self.0.blobs().put_if_absent(blob_ref, &blob).await?)
+    }
     async fn blobs(&self) -> crate::ServiceResult<Vec<crate::delivery::BlobState>> {
         Ok(self.0.blobs().snapshot_all().await?)
     }

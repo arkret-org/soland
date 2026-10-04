@@ -25,6 +25,7 @@ mod authority_self_event_unit;
 mod authority_sidecar_unit;
 pub(crate) use authority_sidecar_unit::commit_sidecar_ensure_unit;
 mod committed_replication;
+mod direct_conversation_replica;
 mod member_identity;
 mod notification;
 mod replica_anchor;

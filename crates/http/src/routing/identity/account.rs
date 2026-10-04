@@ -1593,10 +1593,9 @@ async fn direct_conversation_resolve(
         .transpose()?;
     if let Some(binding) = raw_binding {
         let coordinates = direct_coordinates(pair_key_hash, &binding)?;
-        let group_state = durable
+        let group_state_ref = durable
             .as_ref()
             .and_then(|facts| facts.group_state_ref.clone());
-        let group_state_ref = group_state.clone();
         let projection = state.projections().snapshot();
         if projection.realm_is_destroyed(&binding.realm_id)
             || projection.realm_is_tombstoned(&binding.realm_id)
@@ -1617,6 +1616,18 @@ async fn direct_conversation_resolve(
                 group_state_ref,
             });
         }
+        if let Some(facts) = &mut durable
+            && let Err(error) = state.refresh_direct_replica_group(&actor, facts).await
+        {
+            tracing::warn!(%error, "Direct Conversation verified replica current remains pending");
+            return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                retry_after_ms: None,
+            });
+        }
+        let group_state = durable
+            .as_ref()
+            .and_then(|facts| facts.group_state_ref.clone());
+        let group_state_ref = group_state.clone();
         let participant_set = binding
             .participants_unordered
             .iter()
