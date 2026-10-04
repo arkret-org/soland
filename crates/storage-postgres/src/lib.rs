@@ -147,6 +147,7 @@ mod relation_current_results;
 mod relation_disclosure;
 mod replica_authorization;
 mod replica_current;
+mod replica_direct_mls;
 mod replica_stream_listing;
 mod rsvp_current_results;
 mod security_transactions;

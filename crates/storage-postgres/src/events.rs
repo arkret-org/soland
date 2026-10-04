@@ -259,6 +259,38 @@ impl EventStore for PgEventStore {
             .collect()
     }
 
+    async fn foreign_direct_mls_input(
+        &self,
+        realm: &arkret_wire::RealmId,
+        caller: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<soland_storage::ForeignDirectMlsInput>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            crate::replica_direct_mls::input_in_connection(conn, realm, caller)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+    async fn install_foreign_direct_mls_public_state(
+        &self,
+        input: &soland_storage::ForeignDirectMlsInput,
+        result: &soland_storage::ForeignDirectMlsBase,
+        exact_pair: bool,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::replica_direct_mls::install_in_connection(conn, input, result, exact_pair)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
     async fn direct_conversation_founding_slot(
         &self,
         founder_id: &str,
@@ -305,9 +337,9 @@ impl EventStore for PgEventStore {
                       '[]'::jsonb) AS members \
              FROM direct_conversation_founding_slots s \
              LEFT JOIN direct_conversation_binding_current_results b ON b.realm_id=s.realm_id \
-             LEFT JOIN direct_conversation_group_states g ON g.realm_id=s.realm_id \
+             LEFT JOIN direct_conversation_group_states g ON g.realm_id=s.realm_id AND NOT EXISTS (SELECT 1 FROM replica_stream_anchors WHERE realm_id=s.realm_id) \
              LEFT JOIN mls_group_current_results m ON m.realm_id=s.realm_id \
-                AND m.value->'effective_scope'->>'kind'='realm' \
+                AND m.value->'effective_scope'->>'kind'='realm' AND NOT EXISTS (SELECT 1 FROM replica_stream_anchors WHERE realm_id=s.realm_id) \
              WHERE s.trust_domain_id=$1 AND s.pair_key=$2",
         )
         .bind::<Text, _>(trust_domain_id)
@@ -318,6 +350,7 @@ impl EventStore for PgEventStore {
         .map_err(PersistenceError::database)?;
         let mut facts = row.map(DirectConversationDurableState::try_from).transpose()?;
         if let Some(facts) = &mut facts {
+            crate::replica_direct_mls::apply_in_connection(conn, facts).await?;
             facts.peer_mls_admission = crate::direct_conversation_admission::peer_mls_admission_snapshot(
                 conn, &arkret_wire::RealmId::new(facts.founding_slot.realm_id.clone())
                     .map_err(|error| PersistenceError::Database(error.to_string()))?,
@@ -348,9 +381,9 @@ impl EventStore for PgEventStore {
                       '[]'::jsonb) AS members \
              FROM direct_conversation_founding_slots s \
              LEFT JOIN direct_conversation_binding_current_results b ON b.realm_id=s.realm_id \
-             LEFT JOIN direct_conversation_group_states g ON g.realm_id=s.realm_id \
+             LEFT JOIN direct_conversation_group_states g ON g.realm_id=s.realm_id AND NOT EXISTS (SELECT 1 FROM replica_stream_anchors WHERE realm_id=s.realm_id) \
              LEFT JOIN mls_group_current_results m ON m.realm_id=s.realm_id \
-                AND m.value->'effective_scope'->>'kind'='realm' \
+                AND m.value->'effective_scope'->>'kind'='realm' AND NOT EXISTS (SELECT 1 FROM replica_stream_anchors WHERE realm_id=s.realm_id) \
              WHERE s.realm_id=$1",
         )
         .bind::<Text, _>(realm_id)
@@ -360,6 +393,7 @@ impl EventStore for PgEventStore {
         .map_err(PersistenceError::database)?;
         let mut facts = row.map(DirectConversationDurableState::try_from).transpose()?;
         if let Some(facts) = &mut facts {
+            crate::replica_direct_mls::apply_in_connection(conn, facts).await?;
             facts.peer_mls_admission = crate::direct_conversation_admission::peer_mls_admission_snapshot(
                 conn, &arkret_wire::RealmId::new(facts.founding_slot.realm_id.clone())
                     .map_err(|error| PersistenceError::Database(error.to_string()))?,

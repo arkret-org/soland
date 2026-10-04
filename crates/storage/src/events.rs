@@ -48,6 +48,22 @@ pub trait EventStore: Send + Sync {
         &self,
         realm_id: &str,
     ) -> PersistenceResult<Option<crate::DirectConversationDurableState>>;
+    async fn foreign_direct_mls_input(
+        &self,
+        _realm: &arkret_wire::RealmId,
+        _caller: &arkret_wire::ActorId,
+    ) -> PersistenceResult<Option<crate::ForeignDirectMlsInput>> {
+        Ok(None)
+    }
+    /// Publish public replay facts only if the same verified cut is still current.
+    async fn install_foreign_direct_mls_public_state(
+        &self,
+        _input: &crate::ForeignDirectMlsInput,
+        _result: &crate::ForeignDirectMlsBase,
+        _exact_pair: bool,
+    ) -> PersistenceResult<bool> {
+        Ok(false)
+    }
     /// Accepted identity-anchor binding for one exact protocol Account.
     /// This is service-internal authority evidence and is never projected to
     /// holder sync as AccountData.

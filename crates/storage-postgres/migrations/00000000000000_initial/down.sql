@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS replica_direct_mls_public_states;
 DROP TABLE IF EXISTS agent_producer_signer_keys;
 DROP TABLE IF EXISTS agent_action_approval_current_results;
 DROP TABLE IF EXISTS public.applet_widget_tokens;

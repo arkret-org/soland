@@ -1280,3 +1280,30 @@ pub struct DirectConversationDurableState {
     pub peer_mls_admission: arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission,
     pub members: Vec<DirectConversationMemberCurrent>,
 }
+
+/// A member Station's already verified, bounded public MLS replay input.
+/// This is local provenance, never a wire carrier or governing admission state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ForeignDirectMlsInput {
+    pub realm_id: arkret_wire::RealmId,
+    pub caller: arkret_wire::ActorId,
+    pub service_id: arkret_wire::DidCoreId,
+    pub generation: u64,
+    pub head: arkret_wire::CommitStreamHead,
+    pub current: arkret_wire::TypedCurrentResult,
+    pub participants: std::collections::BTreeSet<arkret_wire::ActorId>,
+    pub history: Vec<(arkret_wire::RealmCommit, arkret_wire::Event)>,
+    pub base: Option<ForeignDirectMlsBase>,
+    pub replay_head: arkret_wire::CommitStreamHead,
+    pub complete: bool,
+    pub expected_initial_pair_ref: arkret_wire::EventId,
+}
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ForeignDirectMlsBase {
+    pub head: arkret_wire::CommitStreamHead,
+    pub current_event_ref: arkret_wire::EventId,
+    pub epoch: u64,
+    pub covered_revision: u64,
+    pub initial_pair_ref: Option<arkret_wire::EventId>,
+    pub public_state: Vec<u8>,
+}

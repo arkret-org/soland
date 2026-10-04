@@ -5596,3 +5596,12 @@ CREATE TABLE schema_definition_current_results (
  PRIMARY KEY(realm_id,schema_id),
  CHECK(value->>'$id'=schema_id)
 );
+
+-- Public-only local replay cache for a foreign Direct Realm. It cannot admit MLS.
+CREATE TABLE replica_direct_mls_public_states (
+ realm_id text PRIMARY KEY,
+ cut jsonb NOT NULL,
+ replay_base jsonb NOT NULL,
+ complete boolean NOT NULL,
+ exact_pair boolean NOT NULL
+);

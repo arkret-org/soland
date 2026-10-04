@@ -569,6 +569,21 @@ pub trait EventReadPort: Send + Sync {
         &self,
         realm_id: &str,
     ) -> ServiceResult<Option<soland_storage::DirectConversationDurableState>>;
+    async fn foreign_direct_mls_input(
+        &self,
+        _realm: &arkret_wire::RealmId,
+        _caller: &arkret_wire::ActorId,
+    ) -> ServiceResult<Option<soland_storage::ForeignDirectMlsInput>> {
+        Ok(None)
+    }
+    async fn install_foreign_direct_mls_public_state(
+        &self,
+        _input: &soland_storage::ForeignDirectMlsInput,
+        _result: &soland_storage::ForeignDirectMlsBase,
+        _exact: bool,
+    ) -> ServiceResult<bool> {
+        Ok(false)
+    }
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
     async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
@@ -683,6 +698,23 @@ impl EventQueryService {
     ) -> ServiceResult<Option<soland_storage::DirectConversationDurableState>> {
         self.events
             .direct_conversation_durable_state_for_realm(realm_id)
+            .await
+    }
+    pub async fn foreign_direct_mls_input(
+        &self,
+        realm: &arkret_wire::RealmId,
+        caller: &arkret_wire::ActorId,
+    ) -> ServiceResult<Option<soland_storage::ForeignDirectMlsInput>> {
+        self.events.foreign_direct_mls_input(realm, caller).await
+    }
+    pub async fn install_foreign_direct_mls_public_state(
+        &self,
+        input: &soland_storage::ForeignDirectMlsInput,
+        result: &soland_storage::ForeignDirectMlsBase,
+        exact: bool,
+    ) -> ServiceResult<bool> {
+        self.events
+            .install_foreign_direct_mls_public_state(input, result, exact)
             .await
     }
     pub async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {

@@ -438,17 +438,37 @@ pub(crate) async fn binding_current_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
 ) -> PersistenceResult<Option<DirectConversationBindingCurrentValue>> {
-    sql_query(
-        "SELECT value FROM direct_conversation_binding_current_results \
-         WHERE realm_id=$1 FOR SHARE",
-    )
-    .bind::<Text, _>(realm_id.as_str())
-    .get_result::<BindingRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?
-    .map(|row| stored(row.value, "direct_conversation_binding value"))
-    .transpose()
+    read_binding_current_in_connection(conn, realm_id, true).await
+}
+
+/// Read facts from an enclosing repeatable-read snapshot. This never locks an
+/// admission row: its caller either selects a read-only cut or already holds
+/// the Realm authority write lock before revalidating a public-cache install.
+pub(crate) async fn binding_current_snapshot_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+) -> PersistenceResult<Option<DirectConversationBindingCurrentValue>> {
+    read_binding_current_in_connection(conn, realm_id, false).await
+}
+
+async fn read_binding_current_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    lock: bool,
+) -> PersistenceResult<Option<DirectConversationBindingCurrentValue>> {
+    let query = if lock {
+        "SELECT value FROM direct_conversation_binding_current_results WHERE realm_id=$1 FOR SHARE"
+    } else {
+        "SELECT value FROM direct_conversation_binding_current_results WHERE realm_id=$1"
+    };
+    sql_query(query)
+        .bind::<Text, _>(realm_id.as_str())
+        .get_result::<BindingRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(|row| stored(row.value, "direct_conversation_binding value"))
+        .transpose()
 }
 
 /// The pair's current branch-specific authority: Contact consent or the

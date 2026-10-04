@@ -1482,6 +1482,47 @@ async fn read_principal_resolution_audit(
     json_ok(evidence)
 }
 
+fn direct_current_membership_blocker(
+    facts: Option<&soland_storage::DirectConversationDurableState>,
+    actor: &ActorId,
+    peer: &ActorId,
+) -> Option<DirectConversationSendBlocker> {
+    let facts = facts?;
+    let Some(binding) = facts
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.endorsements.first())
+    else {
+        return Some(DirectConversationSendBlocker::MemberCountInvalid);
+    };
+    let participants = binding
+        .value
+        .unordered_participant_ids
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let members = facts
+        .members
+        .iter()
+        .map(|member| &member.member_id)
+        .collect::<BTreeSet<_>>();
+    if binding.value.unordered_participant_ids.len() != 2
+        || participants.len() != 2
+        || members != participants
+    {
+        return Some(DirectConversationSendBlocker::MemberCountInvalid);
+    }
+    let joined = |participant: &ActorId| {
+        facts
+            .members
+            .iter()
+            .any(|member| &member.member_id == participant && member.membership == "join")
+    };
+    if !joined(actor) || !joined(peer) {
+        return Some(DirectConversationSendBlocker::PeerNotJoinedMls);
+    }
+    None
+}
+
 #[salvo::oapi::endpoint(
     operation_id = "ak.self.direct_conversation.read.resolve",
     tags("identity")
@@ -1593,9 +1634,10 @@ async fn direct_conversation_resolve(
         .transpose()?;
     if let Some(binding) = raw_binding {
         let coordinates = direct_coordinates(pair_key_hash, &binding)?;
-        let group_state_ref = durable
+        let group_state = durable
             .as_ref()
             .and_then(|facts| facts.group_state_ref.clone());
+        let mut group_state_ref = group_state.clone();
         let projection = state.projections().snapshot();
         if projection.realm_is_destroyed(&binding.realm_id)
             || projection.realm_is_tombstoned(&binding.realm_id)
@@ -1616,36 +1658,91 @@ async fn direct_conversation_resolve(
                 group_state_ref,
             });
         }
-        if let Some(facts) = &mut durable
-            && let Err(error) = state.refresh_direct_replica_group(&actor, facts).await
-        {
-            tracing::warn!(%error, "Direct Conversation verified replica current remains pending");
-            return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
-                retry_after_ms: None,
+        if let Some(blocker) = direct_current_membership_blocker(durable.as_ref(), &actor, &peer) {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![blocker],
+                group_state_ref,
             });
         }
-        let group_state = durable
-            .as_ref()
-            .and_then(|facts| facts.group_state_ref.clone());
-        let group_state_ref = group_state.clone();
-        let participant_set = binding
-            .participants_unordered
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let member_set = durable
-            .as_ref()
-            .into_iter()
-            .flat_map(|facts| facts.members.iter())
-            .map(|member| member.member_id.to_string())
-            .collect::<BTreeSet<_>>();
-        if binding.participants_unordered.len() != 2
-            || participant_set.len() != 2
-            || member_set != participant_set
+        if state.account_lifecycle_state(&session.actor) != "active"
+            || (agent_basis.is_none()
+                && state.account_lifecycle_state(peer.signing_principal_id().as_str()) != "active")
         {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
-                blockers: vec![DirectConversationSendBlocker::MemberCountInvalid],
+                blockers: vec![DirectConversationSendBlocker::PolicyStale],
+                group_state_ref,
+            });
+        }
+        if let Some(facts) = &durable
+            && facts.binding.is_some()
+        {
+            let realm = RealmId::new(facts.founding_slot.realm_id.clone())
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            let authority = state
+                .authority_commits()
+                .current_authority(&realm)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            if authority.is_some_and(|authority| authority.service_id != state.service_core_id())
+                && facts.group_current_exact_pair.is_none()
+            {
+                if !crate::state::foreign_direct_mls::refresh(state, &realm, &actor)
+                    .await
+                    .unwrap_or(false)
+                {
+                    return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                        retry_after_ms: Some(250),
+                    });
+                }
+                durable = state
+                    .event_queries()
+                    .direct_conversation_durable_state(
+                        state.config().trust_domain.as_str(),
+                        &pair_key,
+                    )
+                    .await
+                    .map_err(|error| AppError::internal(error.to_string()))?;
+                if durable
+                    .as_ref()
+                    .is_none_or(|facts| facts.group_current_exact_pair.is_none())
+                {
+                    return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                        retry_after_ms: Some(250),
+                    });
+                }
+            }
+        }
+        group_state_ref = durable
+            .as_ref()
+            .and_then(|facts| facts.group_state_ref.clone());
+        // The refresh may advance membership or lifecycle while material is
+        // in flight. Evaluate deterministic blockers again at the published cut.
+        if let Some(blocker) = direct_current_membership_blocker(durable.as_ref(), &actor, &peer) {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![blocker],
+                group_state_ref,
+            });
+        }
+        let projection = state.projections().snapshot();
+        if projection.realm_is_destroyed(&binding.realm_id)
+            || projection.realm_is_tombstoned(&binding.realm_id)
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::RealmTerminalFault],
+                group_state_ref,
+            });
+        }
+        if state.account_lifecycle_state(&session.actor) != "active"
+            || (agent_basis.is_none()
+                && state.account_lifecycle_state(peer.signing_principal_id().as_str()) != "active")
+        {
+            return json_ok(DirectConversationResolveOutcome::Suspended {
+                coordinates,
+                blockers: vec![DirectConversationSendBlocker::PolicyStale],
                 group_state_ref,
             });
         }
@@ -1657,31 +1754,6 @@ async fn direct_conversation_resolve(
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
-                group_state_ref,
-            });
-        }
-        let joined = |participant: &ActorId| {
-            durable.as_ref().is_some_and(|facts| {
-                facts
-                    .members
-                    .iter()
-                    .any(|member| &member.member_id == participant && member.membership == "join")
-            })
-        };
-        if !joined(&actor) || !joined(&peer) {
-            return json_ok(DirectConversationResolveOutcome::Suspended {
-                coordinates,
-                blockers: vec![DirectConversationSendBlocker::PeerNotJoinedMls],
-                group_state_ref,
-            });
-        }
-        if state.account_lifecycle_state(&session.actor) != "active"
-            || (agent_basis.is_none()
-                && state.account_lifecycle_state(peer.signing_principal_id().as_str()) != "active")
-        {
-            return json_ok(DirectConversationResolveOutcome::Suspended {
-                coordinates,
-                blockers: vec![DirectConversationSendBlocker::PolicyStale],
                 group_state_ref,
             });
         }
@@ -1724,7 +1796,7 @@ async fn direct_conversation_resolve(
         }
         send_blockers.sort_by_key(|blocker| format!("{blocker:?}"));
         send_blockers.dedup();
-        let Some(group_state_ref) = group_state else {
+        let Some(group_state_ref) = group_state_ref else {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],

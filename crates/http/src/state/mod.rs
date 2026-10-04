@@ -26,6 +26,7 @@ mod authority_sidecar_unit;
 pub(crate) use authority_sidecar_unit::commit_sidecar_ensure_unit;
 mod committed_replication;
 mod direct_conversation_replica;
+pub(crate) mod foreign_direct_mls;
 mod member_identity;
 mod notification;
 mod replica_anchor;

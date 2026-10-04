@@ -158,6 +158,29 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .direct_conversation_durable_state_for_realm(realm_id)
             .await?)
     }
+    async fn foreign_direct_mls_input(
+        &self,
+        realm: &arkret_wire::RealmId,
+        caller: &arkret_wire::ActorId,
+    ) -> crate::ServiceResult<Option<soland_storage::ForeignDirectMlsInput>> {
+        Ok(self
+            .0
+            .events()
+            .foreign_direct_mls_input(realm, caller)
+            .await?)
+    }
+    async fn install_foreign_direct_mls_public_state(
+        &self,
+        input: &soland_storage::ForeignDirectMlsInput,
+        result: &soland_storage::ForeignDirectMlsBase,
+        exact: bool,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .events()
+            .install_foreign_direct_mls_public_state(input, result, exact)
+            .await?)
+    }
     async fn canonical_event(
         &self,
         event_id: &str,
