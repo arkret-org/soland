@@ -1934,10 +1934,18 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
         pk: i64,
     }
     let mut conn = pool.get().await.unwrap();
-    let owner=diesel::sql_query("INSERT INTO accounts(principal_id,station_id) VALUES($1,$2) \
+    let wrong_owner=diesel::sql_query("INSERT INTO accounts(principal_id,station_id) VALUES($1,$2) \
         ON CONFLICT(principal_id,station_id) DO UPDATE SET principal_id=EXCLUDED.principal_id RETURNING pk")
         .bind::<Text,_>(agent.principal_id.as_str()).bind::<Text,_>(agent.station_id.as_str())
         .get_result::<Account>(&mut *conn).await.unwrap().pk;
+    let owner =
+        diesel::sql_query("INSERT INTO accounts(principal_id,station_id) VALUES($1,$2) ON CONFLICT(principal_id,station_id) DO UPDATE SET principal_id=EXCLUDED.principal_id RETURNING pk")
+            .bind::<Text, _>(controller.principal_id.as_str())
+            .bind::<Text, _>(controller.station_id.as_str())
+            .get_result::<Account>(&mut *conn)
+            .await
+            .unwrap()
+            .pk;
     drop(conn);
     let packages = soland_storage_postgres::PgMlsKeyPackageStore { pool: pool.clone() };
     let package = soland_storage::MlsKeyPackageRow {
@@ -1965,7 +1973,7 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
         created_at: at.timestamp(),
     };
     packages.put(&package).await.unwrap();
-    for mutation in [
+    let mut mutations = vec![
         "lifetime_not_after=0",
         "claimed_by_mls_group_id='already-claimed',claimed_at=1,claim_expires_at_unix_ms=2",
         "capabilities='[]'::jsonb",
@@ -1973,7 +1981,9 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
         "agent_key_authorize_event_id=(SELECT id FROM canonical_events WHERE kind='ak.realm.create' ORDER BY pk LIMIT 1)",
         "endpoint_verification_method='did:web:wrong-agent.example#runtime-1'",
         "agent_key_authorize_event_id=NULL,endpoint_verification_method='did:web:pairwise.example#key',intended_realm_id='another-realm'",
-    ] {
+    ].into_iter().map(str::to_owned).collect::<Vec<_>>();
+    mutations.push(format!("owner_account_pk={wrong_owner}"));
+    for mutation in mutations {
         let mut conn = pool.get().await.unwrap();
         diesel::sql_query(format!(
             "UPDATE mls_key_packages SET {mutation} WHERE id=$1"

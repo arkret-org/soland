@@ -77,6 +77,7 @@ async fn require_agent_membership_keypackage(
     realm: &arkret_wire::RealmId,
     pcr: &arkret_wire::RealmId,
     agent: &arkret_wire::AccountId,
+    controller: &arkret_wire::AccountId,
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
     let candidate = sql_query(
@@ -89,7 +90,7 @@ async fn require_agent_membership_keypackage(
            AND k.agent_key_id=e.envelope->'payload'->>'key_id' \
          JOIN realm_commits kc ON kc.commit_id=k.current_commit_id AND kc.realm_id=k.realm_id \
            AND kc.stream_position=k.current_stream_position \
-         WHERE kp.actor_id=$2 AND a.principal_id=$2 AND a.station_id=$3 \
+         WHERE kp.actor_id=$2 AND a.principal_id=$6 AND a.station_id=$3 \
            AND kp.device_id IS NULL AND kp.device_authorize_event_id IS NULL \
            AND kp.intended_realm_id IS NULL \
            AND kp.endpoint_verification_method=e.envelope->'payload'->>'verification_method' \
@@ -108,6 +109,7 @@ async fn require_agent_membership_keypackage(
     .bind::<Text, _>(agent.station_id.as_str())
     .bind::<diesel::sql_types::BigInt, _>(at.timestamp())
     .bind::<Text, _>(realm.as_str())
+    .bind::<Text, _>(controller.principal_id.as_str())
     .get_result::<AgentKeyPackageAuthorityRow>(&mut *conn)
     .await
     .optional()
@@ -583,6 +585,7 @@ async fn check_agent_controller_join(
             &event.realm_id,
             &provisioning.principal_control_realm_id,
             agent,
+            controller,
             commit.committed_at,
         )
         .await?;
