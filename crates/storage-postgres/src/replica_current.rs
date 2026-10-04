@@ -1343,12 +1343,6 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
-        arkret_wire::EventKind::SpaceParent => {
-            crate::space_current_results::commit_space_parent_in_connection(
-                conn, event, commit, false,
-            )
-            .await?;
-        }
         arkret_wire::EventKind::RelationCreate
         | arkret_wire::EventKind::RelationUpdate
         | arkret_wire::EventKind::RelationTombstone => {

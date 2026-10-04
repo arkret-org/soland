@@ -37,6 +37,13 @@ const EFFECT_MANIFEST: &[EffectRegistration] = &[
         slot: CacheSlot::FailClosed,
     },
     EffectRegistration {
+        kind: "ak.agent.interaction.set",
+        owner: EventEffectOwnership::TypedResultWriter,
+        scope: EventWireScope::DurableEvent,
+        reducer_input: true,
+        slot: CacheSlot::Shared(apply_durable_fact_dispatch),
+    },
+    EffectRegistration {
         kind: "ak.agent.key.authorize",
         owner: EventEffectOwnership::TypedResultWriter,
         scope: EventWireScope::DurableEvent,
