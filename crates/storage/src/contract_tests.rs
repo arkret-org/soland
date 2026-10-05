@@ -1457,6 +1457,9 @@ fn contract_applet_event_request(
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         parent_membership_admission: None,
         contact_projection: None,
 
@@ -2542,6 +2545,9 @@ pub async fn assert_event_commit_unit_of_work_contract(
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         parent_membership_admission: None,
         contact_projection: Some(ContactProjectionCommit {
             completion_intent: None,
@@ -2639,6 +2645,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
             applet_producer_guard: None,
             widget_token_gate: None,
             forwarded_producer_evidence: None,
+            forwarded_agent_producer: None,
+            agent_deployment_ceiling: arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
             parent_membership_admission: None,
             contact_projection: Some(ContactProjectionCommit {
                 completion_intent: None,

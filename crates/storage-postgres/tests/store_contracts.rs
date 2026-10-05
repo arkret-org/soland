@@ -34,6 +34,122 @@ use soland_storage_postgres::{
 };
 
 #[tokio::test]
+async fn postgres_agent_participation_cas_mismatch_has_zero_effect_and_serializes_replacement() {
+    use soland_storage::AgentParticipationStore;
+    use soland_storage_postgres::PgAgentParticipationStore;
+    let pool = test_pool().await;
+    let _guard = DB_GUARD.lock().await;
+    let store = PgAgentParticipationStore { pool: pool.clone() };
+    let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(uuid::Uuid::now_v7().as_bytes()),
+    ));
+    let scid = format!("z{}", uuid::Uuid::now_v7().simple());
+    let agent = format!("ak:did_core:webvh:{scid}");
+    PgAgentStore { pool: pool.clone() }
+        .put(AgentPrincipalRecord::new(
+            agent.clone(),
+            "ak:did_core:web:controller.example".to_owned(),
+            realm.to_string(),
+            arkret_wire::DidUrl::new(format!("did:webvh:{scid}:agent.example#managed-controller"))
+                .unwrap(),
+            arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
+            chrono::Utc::now(),
+        ))
+        .await
+        .unwrap();
+    let record = |version, allowed| {
+        serde_json::json!({
+            "agent_id":agent,"scope_kind":"realm","scope_key":format!("realm:{realm}"),
+            "realm_id":realm,"scope":{"kind":"realm","realm_id":realm},"version":version,
+            "reply_message":allowed,"reaction_add":allowed,"reaction_remove":allowed,
+            "accept_third_party_mention":allowed,"act_on_behalf":allowed
+        })
+    };
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type=diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    use diesel_async::RunQueryDsl;
+    let mut conn = pool.get().await.unwrap();
+    let count =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM canonical_realms WHERE wire_id=$1")
+            .bind::<diesel::sql_types::Text, _>(realm.as_str())
+            .get_result::<Count>(&mut conn)
+            .await
+            .unwrap()
+            .count;
+    assert!(
+        !store
+            .compare_and_swap_selection(record(6, true), 5)
+            .await
+            .unwrap()
+    );
+    assert!(store.list_selections(&agent).await.unwrap().is_empty());
+    let after =
+        diesel::sql_query("SELECT COUNT(*) AS count FROM canonical_realms WHERE wire_id=$1")
+            .bind::<diesel::sql_types::Text, _>(realm.as_str())
+            .get_result::<Count>(&mut conn)
+            .await
+            .unwrap()
+            .count;
+    assert_eq!(count, after);
+    assert!(
+        store
+            .compare_and_swap_selection(record(1, true), 0)
+            .await
+            .unwrap()
+    );
+    let (first, second) = tokio::join!(
+        store.compare_and_swap_selection(record(2, false), 1),
+        store.compare_and_swap_selection(record(2, false), 1)
+    );
+    assert_ne!(first.unwrap(), second.unwrap());
+    let rows = store.list_selections(&agent).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["version"], 2);
+    assert_eq!(rows[0]["reply_message"], false);
+}
+
+#[tokio::test]
+async fn postgres_agent_participation_ceiling_reads_accepted_governance_and_refuses_missing_current()
+ {
+    use soland_storage::AgentParticipationStore;
+    use soland_storage_postgres::PgAgentParticipationStore;
+    let pool = test_pool().await;
+    let _guard = DB_GUARD.lock().await;
+    let store = PgAgentParticipationStore { pool: pool.clone() };
+    let discussion = ordinary_realm::open_discussion(
+        &pool,
+        &format!("participation-current:{}", uuid::Uuid::now_v7()),
+    )
+    .await;
+    let scope = format!("realm:{}", discussion.realm_id());
+    let rows = store
+        .ceilings_for_scope_keys(&[scope.clone()])
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["scope_key"], scope);
+    assert_eq!(rows[0]["reply_message"], true);
+    let absent = format!(
+        "strand:{}:{}",
+        discussion.realm_id(),
+        arkret_wire::StrandId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [99; 32]
+        ))
+    );
+    assert!(
+        store
+            .ceilings_for_scope_keys(&[scope, absent])
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn postgres_audit_regression_satisfies_account_localpart_remove_contract() {
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
@@ -1042,6 +1158,9 @@ fn franking_event_request(
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         parent_membership_admission: None,
         contact_projection: None,
 

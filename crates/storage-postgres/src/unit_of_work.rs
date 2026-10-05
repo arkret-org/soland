@@ -2490,7 +2490,11 @@ async fn commit_one_in_connection(
         )
         .into());
     }
-    if request.self_producer_guard.is_some() && request.forwarded_producer_evidence.is_some() {
+    let producer_guards = usize::from(request.self_producer_guard.is_some())
+        + usize::from(request.forwarded_producer_evidence.is_some())
+        + usize::from(request.forwarded_agent_producer.is_some())
+        + usize::from(request.applet_producer_guard.is_some());
+    if producer_guards > 1 {
         return Err(PersistenceError::SchemaViolation(
             "an Event producer is either local or forwarded, never both".to_owned(),
         )
@@ -2513,6 +2517,24 @@ async fn commit_one_in_connection(
             request.authority_commit.commit.committed_at,
         )
         .await?;
+    }
+
+    if let Some(producer) = request.forwarded_agent_producer.as_ref() {
+        arkret_identity::agent_authority_evidence::verify_forwarded_agent_producer(
+            event,
+            producer.evidence(),
+            &producer.account().station_id,
+            request.authority_commit.commit.committed_at,
+            None,
+        )
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "{}: {error}",
+                error
+                    .error_code()
+                    .unwrap_or(arkret_wire::ErrorCode::SignatureInvalid)
+            ))
+        })?;
     }
 
     if let Some(guard) = request.applet_producer_guard.as_ref() {
@@ -2541,6 +2563,7 @@ async fn commit_one_in_connection(
         if request.self_producer_guard.is_none()
             && request.applet_producer_guard.is_none()
             && request.forwarded_producer_evidence.is_none()
+            && request.forwarded_agent_producer.is_none()
         {
             return Err(PersistenceError::Conflict(
                 "capability_denied: widget token cannot replace the original producer guard".into(),
@@ -2575,6 +2598,14 @@ async fn commit_one_in_connection(
         )
         .await?;
     }
+    crate::agent_participation_admission::require_current(
+        conn,
+        event,
+        &request.authority_commit.commit,
+        &request.authority_commit.expected_authority.service_id,
+        request.agent_deployment_ceiling,
+    )
+    .await?;
     crate::agent_interaction_current_results::require_shared_producer_in_connection(
         conn,
         event,
@@ -2687,6 +2718,10 @@ async fn commit_one_in_connection(
                 conn, event, commit, retained,
             )
             .await?;
+        }
+        if let Some(producer) = request.forwarded_agent_producer.as_ref() {
+            crate::agent_producer_evidence::retain_in_connection(conn, event, commit, producer)
+                .await?;
         }
         if let Some(guard @ soland_storage::SelfProducerCommitGuard::MimiFacade { .. }) =
             request.self_producer_guard.as_ref()

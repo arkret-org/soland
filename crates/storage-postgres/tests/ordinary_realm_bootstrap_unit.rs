@@ -905,6 +905,9 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         event: record,
         parent_membership_admission: None,
         contact_projection: None,

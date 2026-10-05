@@ -217,6 +217,7 @@ fn forward(
         event_submission: EventAdmissionSubmission::new(event),
         mls_genesis_material: None,
         producer_device_evidence: evidence,
+        producer_agent_evidence: None,
     }
 }
 

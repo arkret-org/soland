@@ -368,6 +368,8 @@ async fn publish_one(
             applet_producer_guard: None,
             widget_token_gate: None,
             forwarded_producer_evidence: None,
+            forwarded_agent_producer: None,
+            agent_deployment_ceiling: arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
             event: soland_storage::CanonicalEventRecord {
                 event_id: event.event_id.to_string(),
                 actor_id: event.actor_id.to_string(),

@@ -451,162 +451,6 @@ async fn grant_call_action(
     .await;
 }
 
-async fn put_agent_participation_ceiling(
-    state: &AppState,
-    scope_kind: &str,
-    scope_key: String,
-    realm_id: &str,
-    reply: bool,
-    accept_third_party_mention: bool,
-    act_on_behalf: bool,
-) {
-    state
-        .agent_participations()
-        .store_ceiling(json!({
-            "scope_kind": scope_kind,
-            "scope_key": scope_key,
-            "realm_id": realm_id,
-            "reply_message": reply,
-            "reaction_add": false,
-            "reaction_remove": false,
-            "accept_third_party_mention": accept_third_party_mention,
-            "act_on_behalf": act_on_behalf,
-        }))
-        .await
-        .expect("agent participation ceiling");
-}
-
-#[tokio::test]
-async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AS1XvoEwEve7yjNY6nVsquBYDGIKDIrmFJeSCVjzcASh".to_owned(),
-    )
-    .unwrap();
-    let circle_id = "ak:circle:AYzqeQ1hbLexQxBuFmhDzV2R1jsnUEvB0ELJR10hOgtK";
-    let strand_id = "ak:strand:Afi2EiRHW33xFiFy_zIBtdd1aCF7PHRGPjpsj-e4AWBC";
-    put_agent_participation_ceiling(
-        &state,
-        "circle",
-        crate::routing::agent_participation::circle_scope_key(realm_id.as_str(), circle_id),
-        realm_id.as_str(),
-        true,
-        false,
-        false,
-    )
-    .await;
-
-    let strand_create = op(
-        realm_id,
-        "000000009954",
-        arkret_wire::EventKind::StrandCreate,
-        json!({
-            "sender": "ak:did_core:web:alice.example",
-            "object": {
-                "id": strand_id,
-                "realm_id": "ak:realm:AS1XvoEwEve7yjNY6nVsquBYDGIKDIrmFJeSCVjzcASh",
-                "scope_circle_id": circle_id,
-                "metadata": {"title": "Scoped"},
-                "agent_participation": {
-                    "agent": {
-                        "reply_message": true,
-                        "reaction_add": false,
-                        "reaction_remove": false,
-                        "accept_third_party_mention": true,
-                        "act_on_behalf": false
-                    }
-                }
-            }
-        }),
-    );
-
-    assert_eq!(
-        validate_agent_participation_ceiling(&state, &[strand_create])
-            .await
-            .unwrap_err(),
-        "agent_participation_ceiling_widen"
-    );
-}
-
-#[tokio::test]
-async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
-    let state = test_state();
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:AXwMLE98Oc2dOnJY9S9B1SAxdb1aEynHmeXriuZR3FXU".to_owned(),
-    )
-    .unwrap();
-    let circle_id = "ak:circle:AaUAN_rEJJKU7XaSLZMiAC3dbFtb6rKXV-89cGay4X9e";
-    let strand_id = arkret_identifiers::StrandId::new(
-        "ak:strand:Ab1XwDyGoarexWM5f2N9k9zOpOIkgMjf0Ky-ngz87YjD".to_owned(),
-    )
-    .unwrap();
-    {
-        let mut projection = state.test_projection().lock();
-        projection.strands.insert(
-            strand_id.as_str().to_owned(),
-            soland_domain::reducer::StrandProjection {
-                strand_id: strand_id.as_str().to_owned(),
-                realm_id: realm_id.to_string(),
-                tracks: Default::default(),
-                title: "Scoped".to_owned(),
-                summary: None,
-                content: None,
-                encrypted_content: None,
-                fields: Default::default(),
-                state: soland_domain::reducer::ObjectLifecycleState::Active,
-                state_changed_at: None,
-                stage: None,
-                stage_changed_at: None,
-                created_by: "ak:did_core:web:alice.example".to_owned(),
-                created_at: chrono::Utc::now(),
-                updated_by: None,
-                updated_at: None,
-                schema_refs: Vec::new(),
-                schedule_revision_source: None,
-                scope_circle_id: Some(circle_id.to_owned()),
-            },
-        );
-    }
-    put_agent_participation_ceiling(
-        &state,
-        "circle",
-        crate::routing::agent_participation::circle_scope_key(realm_id.as_str(), circle_id),
-        realm_id.as_str(),
-        true,
-        false,
-        false,
-    )
-    .await;
-
-    let scope_keys = crate::routing::agent_participation::scope_keys_for_message(
-        &state,
-        realm_id.as_str(),
-        Some(strand_id.as_str()),
-    )
-    .expect("strand scope keys resolve");
-    let ceiling = crate::routing::agent_participation::resolve_effective_ceiling_for_scope_keys(
-        &state,
-        &scope_keys,
-    )
-    .await
-    .expect("ceiling rows resolve");
-    assert!(!ceiling.accept_third_party_mention);
-    let selection =
-        arkret_models_collaboration::governance::agent_participation::ParticipationBits {
-            reply_message: true,
-            reaction_add: true,
-            reaction_remove: false,
-            accept_third_party_mention: true,
-            act_on_behalf: false,
-        };
-    let effective =
-        arkret_models_collaboration::governance::agent_participation::effective_participation(
-            ceiling, selection,
-        );
-    assert!(selection.accept_third_party_mention);
-    assert!(!effective.accept_third_party_mention);
-}
-
 async fn register_agent_selection(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
@@ -1018,20 +862,16 @@ async fn act_on_behalf_private_approval_cannot_replace_exact_consumption() {
     insert_approved_agent_action(&state, &operation);
 
     assert_eq!(
-        validate_agent_reply_participation(
-            &state,
-            std::slice::from_ref(&operation),
-            covering_committed_at()
-        )
-        .await
-        .unwrap_err(),
+        validate_agent_act_on_behalf_approval(&state, &operation, agent, covering_committed_at())
+            .await
+            .unwrap_err(),
         "dependency_missing"
     );
     let mut substituted = operation;
     substituted.context.event_id =
         arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [99; 32]);
     assert_eq!(
-        validate_agent_reply_participation(&state, &[substituted], covering_committed_at())
+        validate_agent_act_on_behalf_approval(&state, &substituted, agent, covering_committed_at())
             .await
             .unwrap_err(),
         "dependency_missing"
@@ -1651,7 +1491,7 @@ async fn realm_wide_circle_management_is_narrowed_by_allowed_circle_ids() {
 }
 
 #[tokio::test]
-async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
+async fn act_on_behalf_agent_selection_and_grant_do_not_replace_accepted_current_or_approval() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AY3EjcWF5Gxh89mCnOZzpF_bpwVEmMWIXv9IkSHmVmMD".to_owned(),
@@ -1678,7 +1518,13 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     insert_approved_agent_action(&state, &message);
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[message], covering_committed_at())
+        validate_agent_reply_participation(&state, &[message.clone()], covering_committed_at())
+            .await
+            .unwrap_err(),
+        "agent_act_on_behalf_not_permitted"
+    );
+    assert_eq!(
+        validate_agent_act_on_behalf_approval(&state, &message, agent, covering_committed_at())
             .await
             .unwrap_err(),
         "dependency_missing"
@@ -1860,7 +1706,7 @@ async fn act_on_behalf_covered_at(
     let confirmation =
         commit_agent_action_approval(&state, &realm_id, controller, controller_did, payload).await;
     insert_resolved_agent_action(&state, &message, confirmation.as_str());
-    validate_agent_reply_participation(&state, &[message], covering_committed_at).await
+    validate_agent_act_on_behalf_approval(&state, &message, agent, covering_committed_at).await
 }
 
 /// `ak.vector.agent.action_approve_expiry.v1`: the approved Event is judged
@@ -2030,7 +1876,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
     );
 
     assert_eq!(
-        validate_agent_reply_participation(&state, &[message], covering_committed_at())
+        validate_agent_act_on_behalf_approval(&state, &message, agent, covering_committed_at())
             .await
             .unwrap_err(),
         "dependency_missing"

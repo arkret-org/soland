@@ -190,12 +190,19 @@ pub(crate) async fn admit_in_connection(
             {
                 return Err(schema("Circle create object differs from its signed Event"));
             }
-            if object.profile_ref.is_some() || object.agent_participation.is_some() {
+            if object.profile_ref.is_some() {
                 return Err(conflict(
                     ConflictCode::UnsupportedFeature,
-                    "Circle profile and Agent participation need their own admission cuts",
+                    "Circle profile needs its own admission cut",
                 ));
             }
+            crate::agent_participation_admission::require_child_tightens(
+                conn,
+                event.realm_id.as_str(),
+                None,
+                &serde_json::to_value(&object).map_err(PersistenceError::database)?,
+            )
+            .await?;
             let short_name = folded_short_name(&object.display.short_name)?;
             crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
                 conn,

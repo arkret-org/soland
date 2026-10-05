@@ -115,6 +115,13 @@ async fn commit_strand_create_current_result_with_authority_in_connection(
         return Ok(());
     }
     let (strand_id, value) = strand_create_current_value(event)?;
+    crate::agent_participation_admission::require_child_tightens(
+        conn,
+        event.realm_id.as_str(),
+        value.get("scope_circle_id").and_then(Value::as_str),
+        &value,
+    )
+    .await?;
     let expected_stream = match (
         &event.scope_ref,
         value.get("scope_circle_id").and_then(Value::as_str),
@@ -551,6 +558,13 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
                 "Strand post-patch value is invalid: {error}"
             ))
         })?;
+    crate::agent_participation_admission::require_child_tightens(
+        conn,
+        event.realm_id.as_str(),
+        next.scope_circle_id.as_ref().map(|id| id.as_str()),
+        &post,
+    )
+    .await?;
     let mut retained_tracks = next.tracks.clone();
     if let Some(track) = retained_tracks.get_mut("synthesis") {
         if let Some(previous) = current.tracks.get("synthesis") {

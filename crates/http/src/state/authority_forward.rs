@@ -85,6 +85,50 @@ fn verify_forwarded_producer(
     )?))
 }
 
+fn resolve_forwarded_producer(
+    state: &AppState,
+    peer: &AuthenticatedPeerContext,
+    event: &Event,
+    device: Option<&AccountDeviceSignerEvidence>,
+    agent: Option<&arkret_models_identity::AgentProducerEvidence>,
+    now: DateTime<Utc>,
+) -> ServiceResult<(
+    super::authority_self_event_unit::AdmittedProducer,
+    arkret_signatures::PublicKeyMaterial,
+)> {
+    if let Some(device) = verify_forwarded_producer(state, peer, event, device, now)? {
+        let key = forwarded_producer_key(Some(&device.evidence))?;
+        return Ok((
+            super::authority_self_event_unit::AdmittedProducer::Forwarded(device),
+            key,
+        ));
+    }
+    if let Some(agent) = agent {
+        let verified = arkret_identity::agent_authority_evidence::verify_forwarded_agent_producer(
+            event,
+            agent,
+            &peer.source_service_id,
+            now,
+            None,
+        )
+        .map_err(|error| {
+            ServiceError::protocol(
+                error.error_code().unwrap_or(ErrorCode::SignatureInvalid),
+                error,
+            )
+        })?;
+        let key = verified.key().clone();
+        return Ok((
+            super::authority_self_event_unit::AdmittedProducer::ForwardedAgent(verified),
+            key,
+        ));
+    }
+    Err(ServiceError::protocol(
+        ErrorCode::DependencyMissing,
+        "forwarded Service producer authority is unavailable",
+    ))
+}
+
 /// B: admit one forwarded ordinary Event at `now`.
 pub(crate) async fn admit_forwarded_event(
     state: &AppState,
@@ -98,18 +142,14 @@ pub(crate) async fn admit_forwarded_event(
         return Ok(outcome);
     }
     request.validate().map_err(wire_refusal)?;
-    let Some(evidence) = verify_forwarded_producer(
+    let (producer, key) = resolve_forwarded_producer(
         state,
         peer,
         event,
         request.producer_device_evidence.as_ref(),
+        request.producer_agent_evidence.as_ref(),
         now,
-    )?
-    else {
-        return Err(ServiceError::internal(
-            "cross-Station Agent or Service producer resolution is not connected",
-        ));
-    };
+    )?;
     if let Some(outcome) = super::authority_port::refuse_unrouted_event(state, event).await? {
         return Ok(outcome);
     }
@@ -122,13 +162,12 @@ pub(crate) async fn admit_forwarded_event(
                 "an MLS Event carries no approval signatures".to_owned(),
             ));
         }
-        let key = forwarded_producer_key(request.producer_device_evidence.as_ref())?;
         return super::authority_mls_unit::admit_mls_event(
             state,
             event,
             &[],
             request.mls_genesis_material.as_ref(),
-            super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+            producer,
             &key,
         )
         .await;
@@ -137,7 +176,7 @@ pub(crate) async fn admit_forwarded_event(
     super::authority_self_event_unit::commit_event_unit(
         state,
         &request.event_submission,
-        super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+        producer,
         super::authority_self_event_unit::SelfEventUnitEffects::default(),
     )
     .await
@@ -157,25 +196,20 @@ pub(super) async fn admit_forwarded_mls(
         return Ok(outcome);
     }
     request.validate().map_err(wire_refusal)?;
-    let Some(evidence) = verify_forwarded_producer(
+    let (producer, key) = resolve_forwarded_producer(
         state,
         peer,
         event,
         request.producer_device_evidence.as_ref(),
+        request.producer_agent_evidence.as_ref(),
         now,
-    )?
-    else {
-        return Err(ServiceError::internal(
-            "cross-Station Agent or Service producer resolution is not connected",
-        ));
-    };
-    let key = forwarded_producer_key(request.producer_device_evidence.as_ref())?;
+    )?;
     super::authority_mls_unit::admit_mls_event(
         state,
         event,
         &request.mls_submission.welcomes,
         None,
-        super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+        producer,
         &key,
     )
     .await
@@ -318,15 +352,15 @@ pub(crate) async fn forward_self_event(
     // Event behind at the forwarding Station.
     let material = forwarded_genesis_material(state, &submission.event).await?;
     let evidence = fresh_producer_device_evidence(state, &submission.event).await?;
+    let request = PeerAuthorityForwardEventRequest::new(submission, material, evidence)
+        .map_err(wire_refusal)?;
     // Retain the producer's exact signed Event before any forwarding attempt.
     // A transport failure leaves this row queued for an exact replay or a
     // later committed replica; neither path makes it visible as accepted.
     state
         .authority_commits()
-        .queue_event(&submission.event, crate::wire::now())
+        .queue_event(&request.event_submission.event, crate::wire::now())
         .await?;
-    let request = PeerAuthorityForwardEventRequest::new(submission, material, evidence)
-        .map_err(wire_refusal)?;
     send_forward(
         state,
         governance,
@@ -345,12 +379,12 @@ pub(super) async fn forward_self_mls(
     // Match ordinary forwarding: the live device gate precedes every durable
     // forwarding effect, including the local queued Event.
     let evidence = fresh_producer_device_evidence(state, &submission.commit_event).await?;
-    state
-        .authority_commits()
-        .queue_event(&submission.commit_event, crate::wire::now())
-        .await?;
     let request =
         PeerAuthorityForwardMlsRequest::new(submission, evidence).map_err(wire_refusal)?;
+    state
+        .authority_commits()
+        .queue_event(&request.mls_submission.commit_event, crate::wire::now())
+        .await?;
     send_forward(
         state,
         governance,

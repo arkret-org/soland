@@ -29,28 +29,20 @@ pub(crate) fn strand_scope_key(realm_id: &str, strand_id: &str) -> String {
 }
 
 pub(crate) fn participation_from_value(row: &Value) -> ParticipationBits {
-    ParticipationBits {
-        reply_message: row
-            .get("reply_message")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        reaction_add: row
-            .get("reaction_add")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        reaction_remove: row
-            .get("reaction_remove")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        accept_third_party_mention: row
-            .get("accept_third_party_mention")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        act_on_behalf: row
-            .get("act_on_behalf")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+    let mut bits = serde_json::Map::new();
+    for field in [
+        "reply_message",
+        "reaction_add",
+        "reaction_remove",
+        "accept_third_party_mention",
+        "act_on_behalf",
+    ] {
+        let Some(value) = row.get(field).filter(|value| value.is_boolean()) else {
+            return ParticipationBits::NONE;
+        };
+        bits.insert(field.to_owned(), value.clone());
     }
+    serde_json::from_value(Value::Object(bits)).unwrap_or(ParticipationBits::NONE)
 }
 
 #[cfg(test)]
@@ -95,10 +87,22 @@ pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     let Ok(rows) = state.agent_participations().ceilings(scope_keys).await else {
         return None;
     };
+    if scope_keys.is_empty()
+        || !scope_keys.iter().all(|key| {
+            rows.iter()
+                .filter(|row| row.get("scope_key").and_then(Value::as_str) == Some(key.as_str()))
+                .count()
+                == 1
+        })
+    {
+        return None;
+    }
     Some(
         rows.iter()
             .map(participation_from_value)
-            .fold(ParticipationBits::ALL, |acc, row| acc.intersect(row)),
+            .fold(state.config().agent_participation_ceiling, |acc, row| {
+                acc.intersect(row)
+            }),
     )
 }
 
@@ -122,7 +126,18 @@ pub(crate) async fn resolve_agent_participation_for_scope_keys(
         .agent_participations()
         .selections(agent_id)
         .await
-        .unwrap_or_default();
+        .ok()?;
+    let record = state.agent_pairings().agent(agent_id).await.ok()??;
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await
+    .ok()?;
+    crate::routing::identity::agent_pcr::agent_controller_account(state, &record)
+        .await
+        .ok()?;
     let selection = participation_from_value(selection_for_scope_keys(&selections, scope_keys)?);
     let ceiling = resolve_effective_ceiling_for_scope_keys(state, scope_keys).await;
     Some(ResolvedAgentParticipation {

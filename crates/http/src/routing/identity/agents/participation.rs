@@ -11,28 +11,7 @@ pub(super) fn participation_scope_kind(scope: &ParticipationScope) -> &'static s
 }
 
 pub(super) fn participation_from_value(row: &Value) -> ParticipationBits {
-    ParticipationBits {
-        reply_message: row
-            .get("reply_message")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        reaction_add: row
-            .get("reaction_add")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        reaction_remove: row
-            .get("reaction_remove")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        accept_third_party_mention: row
-            .get("accept_third_party_mention")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        act_on_behalf: row
-            .get("act_on_behalf")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    }
+    crate::routing::agent_participation::participation_from_value(row)
 }
 
 pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> AppError {
@@ -145,7 +124,7 @@ pub(super) async fn get_agent_participation(
     json_ok(load_agent_participation_outcome(state, &agent_id).await?)
 }
 
-async fn load_agent_participation_outcome(
+pub(crate) async fn load_agent_participation_outcome(
     state: &AppState,
     agent_id: &str,
 ) -> Result<AgentParticipationOutcome, AppError> {
@@ -156,16 +135,39 @@ async fn load_agent_participation_outcome(
         .map_err(|err| AppError::internal(format!("participation read failed: {err}")))?;
     let mut entries = Vec::with_capacity(selections.len());
     for row in &selections {
-        let Some(scope_value) = row.get("scope") else {
-            continue;
-        };
-        let Ok(scope) = serde_json::from_value::<ParticipationScope>(scope_value.clone()) else {
-            continue;
-        };
+        let scope_value = row.get("scope").ok_or_else(|| {
+            agent_participation_failed_precondition(
+                arkret_wire::ReasonCode::AGENT_PARTICIPATION_CEILING_UNRESOLVED,
+            )
+        })?;
+        let scope =
+            serde_json::from_value::<ParticipationScope>(scope_value.clone()).map_err(|_| {
+                agent_participation_failed_precondition(
+                    arkret_wire::ReasonCode::AGENT_PARTICIPATION_CEILING_UNRESOLVED,
+                )
+            })?;
         let selection = participation_from_value(row);
         let version = row.get("version").and_then(Value::as_u64).unwrap_or(0);
-        if version == 0 {
-            continue;
+        if version == 0
+            || version > MAX_PARTICIPATION_REPLACE_EXPECTED_VERSION
+            || row.get("agent_id").and_then(Value::as_str) != Some(agent_id)
+            || row.get("scope_key").and_then(Value::as_str) != Some(scope.scope_key().as_str())
+            || row.get("realm_id").and_then(Value::as_str) != Some(scope.realm_id().as_str())
+            || row.get("scope_kind").and_then(Value::as_str)
+                != Some(participation_scope_kind(&scope))
+            || [
+                "reply_message",
+                "reaction_add",
+                "reaction_remove",
+                "accept_third_party_mention",
+                "act_on_behalf",
+            ]
+            .iter()
+            .any(|key| row.get(*key).and_then(Value::as_bool).is_none())
+        {
+            return Err(agent_participation_failed_precondition(
+                arkret_wire::ReasonCode::AGENT_PARTICIPATION_CEILING_UNRESOLVED,
+            ));
         }
         entries.push(AgentParticipationEntry {
             scope,

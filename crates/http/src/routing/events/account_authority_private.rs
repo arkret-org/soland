@@ -10,6 +10,62 @@ use soland_services::authority_commit::AuthorityEventAdmissionOutcome;
 
 use crate::state::AppState;
 
+/// The configured Account Authority reads its own Station's controller state
+/// at issuance/refresh. This is not the controller-only public GET surface.
+#[handler]
+pub(super) async fn read_agent_participation(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<
+    arkret_models_collaboration::governance::agent_participation::AgentParticipationOutcome,
+> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    super::peer::authenticate_account_authority_private_request(state, req)?;
+    let (agent, controller) = req
+        .parse_json::<(arkret_wire::AccountId, arkret_wire::AccountId)>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid private Agent/controller Account binding"))?;
+    if agent.station_id != state.service_core_id() || controller.station_id != agent.station_id {
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::CapabilityDenied,
+            "private participation read belongs to another Station",
+        ));
+    }
+    let record = state
+        .agent_pairings()
+        .agent(agent.principal_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::new(
+                arkret_wire::ErrorCode::CapabilityDenied,
+                "Agent controller binding is unavailable",
+            )
+        })?;
+    if record.controller_principal_id != controller.principal_id.as_str()
+        || crate::routing::identity::agent_pcr::agent_controller_account(state, &record).await?
+            != controller
+    {
+        return Err(AppError::new(
+            arkret_wire::ErrorCode::CapabilityDenied,
+            "private participation read names another controller Account",
+        ));
+    }
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        chrono::Utc::now(),
+    )
+    .await?;
+    json_ok(
+        crate::routing::identity::agents::load_agent_participation_outcome(
+            state,
+            agent.principal_id.as_str(),
+        )
+        .await?,
+    )
+}
+
 /// Admit the `accepted_device` `ak.device.authorize` Event a device pairing
 /// finalize hands over from this deployment's Account Authority.
 ///
@@ -249,6 +305,57 @@ mod tests {
             arkret_wire::DidUrl::new("did:web:private-admission.example#key").unwrap(),
         );
         EventAdmissionSubmission::new(event)
+    }
+
+    #[tokio::test]
+    async fn agent_participation_private_read_rejects_missing_credentials_and_foreign_accounts() {
+        let state = private_channel_state();
+        let router = salvo::Router::new()
+            .hoop(salvo::affix_state::inject(state.clone()))
+            .push(crate::routing::events::account_authority_private_router());
+        let service = salvo::Service::new(router);
+        let principal =
+            arkret_wire::DidCoreId::new("ak:did_core:web:private-agent.example").unwrap();
+        let controller =
+            arkret_wire::DidCoreId::new("ak:did_core:web:private-controller.example").unwrap();
+        let local = (
+            arkret_wire::AccountId::new(principal.clone(), state.service_core_id()),
+            arkret_wire::AccountId::new(controller.clone(), state.service_core_id()),
+        );
+        let response = salvo::test::TestClient::post(
+            "http://server/account-authority/agent-participation/read",
+        )
+        .json(&local)
+        .send(&service)
+        .await;
+        assert!(matches!(
+            response.status_code,
+            Some(salvo::http::StatusCode::UNAUTHORIZED | salvo::http::StatusCode::FORBIDDEN)
+        ));
+        let foreign =
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap();
+        for accounts in [
+            (
+                arkret_wire::AccountId::new(principal, foreign.clone()),
+                local.1.clone(),
+            ),
+            (
+                local.0.clone(),
+                arkret_wire::AccountId::new(controller, foreign),
+            ),
+        ] {
+            let response = salvo::test::TestClient::post(
+                "http://server/account-authority/agent-participation/read",
+            )
+            .add_header("authorization", format!("Bearer {CREDENTIAL}"), true)
+            .json(&accounts)
+            .send(&service)
+            .await;
+            assert_eq!(
+                response.status_code,
+                Some(salvo::http::StatusCode::FORBIDDEN)
+            );
+        }
     }
 
     /// Only the `accepted_device` unit may be reached through the Account

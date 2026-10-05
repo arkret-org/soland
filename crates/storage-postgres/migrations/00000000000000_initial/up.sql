@@ -426,21 +426,6 @@ ALTER TABLE ONLY public.agent_participation
 
 CREATE INDEX agent_participation_realm_idx ON public.agent_participation USING btree (realm_id);
 
-CREATE TABLE public.agent_participation_ceiling (
-    scope_kind text NOT NULL,
-    scope_key text PRIMARY KEY,
-    realm_id text NOT NULL,
-    reply_message boolean DEFAULT false NOT NULL,
-    reaction_add boolean DEFAULT false NOT NULL,
-    reaction_remove boolean DEFAULT false NOT NULL,
-    accept_third_party_mention boolean DEFAULT false NOT NULL,
-    act_on_behalf boolean DEFAULT false NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT agent_participation_ceiling_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['realm'::text, 'circle'::text, 'strand'::text])))
-);
-
-CREATE INDEX agent_participation_ceiling_realm_idx ON public.agent_participation_ceiling USING btree (realm_id);
-
 CREATE TABLE public.agent_principals (
     id text PRIMARY KEY,
     controller_principal_id text NOT NULL,
@@ -5548,6 +5533,15 @@ CREATE TABLE forwarded_producer_device_evidence (
  station_id TEXT NOT NULL,
  device_id TEXT NOT NULL,
  attested_at TIMESTAMPTZ NOT NULL,
+ evidence_json JSONB NOT NULL CHECK(jsonb_typeof(evidence_json)='object')
+);
+
+-- Complete verified Agent producer closure, retained with its accepting Commit.
+CREATE TABLE forwarded_producer_agent_evidence (
+ commit_id TEXT PRIMARY KEY REFERENCES realm_commits(commit_id),
+ evidence_ref TEXT NOT NULL CHECK(evidence_ref ~ '^ak:signer_evidence:sha256:[0-9a-f]{64}$'),
+ principal_id TEXT NOT NULL,
+ station_id TEXT NOT NULL,
  evidence_json JSONB NOT NULL CHECK(jsonb_typeof(evidence_json)='object')
 );
 

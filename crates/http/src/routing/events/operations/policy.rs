@@ -9,7 +9,7 @@ mod realm_circle;
 
 use accountability::*;
 #[cfg(test)]
-pub(crate) use agent_participation::validate_agent_participation_ceiling;
+pub(crate) use agent_participation::validate_agent_act_on_behalf_approval;
 #[cfg(test)]
 pub(crate) use agent_participation::validate_agent_reply_participation;
 use governance::*;

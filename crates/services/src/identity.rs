@@ -1533,7 +1533,6 @@ pub trait AgentParticipationPort: Send + Sync {
     ) -> ServiceResult<bool>;
     async fn selections(&self, agent_id: &str) -> ServiceResult<Vec<Value>>;
     async fn ceilings(&self, scope_keys: &[String]) -> ServiceResult<Vec<Value>>;
-    async fn store_ceiling(&self, ceiling: Value) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
@@ -1562,10 +1561,6 @@ impl AgentParticipationService {
 
     pub async fn ceilings(&self, scope_keys: &[String]) -> ServiceResult<Vec<Value>> {
         self.participation.ceilings(scope_keys).await
-    }
-
-    pub async fn store_ceiling(&self, ceiling: Value) -> ServiceResult<()> {
-        self.participation.store_ceiling(ceiling).await
     }
 }
 
