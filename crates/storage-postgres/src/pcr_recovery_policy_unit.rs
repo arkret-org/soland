@@ -433,7 +433,7 @@ async fn upsert_policy_current_in_connection(
             "recovery policy stream position exceeds PostgreSQL BIGINT",
         )
     })?;
-    sql_query(
+    let written = sql_query(
         "INSERT INTO policy_current_results \
          (realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) \
          VALUES($1,$2,$3,$4,$5,$6,$7) \
@@ -442,7 +442,9 @@ async fn upsert_policy_current_in_connection(
            current_stream_position=EXCLUDED.current_stream_position, \
            current_event_id=EXCLUDED.current_event_id,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at \
          WHERE policy_current_results.realm_id=EXCLUDED.realm_id \
-           AND policy_current_results.current_stream_position<EXCLUDED.current_stream_position",
+           AND policy_current_results.current_stream_position<EXCLUDED.current_stream_position \
+           AND (policy_current_results.value->>'schema' IS DISTINCT FROM 'ak.schema.policy.v1' \
+                OR policy_current_results.value->>'policy_kind' IS DISTINCT FROM 'agent')",
     )
     .bind::<Text, _>(event.realm_id.as_str())
     .bind::<Text, _>(&record.policy_id)
@@ -453,6 +455,12 @@ async fn upsert_policy_current_in_connection(
     .bind::<Timestamptz, _>(commit.committed_at)
     .execute(&mut *conn)
     .await?;
+    if written != 1 {
+        return Err(rejected(
+            ConflictCode::FailedPrecondition,
+            "Recovery Policy current cannot rebind an Agent Policy, cross Realm or move backwards",
+        ));
+    }
     Ok(())
 }
 
