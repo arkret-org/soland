@@ -44,13 +44,27 @@ pub fn event(
     payload: serde_json::Value,
     at: chrono::DateTime<chrono::Utc>,
 ) -> arkret_wire::Event {
-    event_for_actor(
+    let mut event = event_for_actor(
         kind,
         scope_ref,
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(actor.clone(), station.clone())),
         payload,
         at,
-    )
+    );
+    bind_structural_human_device(&mut event);
+    event
+}
+
+/// A human storage fixture uses the closed device producer grammar. Signature
+/// verification and current-device admission remain the ingress suite's job.
+pub fn bind_structural_human_device(event: &mut arkret_wire::Event) {
+    let device =
+        arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap();
+    let proof = event.producer_proof.as_mut().unwrap();
+    let (did, _) = proof.verification_method.as_str().split_once('#').unwrap();
+    proof.verification_method = arkret_wire::DidUrl::new(format!("{did}#{device}")).unwrap();
+    assert!(event.human_device_producer().unwrap().is_some());
+    reseal(event);
 }
 
 /// One Event by the exact `actor`, carrying its structural producer proof.
@@ -363,15 +377,41 @@ pub fn next_request(
     payload: serde_json::Value,
     at: chrono::DateTime<chrono::Utc>,
 ) -> EventCommitRequest {
-    let account = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        actor.clone(),
-        previous.expected_authority.service_id.clone(),
-    ));
-    next_request_for_actor(previous, kind, account, payload, at)
+    let event = event(
+        kind,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: previous.event.realm_id.clone(),
+        },
+        actor,
+        &previous.expected_authority.service_id,
+        payload,
+        at,
+    );
+    request_for_event(previous, event, at)
 }
 
-/// [`next_request`] for an Event by the exact `actor`, such as the Station's
-/// own service-authored franking proof.
+/// A structural human-device request preserving the complete ActorId.
+pub fn next_human_request_for_actor(
+    previous: &AuthorityCommitTransaction,
+    kind: arkret_wire::EventKind,
+    actor: arkret_wire::ActorId,
+    payload: serde_json::Value,
+    at: chrono::DateTime<chrono::Utc>,
+) -> EventCommitRequest {
+    let mut event = event_for_actor(
+        kind,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: previous.event.realm_id.clone(),
+        },
+        actor,
+        payload,
+        at,
+    );
+    bind_structural_human_device(&mut event);
+    request_for_event(previous, event, at)
+}
+
+/// Construct an explicit Agent or Service producer without inferring a device.
 pub fn next_request_for_actor(
     previous: &AuthorityCommitTransaction,
     kind: arkret_wire::EventKind,
