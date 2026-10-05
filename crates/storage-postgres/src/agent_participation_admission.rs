@@ -222,6 +222,8 @@ async fn require_owner_current(
 }
 
 /// A present accepted current with an omitted component inherits its parent.
+/// A Direct Conversation has a fixed genesis baseline and no policy-bundle
+/// Event. Its accepted founding unit establishes an inherited Realm component.
 /// Missing current, broken Commit coordinates and malformed declarations fail.
 pub(crate) async fn governance_component(
     conn: &mut AsyncPgConnection,
@@ -243,9 +245,49 @@ pub(crate) async fn governance_component(
         .get_result::<ValueRow>(&mut *conn)
         .await
         .optional()
-        .map_err(PersistenceError::database)?
-        .ok_or_else(unresolved)?;
-    component(&row.value)
+        .map_err(PersistenceError::database)?;
+    if let Some(row) = row {
+        return component(&row.value);
+    }
+    if scope != format!("realm:{realm}") {
+        return Err(unresolved());
+    }
+    // The source is the accepted profile-fixed genesis, not a guessed default
+    // for a missing ordinary policy bundle. Require the exact four-Commit unit
+    // and the genesis current's covering Commit before interpreting omission.
+    let row = sql_query(
+        "SELECT s.value FROM realm_bootstrap_current_results s \
+         JOIN realm_commits c ON c.commit_id=s.current_commit_id \
+           AND c.realm_id=s.realm_id AND c.stream_position=s.current_stream_position \
+         JOIN direct_conversation_founding_slots f ON f.realm_id=s.realm_id \
+         WHERE s.realm_id=$1 AND s.result_family='realm_genesis' \
+           AND c.stream_position=0 AND jsonb_array_length(f.event_ids)=4 \
+           AND f.event_ids->>0=c.commit_json->>'event_ref' \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM jsonb_array_elements_text(f.event_ids) WITH ORDINALITY AS e(id,position) \
+             WHERE NOT EXISTS (SELECT 1 FROM realm_commits u \
+               WHERE u.realm_id=s.realm_id AND u.stream_position=e.position-1 \
+                 AND u.commit_json->>'event_ref'=e.id)) \
+         FOR SHARE OF s,c,f",
+    )
+    .bind::<Text, _>(realm)
+    .get_result::<ValueRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .ok_or_else(unresolved)?;
+    let genesis: arkret_models_collaboration::events_payloads::realm::RealmGenesis =
+        serde_json::from_value(row.value).map_err(|_| unresolved())?;
+    genesis.validate().map_err(|_| unresolved())?;
+    if genesis.purpose
+        != arkret_models_collaboration::events_payloads::realm::RealmPurpose::DirectConversation
+        || genesis.initial_join_rule != arkret_wire::JoinRule::Closed
+        || genesis.initial_history_access != arkret_wire::HistoryAccess::SinceJoin
+        || genesis.initial_discoverability != arkret_wire::Discoverability::InviteOnly
+    {
+        return Err(unresolved());
+    }
+    Ok(None)
 }
 
 pub(crate) fn component(value: &Value) -> PersistenceResult<Option<ParticipationBits>> {

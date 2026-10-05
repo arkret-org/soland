@@ -762,6 +762,56 @@ fn realm_of(unit: &DirectConversationFoundingCommitUnit) -> RealmId {
 }
 
 #[tokio::test]
+async fn direct_participation_inherits_accepted_fixed_baseline_without_a_policy_event() {
+    use soland_storage::AgentParticipationStore;
+    use soland_storage_postgres::PgAgentParticipationStore;
+
+    let pool = contract_pool().await;
+    let pair = pair(&pool).await;
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), now());
+    let realm = realm_of(&unit);
+    let strand = unit.facts().unwrap().main_strand_id;
+    assert!(matches!(
+        pair.store()
+            .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), now())
+            .await
+            .unwrap(),
+        DirectConversationFoundingCommitOutcome::Committed(_)
+    ));
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) AS count FROM realm_policy_bundle_current_results WHERE realm_id=$1",
+            &realm
+        )
+        .await,
+        0
+    );
+    let participation = PgAgentParticipationStore { pool: pool.clone() };
+    let scopes = vec![format!("realm:{realm}"), format!("strand:{realm}:{strand}")];
+    let rows = participation
+        .ceilings_for_scope_keys(&scopes)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    for (row, scope) in rows.iter().zip(&scopes) {
+        assert_eq!(row["scope_key"], *scope);
+        assert_eq!(row["reply_message"], true);
+    }
+    // A profile label or a slot cannot substitute for a covering current
+    // Commit. Corrupting that coordinate must make the same read unresolved.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE realm_bootstrap_current_results SET current_stream_position=current_stream_position+1 WHERE realm_id=$1 AND result_family='realm_genesis'")
+        .bind::<Text,_>(realm.as_str()).execute(&mut *conn).await.unwrap();
+    assert!(
+        participation
+            .ceilings_for_scope_keys(&scopes)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_them() {
     let pool = contract_pool().await;
     let pair = pair(&pool).await;
