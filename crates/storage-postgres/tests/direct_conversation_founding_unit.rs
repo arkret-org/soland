@@ -2254,7 +2254,7 @@ enum Cites<'a> {
     Repair(&'a arkret_wire::EventId),
 }
 
-/// The next Realm-stream request by `actor` citing `cites`.
+/// The next structural human-device Realm-stream request citing `cites`.
 fn cited(
     previous: &AuthorityCommitTransaction,
     kind: EventKind,
@@ -2272,6 +2272,7 @@ fn cited(
         payload,
         at,
     );
+    ordinary_realm::bind_structural_human_device(&mut event);
     let (source, role, reference) = match cites {
         Cites::Nothing => {
             if let Some(fact) = previous

@@ -2080,7 +2080,7 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
     assert_refused(
         &pool,
         &uow,
-        sourced(next_request_for_actor(
+        sourced(ordinary_realm::next_human_request_for_actor(
             &join.authority_commit,
             arkret_wire::EventKind::MessageCreate,
             bob.clone(),
@@ -2098,7 +2098,7 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         &root_event_ref,
     );
     uow.commit_event(grant.clone()).await.unwrap();
-    let bob_message = sourced(next_request_for_actor(
+    let bob_message = sourced(ordinary_realm::next_human_request_for_actor(
         &grant.authority_commit,
         arkret_wire::EventKind::MessageCreate,
         bob.clone(),
@@ -2649,7 +2649,7 @@ async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
         &root_event_ref,
     );
     uow.commit_event(grant.clone()).await.unwrap();
-    let bob_message = sourced(next_request_for_actor(
+    let bob_message = sourced(ordinary_realm::next_human_request_for_actor(
         &grant.authority_commit,
         arkret_wire::EventKind::MessageCreate,
         bob.clone(),
@@ -4929,8 +4929,9 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
     let circle_event = |previous: &AuthorityCommitTransaction,
                         kind: arkret_wire::EventKind,
                         payload: serde_json::Value| {
-        let event =
+        let mut event =
             ordinary_realm::event_for_actor(kind, scope.clone(), creator.clone(), payload, at);
+        ordinary_realm::bind_structural_human_device(&mut event);
         let mut request = ordinary_realm::request_for_event(previous, event, at);
         request.authority_commit.commit.stream_ref = stream.clone();
         sourced(request)
