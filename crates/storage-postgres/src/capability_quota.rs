@@ -183,3 +183,118 @@ async fn take_bucket_token(
     .map_err(PersistenceError::database)?;
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_database::TestDatabase;
+
+    fn reservation(seed: u8, counter: &str, max_operations: u64) -> QuotaReservation {
+        QuotaReservation {
+            grant_id: arkret_wire::GrantId::from_event_id(&arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [seed; 32],
+            )),
+            constraint_key: "id:rate".into(),
+            counter_key: counter.into(),
+            window_id: 1,
+            max_operations,
+            period_ms: 60_000,
+            burst: None,
+            verification_ms: 60_001,
+        }
+    }
+
+    async fn total(conn: &mut AsyncPgConnection) -> i64 {
+        sql_query(
+            "SELECT COALESCE(SUM(consumed),0)::bigint AS consumed FROM capability_quota_counters",
+        )
+        .get_result::<ConsumedRow>(conn)
+        .await
+        .unwrap()
+        .consumed
+    }
+
+    #[tokio::test]
+    async fn controller_and_agent_reservations_are_atomic_and_retries_count_once() {
+        let database = TestDatabase::lease().await;
+        let mut conn = database.pool().get().await.unwrap();
+        sql_query("BEGIN").execute(&mut conn).await.unwrap();
+        let parent = reservation(1, "controller", 1);
+        let agent = reservation(2, "agent-a", 5);
+        let combined = [parent.clone(), agent.clone()];
+        assert!(
+            try_reserve_in_connection(&mut conn, &combined, "first")
+                .await
+                .unwrap()
+        );
+        assert!(
+            try_reserve_in_connection(&mut conn, &combined, "first")
+                .await
+                .unwrap()
+        );
+        assert_eq!(total(&mut conn).await, 2);
+        // Another Agent cannot create a fresh parent counter.
+        assert!(
+            !try_reserve_in_connection(
+                &mut conn,
+                &[parent, reservation(3, "agent-b", 5)],
+                "second"
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(total(&mut conn).await, 2);
+        // Exhausting the Agent's tighter quota rolls back the parent as well.
+        assert!(
+            !try_reserve_in_connection(
+                &mut conn,
+                &[
+                    reservation(4, "controller", 5),
+                    reservation(5, "agent-c", 0)
+                ],
+                "third"
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(total(&mut conn).await, 2);
+        sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+        assert_eq!(total(&mut conn).await, 0);
+    }
+
+    #[tokio::test]
+    async fn sibling_agents_cannot_both_reserve_the_last_controller_unit() {
+        let database = TestDatabase::lease().await;
+        let pool = database.pool().clone();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+        let mut tasks = Vec::new();
+        for seed in [2, 3] {
+            let pool = pool.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                let mut conn = pool.get().await.unwrap();
+                sql_query("BEGIN").execute(&mut conn).await.unwrap();
+                barrier.wait().await;
+                let admitted = try_reserve_in_connection(
+                    &mut conn,
+                    &[
+                        reservation(1, "controller", 1),
+                        reservation(seed, "agent", 5),
+                    ],
+                    &format!("operation-{seed}"),
+                )
+                .await
+                .unwrap();
+                sql_query("COMMIT").execute(&mut conn).await.unwrap();
+                admitted
+            }));
+        }
+        let mut admitted = 0;
+        for task in tasks {
+            admitted += usize::from(task.await.unwrap());
+        }
+        assert_eq!(admitted, 1);
+        assert_eq!(total(&mut pool.get().await.unwrap()).await, 2);
+    }
+}
