@@ -6,6 +6,8 @@
 //!
 //! Every read opens one repeatable-read transaction that fixes the Realm's
 //! governing tenure, the caller's membership and the stream heads together.
+//! Original issuers can also read their exact owned Agent grant revisions
+//! after membership ends; this exception grants no content visibility.
 //! An unknown Realm and a caller that is not a currently joined member share
 //! the universal `not_found`. The only disclosure shape this Station proves is
 //! a Realm whose sole established stream is the Realm stream: every object of
@@ -389,6 +391,9 @@ pub(crate) async fn exact_current_result_for_account(
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         begin_read_cut(conn).await?;
+        if let ExactCurrentResultSelector::CapabilityGrant(selector) = &request.selector {
+            return owned_agent_grant_read(conn, request, selector, account, issuer).await;
+        }
         let (generation, head) = match member_cut(conn, &request.realm_id, &caller, issuer).await? {
             MemberCut::NotVisible => return Ok(SelfExactCurrentRead::NotFound),
             MemberCut::ForeignTenure => {
@@ -418,6 +423,7 @@ pub(crate) async fn exact_current_result_for_account(
             } => (generation, head),
         };
         let selector = match &request.selector {
+            ExactCurrentResultSelector::CapabilityGrant(_) => unreachable!("handled before membership gate"),
             ExactCurrentResultSelector::AgentInteraction(selector) => {
                 use arkret_models_collaboration::agent_interaction::AgentInteractionExactCurrentResult;
                 use arkret_models_collaboration::exact_current_results::NeverWrittenExactCurrentSelector;
@@ -510,6 +516,72 @@ pub(crate) async fn exact_current_result_for_account(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+async fn owned_agent_grant_read(
+    conn: &mut AsyncPgConnection,
+    request: &ExactCurrentResultsReadRequestBody,
+    selector: &arkret_models_collaboration::exact_current_results::CapabilityGrantExactCurrentSelector,
+    account: &AccountId,
+    issuer: &DidCoreId,
+) -> Result<SelfExactCurrentRead<ExactCurrentResultsReadOutcome>, PgTransactionError> {
+    use arkret_models_collaboration::exact_current_results::CapabilityGrantExactCurrentResult;
+
+    use crate::capability_grant_current_results::{
+        CapabilityGrantCurrentResultReadRow, decode_row,
+    };
+    let owner = serde_json::to_value(ActorId::account(account.clone()))
+        .map_err(PersistenceError::database)?;
+    let current = sql_query("SELECT realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,current_stream_position,value FROM capability_grant_current_results WHERE realm_id=$1 AND grant_id=$2 AND value->'issuer_id'=$3 AND value->'issuer_authority_refs'->0->>'kind'='owned_agent'")
+        .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(selector.grant_id.as_str())
+        .bind::<Jsonb,_>(owner)
+        .get_result::<CapabilityGrantCurrentResultReadRow>(&mut *conn).await.optional()?.map(decode_row).transpose()?;
+    let Some(current) = current.filter(|row| row.value.owned_agent_issuer() == Some(account))
+    else {
+        return Ok(SelfExactCurrentRead::NotFound);
+    };
+    let Some(tenure) =
+        sql_query("SELECT generation,service_id FROM realm_authorities WHERE realm_id=$1")
+            .bind::<Text, _>(request.realm_id.as_str())
+            .get_result::<TenureRow>(&mut *conn)
+            .await
+            .optional()?
+    else {
+        return Ok(SelfExactCurrentRead::NotFound);
+    };
+    if tenure.service_id != issuer.as_str() {
+        return Ok(SelfExactCurrentRead::Unresolved(
+            "this Station does not hold the Realm's governing tenure",
+        ));
+    }
+    let stream = CommitStreamRef::Realm {
+        realm_id: request.realm_id.clone(),
+    };
+    let key = crate::authority_commit::stream_key(&stream)?;
+    let Some(head) = sql_query("SELECT commit_id,stream_position FROM realm_commits WHERE realm_id=$1 AND stream_key=$2 ORDER BY stream_position DESC LIMIT 1")
+        .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(&key).get_result::<HeadRow>(&mut *conn).await.optional()? else {
+        return Ok(SelfExactCurrentRead::Unresolved("the Realm stream has no established head"));
+    };
+    let generation = to_u64(tenure.generation, "governance generation")?;
+    let outcome = ExactCurrentResultsReadOutcome::Present {
+        realm_id: request.realm_id.clone(),
+        governance_generation: generation,
+        effective_stream_head: CommitStreamHead {
+            stream_ref: stream,
+            commit_id: head.commit_id.parse().map_err(PersistenceError::database)?,
+            stream_position: to_u64(head.stream_position, "Realm stream position")?,
+        },
+        entry: ExactCurrentResultEntry::CapabilityGrant(CapabilityGrantExactCurrentResult {
+            selector: selector.clone(),
+            source_stream_ref: current.source.stream_ref,
+            revision: current.revision,
+            value: current.value,
+        }),
+    };
+    outcome
+        .validate_for_request(request, generation)
+        .map_err(|error| corrupt(error.to_string()))?;
+    Ok(SelfExactCurrentRead::Answer(outcome))
 }
 
 /// A `moderation_state` selector on the provable cut: the durable row keyed

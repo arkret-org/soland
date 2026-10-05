@@ -367,6 +367,9 @@ pub(crate) fn validate_ancestor_graph(
     }
     for authority_ref in &parent.issuer_authority_refs {
         match authority_ref {
+            IssuerAuthorityRef::OwnedAgent { .. } => {
+                return Err(conflict("authority_regrant_denied"));
+            }
             IssuerAuthorityRef::RealmRoot {
                 realm_id: root_realm_id,
                 authority_event_ref,
@@ -692,6 +695,8 @@ async fn materialize_capability_grant(
             "Capability Grant authority refs are empty",
         ));
     }
+    body.validate_owned_agent_shape()
+        .map_err(|error| schema_violation(error.to_string()))?;
     let child_expiry = finite_global_expiry(&body.constraints);
     if child_expiry.is_some_and(|expires_at| expires_at <= commit.committed_at) {
         return Err(conflict("grant_exceeds_issuer_authority"));
@@ -746,6 +751,11 @@ async fn materialize_capability_grant(
             ));
         }
         match authority_ref {
+            IssuerAuthorityRef::OwnedAgent { .. } => {
+                return Err(conflict(
+                    "owned Agent current execution and delivery gates are not established",
+                ));
+            }
             IssuerAuthorityRef::RealmRoot {
                 realm_id,
                 authority_event_ref,
@@ -836,6 +846,7 @@ async fn materialize_capability_grant(
             let mut covered = false;
             for (index, authority_ref) in body.issuer_authority_refs.iter().enumerate() {
                 let ref_covers = match (authority_ref, rule) {
+                    (IssuerAuthorityRef::OwnedAgent { .. }, _) => false,
                     (IssuerAuthorityRef::RealmRoot { .. }, None) => {
                         arkret_policy::owner_may_grant(action).unwrap_or(false)
                     }

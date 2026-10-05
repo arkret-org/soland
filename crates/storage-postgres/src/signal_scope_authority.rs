@@ -619,6 +619,17 @@ impl Cut {
                 let mut depth = 1;
                 for reference in &b.issuer_authority_refs {
                     match reference {
+                        IssuerAuthorityRef::OwnedAgent {
+                            realm_id,
+                            controller_account_id,
+                            controller_join_event_id,
+                            agent_join_event_id,
+                        } => roots.push(AuthorityRootRef::OwnedAgent {
+                            realm_id: realm_id.clone(),
+                            controller_account_id: controller_account_id.clone(),
+                            controller_join_event_id: controller_join_event_id.clone(),
+                            agent_join_event_id: agent_join_event_id.clone(),
+                        }),
                         IssuerAuthorityRef::RealmRoot {
                             realm_id,
                             authority_event_ref,

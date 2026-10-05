@@ -113,6 +113,11 @@ pub(crate) async fn admit_in_connection(
             let value: PolicySetStatePayload = payload(event)?;
             value.validate().map_err(schema)?;
             if let PolicySetValue::Governance(document) = value.value {
+                // Do not acknowledge a restriction that the current read and
+                // delivery paths cannot yet enforce at their actual cut.
+                if document.rules.iter().any(|rule| rule.kind == arkret_models_collaboration::governance::operation_wire::PolicyRuleKind::Agent) {
+                    return Err(refused("Agent management execution and delivery gates are not established"));
+                }
                 if document
                     .realm_id
                     .as_ref()

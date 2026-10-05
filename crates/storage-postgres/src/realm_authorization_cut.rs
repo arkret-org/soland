@@ -356,6 +356,7 @@ impl RealmAuthorizationCut {
                     .issuer_authority_refs
                     .iter()
                     .all(|authority_ref| match authority_ref {
+                        IssuerAuthorityRef::OwnedAgent { .. } => false,
                         IssuerAuthorityRef::RealmRoot {
                             realm_id: root_realm_id,
                             authority_event_ref,
@@ -496,6 +497,20 @@ impl RealmAuthorizationCut {
     ) -> PersistenceResult<()> {
         let kind = &event.kind;
         self.require_open_lifecycle(event)?;
+        if *kind == EventKind::CapabilityRevoke && event.executed_by.is_none() {
+            let payload: arkret_models_collaboration::events_payloads::CapabilityRevokePayload =
+                serde_json::from_value(
+                    serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            if self.grants.get(&payload.grant_id).is_some_and(|grant| {
+                grant
+                    .owned_agent_issuer()
+                    .is_some_and(|controller| event.actor_id.as_account_id() == Some(controller))
+            }) {
+                return Ok(());
+            }
+        }
         self.require_governed_member(kind)?;
         let root_only = arkret_schema::capability_actions_for_event_kind(kind.as_str())
             .any(|descriptor| descriptor.root_control_only);

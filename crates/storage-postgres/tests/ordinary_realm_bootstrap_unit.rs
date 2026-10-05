@@ -36,6 +36,142 @@ use soland_storage_postgres::{
 };
 
 #[tokio::test]
+async fn owned_agent_exact_current_is_issuer_only_even_after_membership_ends() {
+    use arkret_models_collaboration::exact_current_results::{
+        ExactCurrentResultEntry, ExactCurrentResultsReadOutcome, ExactCurrentResultsReadRequestBody,
+    };
+    use diesel::sql_types::Jsonb;
+    use soland_storage::SelfExactCurrentRead;
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let station = arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap();
+    human_profile::admit(&pool, &station, "bootstrap-actor").await;
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = unit();
+    store
+        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let realm = unit.transactions[0].event.realm_id.clone();
+    let controller = unit.transactions[0]
+        .event
+        .actor_id
+        .as_account_id()
+        .unwrap()
+        .clone();
+    let head = &unit.transactions[6].commit;
+    let agent = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:exact-agent.example").unwrap(),
+        station.clone(),
+    );
+    let grant_id = arkret_wire::GrantId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [61; 32],
+    ));
+    let reference = serde_json::json!({"kind":"owned_agent","realm_id":realm,"controller_account_id":controller,"controller_join_event_id":unit.transactions[2].event.event_id,"agent_join_event_id":unit.transactions[2].event.event_id});
+    // Storage-contract fixture for an imported current, not proof of
+    // live owned-source authoring, identity verification or membership admission.
+    let value = serde_json::json!({
+        "id":grant_id,"schema":"ak.schema.capability.v1","realm_id":realm,
+        "issuer_id":arkret_wire::ActorId::account(controller.clone()),"subject":arkret_wire::ActorId::account(agent.clone()),
+        "actions":["ak.message.create"],"resources":[{"kind":"realm","realm_id":realm}],
+        "constraints":[{"constraint_kind":"authority_control","effect":"allow","max_authority_depth":0,"authority_regrant_allowed":false}],
+        "issuer_authority_refs":[reference.clone()],"authority_depth":1,"authority_root_refs":[reference],
+        "issued_at":arkret_canonical::format_timestamp_canonical(head.committed_at),"status":"active"
+    });
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("INSERT INTO capability_grant_current_results(realm_id,grant_id,status,current_event_id,current_commit_id,current_stream_ref,current_stream_position,value,updated_at) VALUES($1,$2,'active',$3,$4,$5,$6,$7,now())")
+        .bind::<Text,_>(realm.as_str()).bind::<Text,_>(grant_id.as_str()).bind::<Text,_>(head.event_ref.as_str()).bind::<Text,_>(head.commit_id.as_str())
+        .bind::<Jsonb,_>(serde_json::to_value(&head.stream_ref).unwrap()).bind::<BigInt,_>(head.stream_position as i64).bind::<Jsonb,_>(value).execute(&mut *conn).await.unwrap();
+    diesel::sql_query("UPDATE member_state_current_results SET membership='leave',value=jsonb_set(value,'{membership}','\"leave\"'::jsonb) WHERE realm_id=$1 AND member_id=$2")
+        .bind::<Text,_>(realm.as_str()).bind::<Text,_>(arkret_wire::ActorId::account(controller.clone()).to_string()).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    let request: ExactCurrentResultsReadRequestBody = serde_json::from_value(serde_json::json!({"realm_id":realm,"selector":{"kind":"capability_grant","grant_id":grant_id}})).unwrap();
+    let SelfExactCurrentRead::Answer(ExactCurrentResultsReadOutcome::Present {
+        entry: ExactCurrentResultEntry::CapabilityGrant(row),
+        ..
+    }) = store
+        .exact_current_result_for_account(&request, &controller, &station)
+        .await
+        .unwrap()
+    else {
+        panic!("original issuer must read the ineffective revision without membership");
+    };
+    assert_eq!(row.revision.commit_id, head.commit_id);
+    assert_eq!(
+        row.value.status,
+        arkret_models_collaboration::governance::grant_constraint::CapabilityGrantStatus::Active
+    );
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let stale = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &controller,
+        arkret_wire::EventKind::CapabilityRevoke,
+        serde_json::json!({"grant_id":grant_id,"expected_revision":{"commit_id":head.commit_id,"stream_position":0}}),
+    );
+    assert_refused_with_zero_writes(
+        &uow,
+        &store,
+        &pool,
+        &stale,
+        soland_storage::ConflictCode::CasConflict,
+    )
+    .await;
+    let revoke = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &controller,
+        arkret_wire::EventKind::CapabilityRevoke,
+        serde_json::json!({"grant_id":grant_id,"expected_revision":row.revision}),
+    );
+    uow.commit_event(revoke.clone()).await.unwrap();
+    let SelfExactCurrentRead::Answer(ExactCurrentResultsReadOutcome::Present {
+        entry: ExactCurrentResultEntry::CapabilityGrant(terminal),
+        ..
+    }) = store
+        .exact_current_result_for_account(&request, &controller, &station)
+        .await
+        .unwrap()
+    else {
+        panic!("issuer must retain terminal revision access");
+    };
+    assert_eq!(
+        terminal.value.status,
+        arkret_models_collaboration::governance::grant_constraint::CapabilityGrantStatus::Revoked
+    );
+    assert_eq!(
+        terminal.revision.commit_id,
+        revoke.authority_commit.commit.commit_id
+    );
+    for stranger in [
+        agent,
+        arkret_wire::AccountId::new(
+            controller.principal_id,
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ),
+    ] {
+        assert!(matches!(
+            store
+                .exact_current_result_for_account(&request, &stranger, &station)
+                .await
+                .unwrap(),
+            SelfExactCurrentRead::NotFound
+        ));
+    }
+    let missing: ExactCurrentResultsReadRequestBody = serde_json::from_value(serde_json::json!({"realm_id":realm,"selector":{"kind":"capability_grant","grant_id":arkret_wire::GrantId::from_event_id(&arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [62;32]))}})).unwrap();
+    assert!(matches!(
+        store
+            .exact_current_result_for_account(
+                &missing,
+                row.value.issuer_id.as_account_id().unwrap(),
+                &station
+            )
+            .await
+            .unwrap(),
+        SelfExactCurrentRead::NotFound
+    ));
+}
+
+#[tokio::test]
 async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
