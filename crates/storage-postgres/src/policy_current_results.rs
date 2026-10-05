@@ -3,8 +3,11 @@ use arkret_models_collaboration::events_payloads::{PolicyActionStatePayload, Pol
 use arkret_models_collaboration::governance::operation_wire::{
     PolicySetStatePayload, PolicySetValue,
 };
-use arkret_wire::{CapabilityActionId, Event, EventKind, RealmCommit, WireResourceSelector};
-use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
+use arkret_wire::{
+    CapabilityActionId, CommitStreamRef, CurrentRevision, Event, EventKind, PolicyKind,
+    RealmCommit, WireResourceSelector,
+};
+use diesel::sql_types::{BigInt, Bool, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
@@ -16,6 +19,166 @@ struct Stored {
     realm_id: String,
     #[diesel(sql_type=Jsonb)]
     value: Value,
+}
+#[derive(QueryableByName)]
+struct PolicyRevisionRow {
+    #[diesel(sql_type=Text)]
+    realm_id: String,
+    #[diesel(sql_type=Text)]
+    current_commit_id: String,
+    #[diesel(sql_type=BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type=Text)]
+    current_event_id: String,
+    #[diesel(sql_type=Jsonb)]
+    value: Value,
+}
+#[derive(QueryableByName)]
+struct Present {
+    #[diesel(sql_type=Bool)]
+    present: bool,
+}
+
+/// Admission only: replay reducers install accepted history without redoing CAS.
+async fn check_policy_cas_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &Event,
+    commit: &RealmCommit,
+    payload: &PolicySetStatePayload,
+) -> PersistenceResult<()> {
+    payload.validate().map_err(schema)?;
+    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
+    // Policy ids are global even when two writers hold different Realm locks.
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind::<Text, _>(format!("policy:{}", payload.policy_id))
+        .execute(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+    // An accepted byte-identical retry uses its durable result, not today's revision.
+    let replay = sql_query("SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE c.realm_id=$1 AND c.commit_json->>'event_ref'=$2 AND e.state='committed' AND e.envelope=$3) AS present")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(event.event_id.as_str())
+        .bind::<Jsonb,_>(serde_json::to_value(event).map_err(schema)?)
+        .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+    if replay {
+        return Ok(());
+    }
+    let agent = matches!(&payload.value, PolicySetValue::Governance(p) if p.policy_kind == PolicyKind::Agent);
+    let current = sql_query("SELECT realm_id,current_commit_id,current_stream_position,current_event_id,value FROM policy_current_results WHERE policy_id=$1 FOR UPDATE")
+        .bind::<Text,_>(payload.policy_id.as_str()).get_result::<PolicyRevisionRow>(&mut *conn)
+        .await.optional().map_err(PersistenceError::database)?;
+    if current
+        .as_ref()
+        .is_some_and(|row| row.realm_id != event.realm_id.as_str())
+    {
+        return Err(refused("Policy id belongs to another Realm"));
+    }
+    let was_agent = sql_query("SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.state='committed' AND e.kind='ak.policy.set' AND e.envelope->'payload'->>'policy_id'=$1 AND e.envelope->'payload'->'value'->>'schema'='ak.schema.policy.v1' AND e.envelope->'payload'->'value'->>'policy_kind'='agent') AS present")
+        .bind::<Text,_>(payload.policy_id.as_str()).get_result::<Present>(&mut *conn)
+        .await.map_err(PersistenceError::database)?.present;
+    let current_agent = current.as_ref().is_some_and(|row| {
+        row.value.get("schema").and_then(Value::as_str) == Some("ak.schema.policy.v1")
+            && row.value.get("policy_kind").and_then(Value::as_str) == Some("agent")
+    });
+    if !agent {
+        return if was_agent || current_agent {
+            Err(refused(
+                "Agent Policy id cannot change policy kind or family",
+            ))
+        } else {
+            Ok(())
+        };
+    }
+    if commit.realm_id != event.realm_id
+        || commit.stream_ref
+            != (CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+    {
+        return Err(refused(
+            "Agent Policy CAS requires a held Realm governance stream",
+        ));
+    }
+    let head = commit
+        .stream_position
+        .checked_sub(1)
+        .and_then(|n| i64::try_from(n).ok())
+        .ok_or_else(|| refused("Agent Policy CAS needs an established governance prefix"))?;
+    let complete = sql_query(
+        "WITH prefix AS (SELECT c.*,e.state,e.kind AS event_kind,e.realm_id AS event_realm,e.envelope, \
+         LAG(c.commit_id) OVER (ORDER BY c.stream_position) AS predecessor \
+         FROM realm_commits c LEFT JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE c.realm_id=$1 AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',$1)) \
+         SELECT COALESCE(COUNT(*)=$2+1 AND MIN(stream_position)=0 AND MAX(stream_position)=$2 \
+         AND BOOL_AND(COALESCE(state='committed' AND event_realm=$1 \
+         AND ((stream_position=0 AND NOT (envelope ? 'realm_id') \
+               AND envelope->'scope_ref'=jsonb_build_object('kind','realm_genesis')) \
+              OR (stream_position>0 AND envelope->>'realm_id'=$1)) \
+         AND envelope->>'kind'=event_kind \
+         AND (stream_position<>0 OR event_kind='ak.realm.create') \
+         AND commit_json->>'event_ref'=envelope->>'event_id' \
+         AND previous_commit_ref IS NOT DISTINCT FROM predecessor,false)) \
+         AND BOOL_OR(stream_position=$2 AND commit_id=$3),false) AS present FROM prefix")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<BigInt,_>(head)
+        .bind::<diesel::sql_types::Nullable<Text>,_>(commit.previous_commit_ref.as_ref().map(|id| id.as_str()))
+        .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+    if !complete {
+        return Err(refused(
+            "Agent Policy current governance prefix is unavailable",
+        ));
+    }
+    let unresolved_stream = sql_query(
+        "WITH nodes AS (SELECT c.*,e.state,e.realm_id AS event_realm,e.envelope, \
+         ROW_NUMBER() OVER (PARTITION BY c.stream_key ORDER BY c.stream_position)-1 AS expected_position, \
+         LAG(c.commit_id) OVER (PARTITION BY c.stream_key ORDER BY c.stream_position) AS predecessor \
+         FROM realm_commits c LEFT JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE c.realm_id=$1 AND c.stream_ref<>jsonb_build_object('kind','realm','realm_id',$1)) \
+         SELECT EXISTS(SELECT 1 FROM nodes WHERE stream_position<>expected_position \
+         OR previous_commit_ref IS DISTINCT FROM predecessor OR state IS DISTINCT FROM 'committed' \
+         OR event_realm IS DISTINCT FROM $1 OR commit_json->>'event_ref' IS DISTINCT FROM envelope->>'event_id') AS present")
+        .bind::<Text,_>(event.realm_id.as_str()).get_result::<Present>(&mut *conn)
+        .await.map_err(PersistenceError::database)?.present;
+    if unresolved_stream {
+        return Err(refused(
+            "Policy absence has unresolved sibling stream evidence",
+        ));
+    }
+    // Other stream evidence cannot be silently treated as Realm-row absence.
+    let other_stream = sql_query("SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.state='committed' AND e.kind='ak.policy.set' AND e.envelope->'payload'->>'policy_id'=$1 AND (c.realm_id<>$2 OR c.stream_ref<>jsonb_build_object('kind','realm','realm_id',$2))) AS present")
+        .bind::<Text,_>(payload.policy_id.as_str()).bind::<Text,_>(event.realm_id.as_str())
+        .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+    if other_stream {
+        return Err(refused("Policy binding requires other governance evidence"));
+    }
+    let latest = sql_query("SELECT c.realm_id,c.commit_id AS current_commit_id,c.stream_position AS current_stream_position,e.envelope->>'event_id' AS current_event_id,e.envelope->'payload'->'value' AS value FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE c.realm_id=$1 AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',$1) AND e.kind='ak.policy.set' AND e.state='committed' AND e.envelope->'payload'->>'policy_id'=$2 ORDER BY c.stream_position DESC LIMIT 1")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(payload.policy_id.as_str())
+        .get_result::<PolicyRevisionRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    match (&current, &latest) {
+        (None, None) => {}
+        (Some(row), Some(accepted))
+            if row.current_commit_id == accepted.current_commit_id
+                && row.current_stream_position == accepted.current_stream_position
+                && row.current_event_id == accepted.current_event_id
+                && row.value == accepted.value => {}
+        _ => {
+            return Err(refused(
+                "Policy current does not match its last accepted write",
+            ));
+        }
+    }
+    let revision = current
+        .map(|row| -> PersistenceResult<CurrentRevision> {
+            Ok(CurrentRevision {
+                commit_id: row.current_commit_id.parse().map_err(schema)?,
+                stream_position: u64::try_from(row.current_stream_position).map_err(schema)?,
+            })
+        })
+        .transpose()?;
+    if payload.expected_revision.as_ref() != Some(&revision) {
+        return Err(refused(
+            "Agent Policy expected_revision differs from current",
+        ));
+    }
+    Ok(())
 }
 fn schema(e: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::SchemaViolation(e.to_string())
@@ -71,6 +234,9 @@ mod admission_tests {
 fn payload<T: serde::de::DeserializeOwned>(event: &Event) -> PersistenceResult<T> {
     serde_json::from_value(serde_json::to_value(&event.payload).map_err(schema)?).map_err(schema)
 }
+
+#[cfg(test)]
+mod pg_tests;
 
 /// Resolve the precise declared scope from current authority, rather than
 /// weakening an object scope into Realm-wide authorization.
@@ -152,11 +318,13 @@ pub(crate) async fn resolve_scope(
 pub(crate) async fn admit_in_connection(
     conn: &mut AsyncPgConnection,
     event: &Event,
+    commit: &RealmCommit,
 ) -> PersistenceResult<Option<WireResourceSelector>> {
     match event.kind {
         EventKind::PolicySet => {
             let value: PolicySetStatePayload = payload(event)?;
             value.validate().map_err(schema)?;
+            check_policy_cas_in_connection(conn, event, commit, &value).await?;
             if let PolicySetValue::Governance(document) = value.value {
                 // Do not acknowledge a restriction that the current read and
                 // delivery paths cannot yet enforce at their actual cut.
@@ -237,7 +405,7 @@ pub(crate) async fn commit_in_connection(
             let payload: PolicySetStatePayload = payload(event)?;
             payload.validate().map_err(schema)?;
             let value = serde_json::to_value(&payload.value).map_err(schema)?;
-            let count=sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(policy_id) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,current_event_id=EXCLUDED.current_event_id,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE policy_current_results.realm_id=EXCLUDED.realm_id AND policy_current_results.current_stream_position<EXCLUDED.current_stream_position")
+            let count=sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(policy_id) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,current_event_id=EXCLUDED.current_event_id,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE policy_current_results.realm_id=EXCLUDED.realm_id AND policy_current_results.current_stream_position<EXCLUDED.current_stream_position AND (policy_current_results.value->>'schema' IS DISTINCT FROM 'ak.schema.policy.v1' OR policy_current_results.value->>'policy_kind' IS DISTINCT FROM 'agent' OR (EXCLUDED.value->>'schema'='ak.schema.policy.v1' AND EXCLUDED.value->>'policy_kind'='agent'))")
                 .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(payload.policy_id.as_str()).bind::<Text,_>(commit.commit_id.as_str())
                 .bind::<BigInt,_>(commit.stream_position as i64).bind::<Text,_>(event.event_id.as_str()).bind::<Jsonb,_>(&value)
                 .bind::<Timestamptz,_>(commit.committed_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;

@@ -4081,6 +4081,33 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
     );
     assert_eq!(policy_footprint(&pool, &realm_id, &account).await, before);
 
+    // Imported current-row collision tests the recovery writer's family guard;
+    // it does not model an admitted Agent management Policy.
+    {
+        use diesel::sql_types::Text;
+        use diesel_async::RunQueryDsl;
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,0,'imported-agent-policy','{\"schema\":\"ak.schema.policy.v1\",\"policy_kind\":\"agent\"}',now())")
+            .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(&genesis_id)
+            .bind::<Text,_>(head.commit_id.as_str()).execute(&mut conn).await.unwrap();
+        let collision = policy_footprint(&pool, &realm_id, &account).await;
+        let error = publish(&v1, commit_v1.clone()).await.unwrap_err();
+        assert_eq!(
+            error.conflict_code(),
+            Some(ConflictCode::FailedPrecondition)
+        );
+        assert_eq!(
+            policy_footprint(&pool, &realm_id, &account).await,
+            collision
+        );
+        diesel::sql_query("DELETE FROM policy_current_results WHERE policy_id=$1")
+            .bind::<Text, _>(&genesis_id)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(policy_footprint(&pool, &realm_id, &account).await, before);
+    }
+
     // The founding device publishes v1: Event, Commit and policy together.
     let RecoveryPolicyPublicationOutcome::Committed(accepted) =
         publish(&v1, commit_v1.clone()).await.unwrap()

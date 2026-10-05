@@ -2660,8 +2660,12 @@ async fn commit_one_in_connection(
     // executed_by alone selects ordinary delegated Agent Events as well, and
     // must not introduce a confirmation requirement for all such Events.
 
-    let policy_approvals = if let Some(target) =
-        crate::policy_current_results::admit_in_connection(conn, event).await?
+    let policy_approvals = if let Some(target) = crate::policy_current_results::admit_in_connection(
+        conn,
+        event,
+        &request.authority_commit.commit,
+    )
+    .await?
     {
         crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
         let cut =
