@@ -51,6 +51,7 @@ fn commit(event: &Event, realm_id: &RealmId) -> RealmCommit {
         .unwrap()
         .with_timezone(&chrono::Utc);
     RealmCommit {
+        producer_signer_fact_digest: None,
         commit_id: arkret_wire::RealmCommitId::from_digest(random_digest()),
         realm_id: realm_id.clone(),
         stream_ref: CommitStreamRef::Realm {

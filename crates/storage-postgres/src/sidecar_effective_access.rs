@@ -79,6 +79,17 @@ pub(crate) async fn effective_agents_in_connection(
     }
     let current: MlsGroupCurrent =
         serde_json::from_value(group.value).map_err(PersistenceError::database)?;
+    if !crate::sidecar_mls_readiness::tree_authorized_in_connection(
+        conn,
+        cut,
+        &current,
+        &group.public_state,
+        None,
+    )
+    .await?
+    {
+        return Ok(Vec::new());
+    }
     let group_id = scope
         .canonical_mls_group_id()
         .map_err(PersistenceError::database)?;

@@ -19,6 +19,7 @@ default = []
 # binary. Off by default; `cotest` enables it for the SUT build.
 conformance-harness = [
     "soland-http/conformance-harness",
+    "soland-storage-postgres/conformance-harness",
     "soland-storage-postgres/test-support",
 ]
 otel = [

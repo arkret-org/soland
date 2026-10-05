@@ -283,6 +283,48 @@ async fn genesis_floor_in_connection(
     .readable_floor)
 }
 
+/// A replica may legitimately hold only a since-join suffix. Probe its exact
+/// position zero without requiring that suffix to be a complete physical stream.
+async fn held_genesis_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+) -> PersistenceResult<Option<ReadableFloor>> {
+    let stream = CommitStreamRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let row = sql_query(
+        "SELECT commit_json FROM realm_commits \
+         WHERE realm_id=$1 AND stream_key=$2 AND stream_position=0",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(crate::authority_commit::stream_key(&stream)?)
+    .get_result::<ChainNodeRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    row.map(|row| {
+        let commit: arkret_wire::RealmCommit =
+            serde_json::from_value(row.commit_json).map_err(|error| {
+                PersistenceError::Internal(format!("stored genesis Commit is invalid: {error}"))
+            })?;
+        if commit.realm_id != *realm_id
+            || commit.stream_ref != stream
+            || commit.stream_position != 0
+            || commit.previous_commit_ref.is_some()
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "held genesis Commit differs from its exact Realm stream start".into(),
+            ));
+        }
+        Ok(ReadableFloor {
+            oldest_position: 0,
+            floor_commit_id: commit.commit_id,
+            floor_reason: ReadableFloorReason::StreamStart,
+        })
+    })
+    .transpose()
+}
+
 /// The readable floor a member joined by the Commit `join_commit_id` at
 /// `join_position` has on the Realm stream (`history-visibility.md` §3.1,
 /// decision 0108 §1045), or `None` when it is not provable here.
@@ -290,7 +332,7 @@ async fn genesis_floor_in_connection(
 /// Under `all_history_for_current_members` a joined member reads from the
 /// genesis Commit. Under `since_join` the floor is the join Commit itself
 /// (`membership_join`), unless that join was accepted in the same atomic
-/// bootstrap unit as position 0 -- the founding creator -- whose floor is
+/// bootstrap or Direct Conversation founding unit as position 0, whose floor is
 /// the genesis Commit (`stream_start`).
 async fn join_floor_in_connection(
     conn: &mut AsyncPgConnection,
@@ -317,7 +359,71 @@ async fn join_floor_in_connection(
     if founding.present {
         return Ok(Some(genesis_floor.clone()));
     }
+    if direct_founding_join_in_connection(
+        conn,
+        realm_id,
+        genesis_floor,
+        join_commit_id,
+        join_position,
+    )
+    .await?
+    {
+        return Ok(Some(genesis_floor.clone()));
+    }
     held_join_floor(conn, realm_id, join_commit_id, join_position).await
+}
+
+async fn direct_founding_join_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    genesis_floor: &ReadableFloor,
+    join_commit_id: &str,
+    join_position: i64,
+) -> PersistenceResult<bool> {
+    // Both members of the registered four-Event Direct founding unit joined
+    // atomically with genesis. Match the current membership's exact Commit,
+    // rather than treating a later rejoin (or merely this Realm's purpose) as
+    // founding history access.
+    let direct_founding = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM direct_conversation_founding_slots f \
+         WHERE f.realm_id=$1 AND jsonb_array_length(f.commits_json)=4 \
+         AND f.commits_json->0->>'commit_id'=$3 \
+         AND EXISTS (SELECT 1 FROM jsonb_array_elements(f.commits_json) \
+             WITH ORDINALITY AS c(value,ordinality) \
+             WHERE c.ordinality IN (2,3) AND c.value->>'commit_id'=$2 \
+             AND (c.ordinality-1)=$4) \
+         AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(f.commits_json) \
+             WITH ORDINALITY AS c(value,ordinality) \
+             WHERE c.value->>'realm_id' IS DISTINCT FROM $1 \
+             OR c.value->'stream_ref' IS DISTINCT FROM $5 \
+             OR c.value->>'stream_position' IS DISTINCT FROM (c.ordinality-1)::text \
+             OR NOT EXISTS (SELECT 1 FROM realm_commits r \
+                 WHERE r.commit_id=c.value->>'commit_id' AND r.realm_id=$1 \
+                 AND r.stream_key=$6 AND r.stream_position=c.ordinality-1 \
+                 AND r.previous_commit_ref IS NOT DISTINCT FROM \
+                     CASE WHEN c.ordinality=1 THEN NULL \
+                     ELSE f.commits_json->((c.ordinality-2)::int)->>'commit_id' END)) \
+         ) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(join_commit_id)
+    .bind::<Text, _>(genesis_floor.floor_commit_id.as_str())
+    .bind::<BigInt, _>(join_position)
+    .bind::<Jsonb, _>(
+        serde_json::to_value(CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        })
+        .map_err(PersistenceError::database)?,
+    )
+    .bind::<Text, _>(crate::authority_commit::stream_key(
+        &CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+    )?)
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    Ok(direct_founding.present)
 }
 
 /// The `membership_join` floor at a join Commit this Station holds on the
@@ -637,8 +743,9 @@ pub(crate) async fn replica_circle_floor_in_connection(
 
 /// The caller's readable floor on a Realm stream this member Station holds
 /// as an anchored replica: under `since_join` its own held join Commit, at
-/// or after the join that opened the held stream. Earlier history is not
-/// held here, so any other interval is unproved.
+/// or after the join that opened the held stream. An atomic founding replica
+/// also holds position zero, so its founding members use the same unit floor
+/// as the governing Station. An absent earlier prefix remains unproved.
 pub(crate) async fn replica_realm_floor_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
@@ -679,6 +786,17 @@ pub(crate) async fn replica_realm_floor_in_connection(
         return Ok(Err(
             "the caller's join precedes the Realm stream this Station holds",
         ));
+    }
+    if let Some(genesis_floor) = held_genesis_floor_in_connection(conn, realm_id).await? {
+        return Ok(join_floor_in_connection(
+            conn,
+            realm_id,
+            &genesis_floor,
+            &join.current_commit_id,
+            join.current_stream_position,
+        )
+        .await?
+        .ok_or("the caller's held unit floor is not proved"));
     }
     Ok(held_join_floor(
         conn,
@@ -1350,7 +1468,7 @@ pub(crate) async fn scan_stream_for_peer(
     request: &StreamScanRequest,
     peer: &DidCoreId,
     issuer: &DidCoreId,
-) -> PersistenceResult<AccountStreamScan> {
+) -> PersistenceResult<soland_storage::PeerStreamScan> {
     request
         .validate()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
@@ -1365,10 +1483,10 @@ pub(crate) async fn scan_stream_for_peer(
             .await
             .optional()?
         else {
-            return Ok(AccountStreamScan::NotAuthorized);
+            return Ok(soland_storage::PeerStreamScan::NotAuthorized);
         };
         if tenure.service_id != issuer.as_str() {
-            return Ok(AccountStreamScan::Unproved(
+            return Ok(soland_storage::PeerStreamScan::Unproved(
                 "this Station does not hold the Realm's governing tenure",
             ));
         }
@@ -1377,7 +1495,7 @@ pub(crate) async fn scan_stream_for_peer(
             .iter()
             .min_by_key(|interval| interval.floor.oldest_position)
         else {
-            return Ok(AccountStreamScan::NotAuthorized);
+            return Ok(soland_storage::PeerStreamScan::NotAuthorized);
         };
         let floor = lowest.floor.clone();
         let last = if intervals.iter().any(|interval| interval.last.is_none()) {
@@ -1448,11 +1566,23 @@ pub(crate) async fn scan_stream_for_peer(
                 }
                 other => other,
             })
-            .collect();
-        Ok(AccountStreamScan::Page(StreamScanOutcome {
-            committed_events,
-            ..page
-        }))
+            .collect::<Vec<_>>();
+        let mut producer_signer_facts = Vec::new();
+        for row in &committed_events {
+            if let CommittedEventView::Full(full) = row {
+                if let Some(fact) = crate::agent_producer_signer_keys::human_source_for_commit_in_connection(conn, &full.event, &full.commit).await? {
+                    producer_signer_facts.push(arkret_models_collaboration::authority_commit::HumanHistoricalSignerFactEntry {
+                        target: arkret_wire::CommittedEventRef { event_id: full.event.event_id.clone(), commit_id: full.commit.commit_id.clone(), stream_ref: full.commit.stream_ref.clone(), stream_position: full.commit.stream_position },
+                        producer_signer_fact: fact,
+                    });
+                }
+            }
+        }
+        let outcome = arkret_models_collaboration::authority_commit::PeerStreamScanOutcome {
+            committed_events, readable_floor: page.readable_floor, truncated: page.truncated, producer_signer_facts,
+        };
+        outcome.validate_for_request(request).map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+        Ok(soland_storage::PeerStreamScan::Page(outcome))
     })
     .await
     .map_err(PgTransactionError::into_persistence)

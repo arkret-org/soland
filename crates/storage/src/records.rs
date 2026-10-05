@@ -1291,6 +1291,8 @@ pub struct ForeignDirectMlsInput {
     pub generation: u64,
     pub head: arkret_wire::CommitStreamHead,
     pub current: arkret_wire::TypedCurrentResult,
+    /// Bounded signed Binding/MLS/member evidence, rechecked under the install lock.
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
     pub participants: std::collections::BTreeSet<arkret_wire::ActorId>,
     pub history: Vec<(arkret_wire::RealmCommit, arkret_wire::Event)>,
     pub base: Option<ForeignDirectMlsBase>,

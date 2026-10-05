@@ -7,7 +7,7 @@ use arkret_models_collaboration::events_payloads::moderation::FrankingProof;
 use arkret_wire::{ActorId, Base64UrlString, EventKind};
 use ed25519_dalek::Signer as _;
 use soland_services::committed_receipt::{
-    CommitContinuity, ReceivedProducer, verify_committed_event_receipt,
+    CommitContinuity, ReceivedProducer, verify_committed_event_receipt_with_fact,
 };
 use soland_services::{ServiceError, ServiceResult};
 
@@ -135,7 +135,11 @@ pub(crate) async fn verify_franking_committed_pair(
             "verified authority differs from the accepted current tenure",
         ));
     }
-    let received = verify_committed_event_receipt(
+    let producer_signer_fact = state
+        .authority_commits()
+        .human_signer_fact(&pair.event, &pair.commit)
+        .await?;
+    let received = verify_committed_event_receipt_with_fact(
         state.persistence(),
         &pair.event,
         &pair.commit,
@@ -144,6 +148,7 @@ pub(crate) async fn verify_franking_committed_pair(
         &keys,
         &state.service_core_id(),
         record.digest_suite,
+        producer_signer_fact.as_ref(),
     )
     .await?;
     if received == ReceivedProducer::OtherSigner {
@@ -169,7 +174,7 @@ pub(crate) async fn verify_franking_committed_pair(
             };
             let result = state
                 .authority_commits()
-                .historical_agent_signer_key(realm, &selector)
+                .historical_producer_signer_key(realm, &selector)
                 .await?;
             let Some(arkret_models_identity::SignerKeyQueryResult::HistoricalResolved {
                 selector: actual,
@@ -368,6 +373,8 @@ async fn publish_one(
             applet_producer_guard: None,
             widget_token_gate: None,
             forwarded_producer_evidence: None,
+            forwarded_agent_producer: None,
+            agent_deployment_ceiling: arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
             event: soland_storage::CanonicalEventRecord {
                 event_id: event.event_id.to_string(),
                 actor_id: event.actor_id.to_string(),

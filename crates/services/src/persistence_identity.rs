@@ -986,11 +986,6 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
             .ceilings_for_scope_keys(scope_keys)
             .await?)
     }
-
-    async fn store_ceiling(&self, ceiling: serde_json::Value) -> crate::ServiceResult<()> {
-        self.0.agent_participation().put_ceiling(ceiling).await?;
-        Ok(())
-    }
 }
 
 #[async_trait::async_trait]

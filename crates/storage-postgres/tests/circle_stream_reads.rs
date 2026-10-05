@@ -227,12 +227,12 @@ async fn check_circle_reads(history: &str) {
             .unwrap()
             .is_none()
     );
-    let ended = page(
+    let ended = page(peer_interval_decision(
         store
             .scan_stream_for_peer(&request, &issuer, &issuer)
             .await
             .unwrap(),
-    );
+    ));
     assert_eq!(
         ended.committed_events.last().unwrap().commit().commit_id,
         leave.authority_commit.commit.commit_id
@@ -285,12 +285,12 @@ async fn check_circle_reads(history: &str) {
     } else {
         assert!(matches!(prior_read, MemberCommittedEventRead::Read(_)));
     }
-    let peer = page(
+    let peer = page(peer_interval_decision(
         store
             .scan_stream_for_peer(&request, &issuer, &issuer)
             .await
             .unwrap(),
-    );
+    ));
     assert_eq!(
         peer.readable_floor.as_ref().unwrap().oldest_position,
         expected_floor
@@ -317,4 +317,24 @@ async fn check_circle_reads(history: &str) {
             .unwrap()
             .is_some()
     );
+}
+
+fn peer_interval_decision(
+    scan: soland_storage::PeerStreamScan,
+) -> soland_storage::AccountStreamScan {
+    match scan {
+        soland_storage::PeerStreamScan::Page(page) => {
+            soland_storage::AccountStreamScan::Page(arkret_wire::StreamScanOutcome {
+                committed_events: page.committed_events,
+                readable_floor: page.readable_floor,
+                truncated: page.truncated,
+            })
+        }
+        soland_storage::PeerStreamScan::NotAuthorized => {
+            soland_storage::AccountStreamScan::NotAuthorized
+        }
+        soland_storage::PeerStreamScan::Unproved(reason) => {
+            soland_storage::AccountStreamScan::Unproved(reason)
+        }
+    }
 }

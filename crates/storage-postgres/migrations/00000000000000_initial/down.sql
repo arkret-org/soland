@@ -1,4 +1,10 @@
+DROP TABLE IF EXISTS agent_origin_control_source_candidates;
+DROP TABLE IF EXISTS agent_origin_commit_histories;
+DROP TABLE IF EXISTS agent_origin_control_sources;
+DROP TABLE IF EXISTS agent_origin_forward_evidence;
+DROP TABLE IF EXISTS agent_origin_gate_intents;
 DROP TABLE IF EXISTS replica_direct_mls_public_states;
+DROP TABLE IF EXISTS forwarded_producer_agent_evidence CASCADE;
 DROP TABLE IF EXISTS agent_producer_signer_keys;
 DROP TABLE IF EXISTS agent_action_approval_current_results;
 DROP TABLE IF EXISTS public.applet_widget_tokens;
@@ -119,7 +125,6 @@ DROP TABLE IF EXISTS account_status_propagations CASCADE;
 DROP TABLE IF EXISTS account_status_affected_services CASCADE;
 DROP TABLE IF EXISTS handle_releases CASCADE;
 DROP TABLE IF EXISTS agent_participation CASCADE;
-DROP TABLE IF EXISTS agent_participation_ceiling CASCADE;
 DROP TABLE IF EXISTS agent_sidecar_contexts CASCADE;
 DROP TABLE IF EXISTS agent_sidecars CASCADE;
 DROP TABLE IF EXISTS agent_runtime_messages CASCADE;

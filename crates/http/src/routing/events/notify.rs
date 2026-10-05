@@ -965,7 +965,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_third_party_mention_gate_is_non_retroactive() {
+    async fn selection_changes_do_not_replay_mentions_or_supply_missing_accepted_current() {
         let state = test_state();
         let (controller, third_party, agent) = (actor(ALICE), actor(BOB), actor(AGENT));
         let basis = basis(&[&controller, &third_party, &agent]);
@@ -984,13 +984,13 @@ mod tests {
 
         let by_controller = message("000000009983", controller.clone(), &[&agent]);
         fan_out(&state, &by_controller.source(), &basis).await;
-        assert_eq!(notifications_for(&state, &agent).await.len(), 1);
+        assert!(notifications_for(&state, &agent).await.is_empty());
 
         let foreign_controller = message("000000009986", actor_at(ALICE, OTHER_STATION), &[&agent]);
         fan_out(&state, &foreign_controller.source(), &basis).await;
         assert_eq!(
             notifications_for(&state, &agent).await.len(),
-            1,
+            0,
             "the same principal at another Station does not bypass the third-party mention gate"
         );
 
@@ -998,21 +998,16 @@ mod tests {
         let after_flip = notifications_for(&state, &agent).await;
         assert_eq!(
             after_flip.len(),
-            1,
+            0,
             "a flipped selection is not retroactive"
-        );
-        assert_eq!(
-            after_flip[0]["source_event_id"],
-            by_controller.event_id.as_str()
         );
 
         let delivered = message("000000009984", third_party.clone(), &[&agent]);
         fan_out(&state, &delivered.source(), &basis).await;
         let rows = notifications_for(&state, &agent).await;
-        assert_eq!(rows.len(), 2);
         assert!(
-            rows.iter()
-                .any(|row| row["source_event_id"] == delivered.event_id.as_str())
+            rows.is_empty(),
+            "selection alone cannot supply accepted PCR and governance current"
         );
         assert!(
             !rows
@@ -1022,7 +1017,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strand_mention_uses_circle_effective_participation() {
+    async fn circle_selection_cannot_supply_missing_accepted_governance_for_strand_mentions() {
         let state = test_state();
         let (controller, third_party, agent) = (actor(ALICE), actor(BOB), actor(AGENT));
         let mut basis = basis(&[&controller, &third_party, &agent]);
@@ -1054,26 +1049,20 @@ mod tests {
 
         let delivered = message("000000009990", third_party.clone(), &[&agent]);
         fan_out(&state, &delivered.source(), &basis).await;
-        assert_eq!(notifications_for(&state, &agent).await.len(), 1);
-
-        state
-            .agent_participations()
-            .store_ceiling(json!({
-                "scope_kind": "circle",
-                "scope_key": circle_scope_key(REALM, CIRCLE),
-                "realm_id": REALM,
-                "reply_message": true,
-                "reaction_add": false,
-                "reaction_remove": false,
-                "accept_third_party_mention": false,
-                "act_on_behalf": false,
-            }))
-            .await
-            .expect("agent participation circle ceiling");
+        assert!(notifications_for(&state, &agent).await.is_empty());
+        set_selection(
+            &state,
+            json!({"kind": "circle", "realm_id": REALM, "circle_id": CIRCLE}),
+            "circle",
+            circle_scope_key(REALM, CIRCLE),
+            false,
+            1,
+        )
+        .await;
         let capped = message("000000009991", third_party.clone(), &[&agent]);
         fan_out(&state, &capped.source(), &basis).await;
         let rows = notifications_for(&state, &agent).await;
-        assert_eq!(rows.len(), 1);
+        assert!(rows.is_empty());
         assert!(
             !rows
                 .iter()

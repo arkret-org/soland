@@ -237,6 +237,8 @@ async fn history(
                 )
                 .map_err(unavailable)?;
                 handoff.validate_shape().map_err(unavailable)?;
+                crate::authority_commit::verify_snapshot_content_id(&snapshot)
+                    .map_err(unavailable)?;
                 let digest = arkret_wire::Hash::new(
                     arkret_canonical::canonical_sha256(&snapshot.visible_stream_heads)
                         .map_err(unavailable)?,
@@ -254,7 +256,6 @@ async fn history(
                         .visible_stream_heads
                         .windows(2)
                         .all(|pair| pair[0].stream_ref < pair[1].stream_ref)
-                    || snapshot.signature.signed_digest != handoff.snapshot_digest
                     || digest != handoff.final_stream_heads_digest
                     || !snapshot.visible_stream_heads.iter().any(|item| {
                         item.stream_ref == *stream
@@ -619,6 +620,17 @@ impl Cut {
                 let mut depth = 1;
                 for reference in &b.issuer_authority_refs {
                     match reference {
+                        IssuerAuthorityRef::OwnedAgent {
+                            realm_id,
+                            controller_account_id,
+                            controller_join_event_id,
+                            agent_join_event_id,
+                        } => roots.push(AuthorityRootRef::OwnedAgent {
+                            realm_id: realm_id.clone(),
+                            controller_account_id: controller_account_id.clone(),
+                            controller_join_event_id: controller_join_event_id.clone(),
+                            agent_join_event_id: agent_join_event_id.clone(),
+                        }),
                         IssuerAuthorityRef::RealmRoot {
                             realm_id,
                             authority_event_ref,

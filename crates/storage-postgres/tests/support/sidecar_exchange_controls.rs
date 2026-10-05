@@ -91,10 +91,10 @@ pub(super) async fn assert_current(
         arkret_models_collaboration::events_payloads::message::MESSAGE_METADATA_MLS_CONTENT_TYPE,
         &serde_json::to_vec(&metadata).unwrap(),
     );
-    let make = |previous: &soland_storage::AuthorityCommitTransaction,
-                kind,
-                payload,
-                after: Vec<SemanticRef>| {
+    let make = async |previous: &soland_storage::AuthorityCommitTransaction,
+                      kind,
+                      payload,
+                      after: Vec<SemanticRef>| {
         let mut event = ordinary_realm::event_for_actor(
             kind,
             scope.clone(),
@@ -114,6 +114,7 @@ pub(super) async fn assert_current(
         request.authority_commit.commit.stream_position = previous.commit.stream_position + 1;
         request.authority_commit.commit.previous_commit_ref =
             Some(previous.commit.commit_id.clone());
+        super::source_candidate(pool, &mut request).await;
         request
     };
     let request = make(
@@ -121,7 +122,7 @@ pub(super) async fn assert_current(
         EventKind::MessageCreate,
         serde_json::json!({"strand_id":strand_id,"track_name":"discussion","encrypted_content":content,"encrypted_metadata":metadata}),
         Vec::new(),
-    );
+    ).await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     for plaintext in [true, false] {
         let mut refused_payload =
@@ -143,12 +144,9 @@ pub(super) async fn assert_current(
             .unwrap();
         }
         assert!(
-            uow.commit_event(make(
-                head,
-                EventKind::MessageCreate,
-                refused_payload,
-                Vec::new()
-            ))
+            uow.commit_event(
+                make(head, EventKind::MessageCreate, refused_payload, Vec::new()).await
+            )
             .await
             .is_err()
         );
@@ -202,7 +200,8 @@ pub(super) async fn assert_current(
             control.request_event_id.to_string(),
             "after",
         )],
-    );
+    )
+    .await;
     uow.commit_event(accepted.clone()).await.unwrap();
     uow.commit_event(accepted.clone()).await.unwrap();
     let material = store
@@ -261,7 +260,8 @@ pub(super) async fn assert_current(
                 control.request_event_id.to_string(),
                 "after",
             )],
-        );
+        )
+        .await;
         assert!(uow.commit_event(refused).await.is_err());
         let after = store
             .realm_state_snapshot_material_for_account(realm, controller)

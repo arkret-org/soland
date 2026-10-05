@@ -11,6 +11,8 @@ description = "Development-only fixtures and helpers for Soland integration test
 publish = false
 
 [dependencies]
+diesel = { workspace = true, features = ["postgres", "serde_json"] }
+diesel-async = { workspace = true, features = ["postgres", "deadpool"] }
 arkret.workspace = true
 arkret-bootstrap.workspace = true
 arkret-canonical.workspace = true
@@ -48,6 +50,4 @@ uuid.workspace = true
 workspace = true
 
 [dev-dependencies]
-diesel = { workspace = true, features = ["postgres", "serde_json"] }
-diesel-async = { workspace = true, features = ["postgres", "deadpool"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

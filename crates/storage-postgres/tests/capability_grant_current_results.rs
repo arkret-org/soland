@@ -196,6 +196,7 @@ fn transaction(
     AuthorityCommitTransaction {
         expected_authority: authority.clone(),
         commit: arkret_wire::RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id,
             realm_id: event.realm_id.clone(),
             stream_ref: arkret_wire::CommitStreamRef::Realm {
@@ -210,6 +211,7 @@ fn transaction(
             signature: fixture_signature(&authority.service_id, committed_at),
         },
         event: event.clone(),
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,

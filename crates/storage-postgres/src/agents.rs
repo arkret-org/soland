@@ -8,7 +8,7 @@ use soland_storage::PendingAgentPairingCommitIntent;
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord, AgentPrincipalRow,
     AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome,
-    AgentRuntimeMessageRecord, AgentStore, Array, BigInt, Bool, EnqueueAgentRuntimeMessage, Jsonb,
+    AgentRuntimeMessageRecord, AgentStore, BigInt, Bool, EnqueueAgentRuntimeMessage, Jsonb,
     Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids,
     pack_runtime_key_material, pg_conn, sql_query, sql_types,
@@ -92,38 +92,11 @@ impl From<AgentParticipationRow> for Value {
     }
 }
 #[derive(QueryableByName)]
-struct AgentParticipationCeilingRow {
-    #[diesel(sql_type = Text)]
-    scope_kind: String,
-    #[diesel(sql_type = Text)]
-    scope_key: String,
-    #[diesel(sql_type = Text)]
-    realm_id: String,
-    #[diesel(sql_type = Bool)]
-    reply_message: bool,
-    #[diesel(sql_type = Bool)]
-    reaction_add: bool,
-    #[diesel(sql_type = Bool)]
-    reaction_remove: bool,
-    #[diesel(sql_type = Bool)]
-    accept_third_party_mention: bool,
-    #[diesel(sql_type = Bool)]
-    act_on_behalf: bool,
+struct ParticipationVersionRow {
+    #[diesel(sql_type = BigInt)]
+    version: i64,
 }
-impl From<AgentParticipationCeilingRow> for Value {
-    fn from(row: AgentParticipationCeilingRow) -> Self {
-        serde_json::json!({
-            "scope_kind": row.scope_kind,
-            "scope_key": row.scope_key,
-            "realm_id": row.realm_id,
-            "reply_message": row.reply_message,
-            "reaction_add": row.reaction_add,
-            "reaction_remove": row.reaction_remove,
-            "accept_third_party_mention": row.accept_third_party_mention,
-            "act_on_behalf": row.act_on_behalf,
-        })
-    }
-}
+
 pub struct PgAgentParticipationStore {
     pub pool: PgPool,
 }
@@ -146,7 +119,21 @@ impl AgentParticipationStore for PgAgentParticipationStore {
                     PersistenceError::Internal(format!("agent participation record missing {key}"))
                 })
         };
-        let get_bool = |key: &str| record.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let get_bool = |key: &str| -> PersistenceResult<bool> {
+            record.get(key).and_then(Value::as_bool).ok_or_else(|| {
+                PersistenceError::SchemaViolation(format!(
+                    "agent participation record missing boolean {key}"
+                ))
+            })
+        };
+        let bits =
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits {
+                reply_message: get_bool("reply_message")?,
+                reaction_add: get_bool("reaction_add")?,
+                reaction_remove: get_bool("reaction_remove")?,
+                accept_third_party_mention: get_bool("accept_third_party_mention")?,
+                act_on_behalf: get_bool("act_on_behalf")?,
+            };
         let accepted_version = expected_version.checked_add(1).ok_or_else(|| {
             PersistenceError::Internal("agent participation version overflow".to_owned())
         })?;
@@ -169,13 +156,19 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let scope_kind = get_str("scope_kind")?;
         let scope_key = get_str("scope_key")?;
         let realm_id = get_str("realm_id")?;
-        crate::realm_identity::ensure_realm_pk(&mut conn, &realm_id).await?;
         let scope = record.get("scope").cloned().unwrap_or(Value::Null);
+        (&mut *conn).transaction::<bool, PgTransactionError, _>(async move |conn| {
+            crate::agent_participation_admission::lock_selection(conn, &agent_id, false).await?;
+            let present = sql_query("SELECT version FROM agent_participation WHERE agent_id=$1 AND scope_key=$2")
+                .bind::<Text,_>(&agent_id).bind::<Text,_>(&scope_key)
+                .get_result::<ParticipationVersionRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+            if present.map(|row| row.version).unwrap_or(0) != expected_version { return Ok(false); }
+            crate::realm_identity::ensure_realm_pk(conn, &realm_id).await?;
         sql_query(
             "INSERT INTO agent_participation \
              (id, agent_id, scope_kind, scope_key, realm_id, scope, version, reply_message, \
                reaction_add, reaction_remove, accept_third_party_mention, act_on_behalf, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()) \
+             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW() WHERE $13=0 OR EXISTS(SELECT 1 FROM agent_participation WHERE agent_id=$2 AND scope_key=$4 AND version=$13) \
              ON CONFLICT (agent_id, scope_key) DO UPDATE SET \
              scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
              scope = EXCLUDED.scope, version = EXCLUDED.version, \
@@ -192,16 +185,17 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         .bind::<Text, _>(&realm_id)
         .bind::<Jsonb, _>(&scope)
         .bind::<BigInt, _>(accepted_version)
-        .bind::<Bool, _>(get_bool("reply_message"))
-        .bind::<Bool, _>(get_bool("reaction_add"))
-        .bind::<Bool, _>(get_bool("reaction_remove"))
-        .bind::<Bool, _>(get_bool("accept_third_party_mention"))
-        .bind::<Bool, _>(get_bool("act_on_behalf"))
+        .bind::<Bool, _>(bits.reply_message)
+        .bind::<Bool, _>(bits.reaction_add)
+        .bind::<Bool, _>(bits.reaction_remove)
+        .bind::<Bool, _>(bits.accept_third_party_mention)
+        .bind::<Bool, _>(bits.act_on_behalf)
         .bind::<BigInt, _>(expected_version)
         .execute(&mut *conn)
         .await
         .map(|affected| affected == 1)
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database).map_err(Into::into)
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 
     async fn list_selections(&self, agent_id: &str) -> PersistenceResult<Vec<Value>> {
@@ -231,63 +225,34 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT scope_kind, scope_key, realm_id, reply_message, reaction_add, \
-             reaction_remove, accept_third_party_mention, act_on_behalf \
-             FROM agent_participation_ceiling WHERE scope_key = ANY($1) \
-             ORDER BY scope_key",
-        )
-        .bind::<Array<Text>, _>(scope_keys.to_vec())
-        .load::<AgentParticipationCeilingRow>(&mut *conn)
-        .await
-        .map(|rows| rows.into_iter().map(Value::from).collect())
-        .map_err(PersistenceError::database)
-    }
-
-    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let get_str = |key: &str| -> PersistenceResult<String> {
-            record
-                .get(key)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        let mut rows = Vec::with_capacity(scope_keys.len());
+        for scope in scope_keys {
+            let locator = scope
+                .split_once(':')
                 .ok_or_else(|| {
-                    PersistenceError::Internal(format!(
-                        "agent participation ceiling record missing {key}"
-                    ))
-                })
-        };
-        let get_bool = |key: &str| record.get(key).and_then(Value::as_bool).unwrap_or(false);
-        let scope_kind = get_str("scope_kind")?;
-        let scope_key = get_str("scope_key")?;
-        let realm_id = get_str("realm_id")?;
-        crate::realm_identity::ensure_realm_pk(&mut conn, &realm_id).await?;
-        sql_query(
-            "INSERT INTO agent_participation_ceiling \
-             (scope_kind, scope_key, realm_id, reply_message, reaction_add, reaction_remove, \
-              accept_third_party_mention, act_on_behalf, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
-             ON CONFLICT (scope_key) DO UPDATE SET \
-             scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
-             reply_message = EXCLUDED.reply_message, reaction_add = EXCLUDED.reaction_add, \
-             reaction_remove = EXCLUDED.reaction_remove, \
-             accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
-             act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
-        )
-        .bind::<Text, _>(&scope_kind)
-        .bind::<Text, _>(&scope_key)
-        .bind::<Text, _>(&realm_id)
-        .bind::<Bool, _>(get_bool("reply_message"))
-        .bind::<Bool, _>(get_bool("reaction_add"))
-        .bind::<Bool, _>(get_bool("reaction_remove"))
-        .bind::<Bool, _>(get_bool("accept_third_party_mention"))
-        .bind::<Bool, _>(get_bool("act_on_behalf"))
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+                    PersistenceError::SchemaViolation("invalid participation scope key".into())
+                })?
+                .1;
+            let realm = locator
+                .split(":ak:circle:")
+                .next()
+                .unwrap_or(locator)
+                .split(":ak:strand:")
+                .next()
+                .unwrap_or(locator);
+            let component =
+                crate::agent_participation_admission::governance_component(conn, realm, scope)
+                    .await?;
+            let mut value = serde_json::to_value(component.unwrap_or(arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL)).map_err(PersistenceError::database)?;
+            value
+                .as_object_mut()
+                .expect("typed participation bits serialize to an object")
+                .insert("scope_key".into(), Value::String(scope.clone()));
+            rows.push(value);
+        }
+        Ok(rows)
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 }
 pub struct PgAgentStore {

@@ -16,8 +16,6 @@ pub(crate) mod strand;
 pub(crate) mod sync;
 
 #[cfg(test)]
-use operations::validate_agent_participation_ceiling;
-#[cfg(test)]
 use operations::validate_agent_reply_participation;
 #[cfg(test)]
 use operations::validate_operation_policy;
@@ -89,6 +87,10 @@ pub fn local_router() -> Router {
 /// `Arkret-Operation`, and are excluded from protocol OpenAPI/Describe.
 pub fn account_authority_private_router() -> Router {
     Router::with_path("account-authority")
+        .push(
+            Router::with_path("agent-participation/read")
+                .post(account_authority_private::read_agent_participation),
+        )
         .push(Router::with_path("events/admit").post(account_authority_private::admit_event))
         .push(
             Router::with_path("current-device/check")

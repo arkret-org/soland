@@ -85,6 +85,7 @@ pub(super) async fn submit_self_agent_pcr_genesis(
         ));
     }
 
+    let origin_source = super::authority_forward::prepare_control_source(state, event).await?;
     let committed_at = Utc::now();
     let method = arkret_wire::DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
@@ -99,6 +100,7 @@ pub(super) async fn submit_self_agent_pcr_genesis(
         state.notary_signing_key().as_ref(),
         committed_at,
     )?;
+    super::authority_forward::stage_control_source(state, &transaction, origin_source).await?;
     let outcome = state
         .persistence()
         .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {

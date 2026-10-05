@@ -104,6 +104,7 @@ fn committed_replication_payload() -> String {
         jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
     });
     let source_commit = arkret_wire::RealmCommit {
+        producer_signer_fact_digest: None,
         commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
             b"federation-outbox-commit-1",
         )),
@@ -135,6 +136,7 @@ fn committed_replication_payload() -> String {
         PeerAuthoritySubmitRequest::CommittedReplication(PeerCommittedReplicationRequest {
             branch: CommittedReplicationBranch::CommittedReplication,
             replications: vec![CommittedEventSubmission {
+                producer_signer_fact: None,
                 event_submission: arkret_wire::EventAdmissionSubmission::new(event),
                 source_commit,
                 genesis_event_ref: None,

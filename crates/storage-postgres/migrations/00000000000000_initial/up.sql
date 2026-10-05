@@ -426,21 +426,6 @@ ALTER TABLE ONLY public.agent_participation
 
 CREATE INDEX agent_participation_realm_idx ON public.agent_participation USING btree (realm_id);
 
-CREATE TABLE public.agent_participation_ceiling (
-    scope_kind text NOT NULL,
-    scope_key text PRIMARY KEY,
-    realm_id text NOT NULL,
-    reply_message boolean DEFAULT false NOT NULL,
-    reaction_add boolean DEFAULT false NOT NULL,
-    reaction_remove boolean DEFAULT false NOT NULL,
-    accept_third_party_mention boolean DEFAULT false NOT NULL,
-    act_on_behalf boolean DEFAULT false NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT agent_participation_ceiling_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['realm'::text, 'circle'::text, 'strand'::text])))
-);
-
-CREATE INDEX agent_participation_ceiling_realm_idx ON public.agent_participation_ceiling USING btree (realm_id);
-
 CREATE TABLE public.agent_principals (
     id text PRIMARY KEY,
     controller_principal_id text NOT NULL,
@@ -5238,8 +5223,14 @@ CREATE INDEX agent_status_current_result_agent
 -- One immutable result captured under the original producer admission locks.
 -- Missing historical results are unavailable, never reconstructed from current keys.
 CREATE TABLE agent_producer_signer_keys (
+ human_source_fact JSONB CHECK(human_source_fact IS NULL OR jsonb_typeof(human_source_fact)='object'),
  commit_id TEXT PRIMARY KEY REFERENCES realm_commits(commit_id),
- outcome JSONB NOT NULL CHECK(jsonb_typeof(outcome)='object')
+ outcome JSONB NOT NULL CHECK(jsonb_typeof(outcome)='object'),
+ self_admission_account JSONB CHECK(self_admission_account IS NULL OR jsonb_typeof(self_admission_account)='object'),
+ self_admission_kind TEXT CHECK(self_admission_kind IS NULL OR self_admission_kind IN ('own_pcr','agent_pcr_genesis','agent_pcr_controller')),
+ self_admission_provenance JSONB CHECK(self_admission_provenance IS NULL OR jsonb_typeof(self_admission_provenance)='object'),
+ CHECK((self_admission_account IS NULL) = (self_admission_kind IS NULL)),
+ CHECK((self_admission_account IS NULL) = (self_admission_provenance IS NULL))
 );
 
 CREATE TABLE agent_key_current_results (
@@ -5551,6 +5542,15 @@ CREATE TABLE forwarded_producer_device_evidence (
  evidence_json JSONB NOT NULL CHECK(jsonb_typeof(evidence_json)='object')
 );
 
+-- Complete verified Agent producer closure, retained with its accepting Commit.
+CREATE TABLE forwarded_producer_agent_evidence (
+ commit_id TEXT PRIMARY KEY REFERENCES realm_commits(commit_id),
+ evidence_ref TEXT NOT NULL CHECK(evidence_ref ~ '^ak:signer_evidence:sha256:[0-9a-f]{64}$'),
+ principal_id TEXT NOT NULL,
+ station_id TEXT NOT NULL,
+ evidence_json JSONB NOT NULL CHECK(jsonb_typeof(evidence_json)='object')
+);
+
 -- Immutable security confirmations. Nonces are global to the complete controller
 -- Actor, distinct from the detached approval_signature private namespace.
 CREATE TABLE agent_action_approval_current_results (
@@ -5605,3 +5605,32 @@ CREATE TABLE replica_direct_mls_public_states (
  complete boolean NOT NULL,
  exact_pair boolean NOT NULL
 );
+
+-- Immutable Agent Origin source retention, internal and non-wire.
+-- Internal durable v1 Origin intents and complete registered carriers.
+-- These rows neither mint authority nor expose a new protocol surface.
+CREATE TABLE agent_origin_gate_intents (
+ event_id TEXT NOT NULL, intent_digest TEXT NOT NULL, request_id TEXT NOT NULL UNIQUE,
+ retry_expires_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY(event_id,intent_digest,request_id)
+);
+CREATE TABLE agent_origin_forward_evidence (
+ event_id TEXT NOT NULL, carrier_digest TEXT NOT NULL, evidence_ref TEXT NOT NULL,
+ evidence_json JSONB NOT NULL, PRIMARY KEY(event_id,carrier_digest)
+);
+CREATE TABLE agent_origin_control_sources (
+ event_id TEXT NOT NULL, commit_id TEXT NOT NULL, source_json JSONB NOT NULL,
+ PRIMARY KEY(event_id,commit_id)
+);
+CREATE TABLE agent_origin_commit_histories (
+ commit_id TEXT PRIMARY KEY, history_json JSONB NOT NULL
+);
+
+CREATE TABLE agent_origin_control_source_candidates (
+ event_id TEXT NOT NULL, commit_id TEXT NOT NULL, realm_id TEXT NOT NULL,
+ staged_at TIMESTAMPTZ NOT NULL DEFAULT now(), source_json JSONB NOT NULL,
+ PRIMARY KEY(event_id,commit_id), CHECK(jsonb_typeof(source_json)='object')
+);
+
+CREATE INDEX agent_origin_control_candidate_gc_idx
+ ON agent_origin_control_source_candidates(realm_id,staged_at);

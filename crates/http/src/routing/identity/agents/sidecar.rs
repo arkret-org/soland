@@ -500,6 +500,27 @@ async fn store_sidecar_final_outcome(
         .map_err(|error| AppError::internal(format!("Sidecar outcome store: {error}")))
 }
 
+fn next_sidecar_context_version(
+    current: Option<&soland_storage::AgentSidecarContextRecord>,
+) -> Result<(u64, Option<arkret_wire::EventId>), AppError> {
+    match current {
+        None => Ok((1, None)),
+        Some(current) => {
+            let version = u64::try_from(current.version)
+                .ok()
+                .filter(|version| *version > 0)
+                .and_then(|version| version.checked_add(1))
+                .filter(|version| i64::try_from(*version).is_ok())
+                .ok_or_else(|| AppError::internal("Sidecar context version cannot advance"))?;
+            let predecessor =
+                arkret_wire::EventId::new(current.attach_event_ref.clone()).map_err(|error| {
+                    AppError::internal(format!("Sidecar current attach ref: {error}"))
+                })?;
+            Ok((version, Some(predecessor)))
+        }
+    }
+}
+
 async fn prepare_sidecar(
     state: &AppState,
     session: &SessionRecord,
@@ -522,11 +543,6 @@ async fn prepare_sidecar(
         &arkret_wire::ActorId::account(authenticated_controller_account_id),
     )
     .await?;
-    let normalized_context_ref = serde_json::to_value(&body.context_ref).map_err(|error| {
-        AppError::internal(format!("context_ref serialization failed: {error}"))
-    })?;
-    let normalized_context_ref_digest = arkret_canonical::canonical_sha256(&normalized_context_ref)
-        .map_err(|error| AppError::internal(format!("context_ref digest failed: {error}")))?;
     let request_hash = arkret_canonical::canonical_sha256(&body)
         .map_err(|error| AppError::internal(format!("Sidecar prepare digest: {error}")))?;
     if let Some(cached) = state
@@ -554,41 +570,27 @@ async fn prepare_sidecar(
 
     let _guard =
         lock_sidecar_ensure(body.source_realm_id.as_str(), &body.controller_account_id).await;
-    let existing_sidecar = state
-        .agent_pairings()
-        .sidecar_for_realm_controller(body.source_realm_id.as_str(), &body.controller_account_id)
+    let existing_current = state
+        .authority_commits()
+        .sidecar_context_prepare_current(
+            &body.source_realm_id,
+            &body.controller_account_id,
+            &body.context_ref,
+        )
         .await
-        .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?;
-    if let Some(sidecar) = &existing_sidecar
-        && let Some(_context) = state
-            .agent_pairings()
-            .sidecar_context(&sidecar.sidecar_id, &normalized_context_ref_digest)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Sidecar context lookup failed: {error}"))
-            })?
-    {
-        return json_ok(SidecarEnsureOutcome::Accepted(
-            SidecarEnsureAcceptedOutcome {
-                status: SidecarEnsureAcceptedStatus::Accepted,
-                operation_id: body.operation_id,
-                accepted_phase: SidecarEnsureAcceptedPhase::Attach,
-                sidecar_id: SidecarId::new(sidecar.sidecar_id.clone())
-                    .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
-                source_context_ref: body.context_ref,
-                access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
-                pending_access_reconciliations: Vec::new(),
-            },
-        ));
-    }
-
+        .map_err(|error| {
+            crate::app_error!(
+                TemporarilyUnavailable,
+                "Sidecar prepare current cannot be confirmed: {error}"
+            )
+        })?;
     let controller_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     let digest_suite = state
         .projections()
         .realm_digest_suite(body.source_realm_id.as_str());
     let created_at = chrono::Utc::now();
-    let create_event = if existing_sidecar.is_none() {
+    let create_event = if existing_current.is_none() {
         Some(author_typed_sidecar_event::<
             arkret_wire::event_spec::SidecarCreate,
         >(
@@ -604,33 +606,35 @@ async fn prepare_sidecar(
     } else {
         None
     };
-    let sidecar_id = match (&existing_sidecar, &create_event) {
-        (Some(record), _) => SidecarId::new(record.sidecar_id.clone())
-            .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
-        (None, Some(event)) => SidecarId::from_event_id(&event.event_id),
-        (None, None) => unreachable!("new Sidecar always has a create Event"),
+    let (genesis_ref, current_context) = match existing_current {
+        Some(current) => current,
+        None => (
+            create_event
+                .as_ref()
+                .expect("new Sidecar Genesis")
+                .event_id
+                .clone(),
+            None,
+        ),
     };
+    let sidecar_id = SidecarId::from_event_id(&genesis_ref);
+    let (version, predecessor_event_ref) = next_sidecar_context_version(current_context.as_ref())?;
     let attach_event = author_typed_sidecar_event::<arkret_wire::event_spec::SidecarContextAttach>(
         arkret_wire::ScopeRef::Sidecar {
             realm_id: body.source_realm_id.clone(),
             sidecar_id: sidecar_id.clone(),
         },
         controller_actor,
-        create_event
-            .as_ref()
-            .map(|event| {
-                vec![arkret_wire::SemanticRef::new(
-                    event.event_id.to_string(),
-                    "after",
-                )]
-            })
-            .unwrap_or_default(),
+        vec![arkret_wire::SemanticRef::new(
+            genesis_ref.to_string(),
+            "after",
+        )],
         created_at,
         SidecarContextAttachPayload {
             sidecar_id: sidecar_id.clone(),
             source_context_ref: body.context_ref.clone(),
-            version: 1,
-            predecessor_event_ref: None,
+            version,
+            predecessor_event_ref,
         },
         digest_suite,
     )?;
@@ -1173,6 +1177,303 @@ mod tests {
                 .is_err()
         );
         assert!(state.projections().snapshot().strands.is_empty());
+    }
+
+    #[tokio::test]
+    async fn existing_sidecar_prepare_uses_accepted_context_and_signed_successor_cas() {
+        use diesel_async::RunQueryDsl;
+        use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
+        use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork};
+        let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let discussion =
+            source_context_test_realm::open_human_discussion(&pool, "sidecar-repeat-context-cas")
+                .await;
+        let realm = discussion.realm_id();
+        let actor = discussion.head.authority_commit.event.actor_id.clone();
+        let controller = actor.as_account_id().unwrap().clone();
+        let at =
+            discussion.head.authority_commit.commit.committed_at + chrono::Duration::seconds(1);
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let context = SidecarContextRef::Strand {
+            strand_id: discussion.strand_id.clone(),
+        };
+        assert!(
+            store
+                .sidecar_context_prepare_current(&realm, &controller, &context)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let create = source_context_test_realm::next_request_for_actor(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::SidecarCreate,
+            actor.clone(),
+            json!({}),
+            at,
+        );
+        uow.commit_event(create.clone()).await.unwrap();
+        let genesis = create.authority_commit.event.event_id.clone();
+        let sidecar = SidecarId::from_event_id(&genesis);
+        let scope = arkret_wire::ScopeRef::Sidecar {
+            realm_id: realm.clone(),
+            sidecar_id: sidecar.clone(),
+        };
+        let mut opening = source_context_test_realm::event_for_actor(
+            arkret_wire::EventKind::SidecarContextAttach,
+            scope.clone(),
+            actor.clone(),
+            serde_json::to_value(SidecarContextAttachPayload {
+                sidecar_id: sidecar.clone(),
+                source_context_ref: context.clone(),
+                version: 1,
+                predecessor_event_ref: None,
+            })
+            .unwrap(),
+            at + chrono::Duration::seconds(1),
+        );
+        opening.semantic_refs = vec![arkret_wire::SemanticRef::new(genesis.to_string(), "after")];
+        source_context_test_realm::reseal(&mut opening);
+        let mut first = source_context_test_realm::request_for_event(
+            &create.authority_commit,
+            opening,
+            at + chrono::Duration::seconds(1),
+        );
+        first.authority_commit.commit.stream_ref = arkret_wire::CommitStreamRef::Sidecar {
+            realm_id: realm.clone(),
+            sidecar_id: sidecar.clone(),
+        };
+        first.authority_commit.commit.stream_position = 0;
+        first.authority_commit.commit.previous_commit_ref = None;
+        uow.commit_event(first.clone()).await.unwrap();
+        let (accepted_genesis, current) = store
+            .sidecar_context_prepare_current(&realm, &controller, &context)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted_genesis, genesis);
+        let (version, predecessor) = next_sidecar_context_version(current.as_ref()).unwrap();
+        assert_eq!(version, 2);
+        assert_eq!(
+            predecessor.as_ref(),
+            Some(&first.authority_commit.event.event_id)
+        );
+        let draft_event =
+            author_typed_sidecar_event::<arkret_wire::event_spec::SidecarContextAttach>(
+                scope.clone(),
+                actor.clone(),
+                vec![arkret_wire::SemanticRef::new(genesis.to_string(), "after")],
+                at + chrono::Duration::seconds(2),
+                SidecarContextAttachPayload {
+                    sidecar_id: sidecar.clone(),
+                    source_context_ref: context.clone(),
+                    version,
+                    predecessor_event_ref: predecessor.clone(),
+                },
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap();
+        let draft =
+            sidecar_event_draft(&draft_event, arkret_canonical::DigestSuite::Sha256).unwrap();
+        assert!(validate_signed_sidecar_draft(&draft_event, &draft).is_err());
+        // A new reservation freezes an attach-only successor, never Accepted.
+        let prepared =
+            SidecarEnsureOutcome::PreparedExisting(SidecarEnsurePreparedExistingOutcome {
+                status: SidecarEnsurePreparedStatus::Prepared,
+                branch: SidecarEnsureExistingBranch::Existing,
+                operation_id: arkret_wire::ProtocolOperationId::new(
+                    "ak:operation:sidecar.ensure.context-fixture",
+                )
+                .unwrap(),
+                reservation_handle: arkret_wire::ReservationHandle::new(ids::generate(
+                    "reservation",
+                ))
+                .unwrap(),
+                expires_at: at + chrono::Duration::minutes(10),
+                sidecar_id: sidecar.clone(),
+                context_attach_event_draft: draft.clone(),
+            });
+        assert!(matches!(
+            prepared,
+            SidecarEnsureOutcome::PreparedExisting(_)
+        ));
+        let mut signed = draft_event.clone().into_event();
+        signed.producer_proof = first.authority_commit.event.producer_proof.clone();
+        source_context_test_realm::reseal(&mut signed);
+        validate_signed_sidecar_draft(&signed, &draft).unwrap();
+        for (version, predecessor) in [(3, predecessor.clone()), (2, Some(genesis.clone()))] {
+            let mut changed = signed.clone();
+            changed.payload = serde_json::from_value(json!({"sidecar_id": sidecar, "source_context_ref": context, "version": version, "predecessor_event_ref": predecessor})).unwrap();
+            changed
+                .refresh_content_bound_identity_with_digest_suite(
+                    arkret_canonical::DigestSuite::Sha256,
+                )
+                .unwrap();
+            assert!(validate_signed_sidecar_draft(&changed, &draft).is_err());
+        }
+        let mut second = source_context_test_realm::request_for_event(
+            &first.authority_commit,
+            signed,
+            at + chrono::Duration::seconds(2),
+        );
+        second.authority_commit.commit.stream_ref =
+            first.authority_commit.commit.stream_ref.clone();
+        second.authority_commit.commit.stream_position = 1;
+        second.authority_commit.commit.previous_commit_ref =
+            Some(first.authority_commit.commit.commit_id.clone());
+        let mut stale = second.clone();
+        stale.authority_commit.event.created_at += chrono::Duration::seconds(1);
+        source_context_test_realm::reseal(&mut stale.authority_commit.event);
+        stale = source_context_test_realm::request_for_event(
+            &first.authority_commit,
+            stale.authority_commit.event,
+            at + chrono::Duration::seconds(3),
+        );
+        stale.authority_commit.commit.stream_ref = first.authority_commit.commit.stream_ref.clone();
+        stale.authority_commit.commit.stream_position = 2;
+        stale.authority_commit.commit.previous_commit_ref =
+            Some(second.authority_commit.commit.commit_id.clone());
+        uow.commit_event(second.clone()).await.unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct Count {
+            #[diesel(sql_type=diesel::sql_types::BigInt)]
+            count: i64,
+        }
+        let counts = "SELECT (SELECT count(*) FROM canonical_events)+(SELECT count(*) FROM realm_commits)+(SELECT count(*) FROM sidecar_context_current_results)+(SELECT count(*) FROM member_state_current_results)+(SELECT count(*) FROM strand_current_results)+(SELECT count(*) FROM circle_current_results)+(SELECT count(*) FROM mls_group_current_results)+(SELECT count(*) FROM mls_welcome_provenance) AS count";
+        let mut conn = pool.get().await.unwrap();
+        assert_eq!(diesel::sql_query("SELECT (SELECT count(*) FROM agent_sidecars)+(SELECT count(*) FROM agent_sidecar_contexts) AS count").get_result::<Count>(&mut conn).await.unwrap().count, 0);
+        let before = diesel::sql_query(counts)
+            .get_result::<Count>(&mut conn)
+            .await
+            .unwrap()
+            .count;
+        let stale_error = uow.commit_event(stale).await.unwrap_err();
+        assert!(
+            stale_error.to_string().contains("cas_conflict"),
+            "{stale_error}"
+        );
+        assert_eq!(
+            diesel::sql_query(counts)
+                .get_result::<Count>(&mut conn)
+                .await
+                .unwrap()
+                .count,
+            before
+        );
+        let mut wrong_previous = second.authority_commit.event.clone();
+        wrong_previous.payload = serde_json::from_value(json!({"sidecar_id": sidecar, "source_context_ref": context, "version": 3, "predecessor_event_ref": genesis})).unwrap();
+        wrong_previous.created_at += chrono::Duration::seconds(2);
+        source_context_test_realm::reseal(&mut wrong_previous);
+        let mut wrong_previous = source_context_test_realm::request_for_event(
+            &second.authority_commit,
+            wrong_previous,
+            at + chrono::Duration::seconds(4),
+        );
+        wrong_previous.authority_commit.commit.stream_ref =
+            first.authority_commit.commit.stream_ref.clone();
+        wrong_previous.authority_commit.commit.stream_position = 2;
+        wrong_previous.authority_commit.commit.previous_commit_ref =
+            Some(second.authority_commit.commit.commit_id.clone());
+        let predecessor_error = uow.commit_event(wrong_previous).await.unwrap_err();
+        assert!(
+            predecessor_error.to_string().contains("cas_conflict"),
+            "{predecessor_error}"
+        );
+        assert_eq!(
+            diesel::sql_query(counts)
+                .get_result::<Count>(&mut conn)
+                .await
+                .unwrap()
+                .count,
+            before
+        );
+        assert_eq!(next_sidecar_context_version(None).unwrap(), (1, None));
+        let mut different_commit = second.clone();
+        different_commit.authority_commit.commit.committed_at += chrono::Duration::seconds(1);
+        let replay_conflict = uow.commit_event(different_commit).await.unwrap_err();
+        assert!(
+            replay_conflict.to_string().contains("duplicate_conflict"),
+            "{replay_conflict}"
+        );
+        let mut different_envelope = second.clone();
+        // Preserve the accepted ID while changing its content: this must never
+        // become an exact retry merely because its version matches current.
+        different_envelope.authority_commit.event.created_at += chrono::Duration::seconds(1);
+        assert!(uow.commit_event(different_envelope).await.is_err());
+        assert_eq!(
+            diesel::sql_query(counts)
+                .get_result::<Count>(&mut conn)
+                .await
+                .unwrap()
+                .count,
+            before
+        );
+        uow.commit_event(second).await.unwrap();
+        assert_eq!(
+            diesel::sql_query(counts)
+                .get_result::<Count>(&mut conn)
+                .await
+                .unwrap()
+                .count,
+            before
+        );
+        diesel::sql_query(
+            "UPDATE sidecar_current_results SET value=jsonb_set(value,'{state}','\"tombstoned\"')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert!(
+            store
+                .sidecar_context_prepare_current(&realm, &controller, &context)
+                .await
+                .is_err()
+        );
+        diesel::sql_query(
+            "UPDATE sidecar_current_results SET value=jsonb_set(value,'{state}','\"active\"')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query("UPDATE realm_commits SET event_pk=NULL WHERE commit_id IN (SELECT current_commit_id FROM sidecar_context_current_results)")
+            .execute(&mut conn).await.unwrap();
+        assert!(
+            store
+                .sidecar_context_prepare_current(&realm, &controller, &context)
+                .await
+                .is_err()
+        );
+        diesel::sql_query("UPDATE realm_commits c SET event_pk=e.pk FROM canonical_events e WHERE c.event_pk IS NULL AND e.envelope->>'event_id'=c.commit_json->>'event_ref'")
+            .execute(&mut conn).await.unwrap();
+        let (_, current) = store
+            .sidecar_context_prepare_current(&realm, &controller, &context)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.unwrap().version, 2);
+        let alias = arkret_wire::AccountId::new(
+            controller.principal_id.clone(),
+            DidCoreId::new("ak:did_core:web:foreign-controller.example").unwrap(),
+        );
+        assert!(
+            store
+                .sidecar_context_prepare_current(&realm, &alias, &context)
+                .await
+                .is_err()
+        );
+        let mut overflow = soland_storage::AgentSidecarContextRecord {
+            sidecar_id: sidecar.to_string(),
+            normalized_context_ref_digest: String::new(),
+            normalized_context_ref: json!({}),
+            version: i64::MAX,
+            predecessor_event_ref: None,
+            attach_event_ref: genesis.to_string(),
+            created_at: at,
+        };
+        assert!(next_sidecar_context_version(Some(&overflow)).is_err());
+        overflow.version = 0;
+        assert!(next_sidecar_context_version(Some(&overflow)).is_err());
     }
 
     #[test]

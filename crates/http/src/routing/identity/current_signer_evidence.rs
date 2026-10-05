@@ -18,6 +18,24 @@ use soland_http::result::{JsonResult, json_ok};
 use super::AuthArgs;
 use crate::state::AppState;
 
+fn signer_query_diagnostic(stage: &'static str, branch: &'static str) {
+    #[cfg(feature = "conformance-harness")]
+    tracing::warn!(target: "conformance_harness", stage, diag_branch = branch,
+        "historical signer query fixed diagnostic");
+    #[cfg(not(feature = "conformance-harness"))]
+    let _ = (stage, branch);
+}
+
+fn observed_signer_lookup<T, E>(result: Result<T, E>, stage: &'static str) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(_) => {
+            signer_query_diagnostic(stage, "lookup_failed");
+            None
+        }
+    }
+}
+
 pub(crate) fn self_router() -> Router {
     Router::with_path("signer-keys/query").post(self_query)
 }
@@ -73,20 +91,45 @@ pub(crate) async fn resolve_self_signer_keys(
     let requester = arkret_wire::ActorId::account(body.recipient_account_id.clone());
     // Read the accepted typed state, including verified replica anchors below
     // the reader's since_join floor; legacy projection caches are not authority.
-    let requester_is_member = state
-        .authority_commits()
-        .accepted_current_member_joined(&body.realm_id, &requester)
+    let requester_is_member = observed_signer_lookup(
+        state
+            .authority_commits()
+            .accepted_current_member_joined(&body.realm_id, &requester)
+            .await,
+        "member_classification",
+    )
+    .unwrap_or(false);
+    let ordinary = observed_signer_lookup(
+        state
+            .authority_commits()
+            .accepted_ordinary_realm(&body.realm_id)
+            .await,
+        "realm_classification",
+    )
+    .unwrap_or(false);
+    let self_recipient = super::session_actor::validated_session_actor(state, session)
         .await
         .ok()
-        .unwrap_or(false);
-    let ordinary = state
-        .authority_commits()
-        .accepted_ordinary_realm(&body.realm_id)
-        .await
-        .ok()
-        .unwrap_or(false);
+        .is_some_and(|actor| actor.as_account_id() == Some(&body.recipient_account_id))
+        && body.recipient_account_id.station_id == state.service_core_id();
     let mut results = Vec::with_capacity(body.queries.len());
     for selector in &body.queries {
+        let category = match selector {
+            SignerKeyQuerySelector::HistoricalEvent {
+                sender:
+                    arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice {
+                        actor, ..
+                    },
+            } if actor.route_service_id() == &state.service_core_id() => "local_human",
+            SignerKeyQuerySelector::HistoricalEvent {
+                sender: arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice { .. },
+            } => "foreign_human",
+            SignerKeyQuerySelector::HistoricalEvent {
+                sender: arkret_models_identity::HistoricalSignerKeyQuerySender::Agent { .. },
+            } => "agent",
+            SignerKeyQuerySelector::CurrentAdmission { .. } => "current_selector",
+        };
+        signer_query_diagnostic("selector_classification", category);
         let visible = ordinary
             && if let Some(reference) = selector.committed_event_ref() {
                 exact_visible_committed_event(state, session, &body.realm_id, reference).await
@@ -108,20 +151,59 @@ pub(crate) async fn resolve_self_signer_keys(
                     sender: CurrentSignerKeyQuerySender::Agent { .. },
                 } => current_agent_key(state, &body.realm_id, selector).await,
                 SignerKeyQuerySelector::HistoricalEvent {
-                    sender: arkret_models_identity::HistoricalSignerKeyQuerySender::Agent { .. },
-                } => state
-                    .authority_commits()
-                    .historical_agent_signer_key(&body.realm_id, selector)
-                    .await
-                    .ok()
-                    .flatten(),
-                // A historical answer needs the authorization state as of the
-                // exact accepted Event, rather than a current-key substitution.
-                _ => None,
+                    sender:
+                        arkret_models_identity::HistoricalSignerKeyQuerySender::Agent { .. }
+                        | arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice { .. },
+                } => {
+                    let found = observed_signer_lookup(
+                        state
+                            .authority_commits()
+                            .historical_producer_signer_key(&body.realm_id, selector)
+                            .await,
+                        "ordinary_historical",
+                    );
+                    if matches!(found, Some(None)) {
+                        signer_query_diagnostic("ordinary_historical", "immutable_fact_not_found");
+                    }
+                    found.flatten()
+                }
             }
+        } else if !ordinary
+            && self_recipient
+            && selector.actor().as_account_id() == Some(&body.recipient_account_id)
+        {
+            let found = observed_signer_lookup(
+                state
+                    .authority_commits()
+                    .historical_self_pcr_producer_signer_key(
+                        &body.realm_id,
+                        selector,
+                        &body.recipient_account_id,
+                    )
+                    .await,
+                "restricted_self_pcr_historical",
+            );
+            if matches!(found, Some(None)) {
+                signer_query_diagnostic(
+                    "restricted_self_pcr_historical",
+                    "immutable_fact_not_found",
+                );
+            }
+            found.flatten()
         } else {
+            signer_query_diagnostic(
+                "selection",
+                if ordinary {
+                    "ordinary_visibility_not_held"
+                } else {
+                    "domain_or_self_recipient_not_held"
+                },
+            );
             None
         };
+        if resolved.is_none() {
+            signer_query_diagnostic("result", "unavailable");
+        }
         results.push(
             resolved.unwrap_or_else(|| SignerKeyQueryResult::Unavailable {
                 selector: selector.clone(),
@@ -197,12 +279,20 @@ async fn exact_visible_committed_event(
     realm_id: &RealmId,
     reference: &CommittedEventRef,
 ) -> bool {
-    let Ok(Some(record)) = state
+    let record = match state
         .authority_commits()
         .committed_event(&reference.event_id)
         .await
-    else {
-        return false;
+    {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            signer_query_diagnostic("exact_visibility", "target_missing");
+            return false;
+        }
+        Err(_) => {
+            signer_query_diagnostic("exact_visibility", "target_lookup_failed");
+            return false;
+        }
     };
     if record.event.event_id != reference.event_id
         || record.event.realm_id != *realm_id
@@ -211,22 +301,35 @@ async fn exact_visible_committed_event(
         || record.commit.stream_ref != reference.stream_ref
         || record.commit.stream_position != reference.stream_position
     {
+        signer_query_diagnostic("exact_visibility", "coordinate_mismatch");
         return false;
     }
-    let Ok(Some(event_record)) = state
+    let event_record = match state
         .event_queries()
         .canonical_event(reference.event_id.as_str())
         .await
-    else {
-        return false;
+    {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            signer_query_diagnostic("exact_visibility", "canonical_original_missing");
+            return false;
+        }
+        Err(_) => {
+            signer_query_diagnostic("exact_visibility", "canonical_lookup_failed");
+            return false;
+        }
     };
-    event_record.realm_id.as_deref() == Some(realm_id.as_str())
+    let visible = event_record.realm_id.as_deref() == Some(realm_id.as_str())
         && crate::routing::events::event_log::event_visible_to_session(
             state,
             &event_record,
             session,
         )
-        .await
+        .await;
+    if !visible {
+        signer_query_diagnostic("exact_visibility", "event_visibility_not_held");
+    }
+    visible
 }
 
 async fn current_agent_key(

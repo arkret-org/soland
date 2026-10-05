@@ -170,6 +170,7 @@ impl Fixture {
             wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [82u8; 32]);
         let basis_commit_id = wire::RealmCommitId::from_digest([83u8; 32]);
         let basis_commit = wire::RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: basis_commit_id.clone(),
             realm_id: realm.clone(),
             stream_ref: stream_ref.clone(),

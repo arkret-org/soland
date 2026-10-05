@@ -19,7 +19,7 @@ use arkret_models_collaboration::authority_commit::{
     MLS_GENESIS_MATERIAL_MAX_BLOB_BYTES, MlsGenesisMaterial, PeerAuthorityForwardEventRequest,
     PeerAuthorityForwardMlsRequest, PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest,
 };
-use arkret_models_identity::AccountDeviceSignerEvidence;
+use arkret_models_identity::{AccountDeviceSignerEvidence, ForwardAccountDeviceSignerEvidence};
 use arkret_wire::{
     AuthoritySubmitOutcome, DidCoreId, ErrorCode, Event, EventAdmissionSubmission,
     MlsCommitSubmission,
@@ -53,7 +53,8 @@ fn verify_forwarded_producer(
     state: &AppState,
     peer: &AuthenticatedPeerContext,
     event: &Event,
-    evidence: Option<&AccountDeviceSignerEvidence>,
+    evidence: Option<&ForwardAccountDeviceSignerEvidence>,
+    body_digest: &arkret_wire::Hash,
     now: DateTime<Utc>,
 ) -> ServiceResult<Option<ForwardedProducerDeviceEvidence>> {
     arkret_schema::validate_event_for_submit(event)
@@ -67,22 +68,71 @@ fn verify_forwarded_producer(
     let Some(evidence) = evidence else {
         return Ok(None);
     };
-    arkret_identity::account_device_signer_evidence::verify_forwarded_human_producer(
-        evidence,
-        event,
-        &peer.source_service_id,
-        digest_suite,
-        now,
-    )
-    .map_err(|error| {
-        ServiceError::protocol(
-            error.error_code().unwrap_or(ErrorCode::SignatureInvalid),
-            error,
+    let verified =
+        arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
+            evidence,
+            event,
+            &peer.source_service_id,
+            &state.service_core_id(),
+            body_digest,
+            digest_suite,
+            now,
         )
-    })?;
+        .map_err(|error| {
+            ServiceError::protocol(
+                error.error_code().unwrap_or(ErrorCode::SignatureInvalid),
+                error,
+            )
+        })?;
     Ok(Some(ForwardedProducerDeviceEvidence::new(
         evidence.clone(),
+        verified.into_fact(),
     )?))
+}
+
+fn resolve_forwarded_producer(
+    state: &AppState,
+    peer: &AuthenticatedPeerContext,
+    event: &Event,
+    device: Option<&ForwardAccountDeviceSignerEvidence>,
+    agent: Option<&arkret_models_identity::AgentProducerEvidence>,
+    body_digest: &arkret_wire::Hash,
+    now: DateTime<Utc>,
+) -> ServiceResult<(
+    super::authority_self_event_unit::AdmittedProducer,
+    arkret_signatures::PublicKeyMaterial,
+)> {
+    if let Some(device) = verify_forwarded_producer(state, peer, event, device, body_digest, now)? {
+        let key = forwarded_producer_key(Some(&device.evidence))?;
+        return Ok((
+            super::authority_self_event_unit::AdmittedProducer::Forwarded(device),
+            key,
+        ));
+    }
+    if let Some(agent) = agent {
+        let verified = arkret_identity::agent_authority_evidence::verify_forwarded_agent_producer(
+            event,
+            agent,
+            &peer.source_service_id,
+            now,
+            None,
+        )
+        .map_err(|error| {
+            ServiceError::protocol(
+                error.error_code().unwrap_or(ErrorCode::SignatureInvalid),
+                error,
+            )
+        })?;
+        let key = verified.key().clone();
+        return Ok((
+            super::authority_self_event_unit::AdmittedProducer::ForwardedAgent(verified),
+            key,
+        ));
+    }
+    Err(ServiceError::protocol(
+        ErrorCode::DependencyMissing,
+        "forwarded Service producer authority is unavailable",
+    ))
 }
 
 /// B: admit one forwarded ordinary Event at `now`.
@@ -98,18 +148,16 @@ pub(crate) async fn admit_forwarded_event(
         return Ok(outcome);
     }
     request.validate().map_err(wire_refusal)?;
-    let Some(evidence) = verify_forwarded_producer(
+    let (producer, key) = resolve_forwarded_producer(
         state,
         peer,
         event,
         request.producer_device_evidence.as_ref(),
+        request.producer_agent_evidence.as_ref(),
+        &arkret_models_collaboration::authority_commit::authority_forward_body_digest(&request)
+            .map_err(wire_refusal)?,
         now,
-    )?
-    else {
-        return Err(ServiceError::internal(
-            "cross-Station Agent or Service producer resolution is not connected",
-        ));
-    };
+    )?;
     if let Some(outcome) = super::authority_port::refuse_unrouted_event(state, event).await? {
         return Ok(outcome);
     }
@@ -122,13 +170,12 @@ pub(crate) async fn admit_forwarded_event(
                 "an MLS Event carries no approval signatures".to_owned(),
             ));
         }
-        let key = forwarded_producer_key(request.producer_device_evidence.as_ref())?;
         return super::authority_mls_unit::admit_mls_event(
             state,
             event,
             &[],
             request.mls_genesis_material.as_ref(),
-            super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+            producer,
             &key,
         )
         .await;
@@ -137,7 +184,7 @@ pub(crate) async fn admit_forwarded_event(
     super::authority_self_event_unit::commit_event_unit(
         state,
         &request.event_submission,
-        super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+        producer,
         super::authority_self_event_unit::SelfEventUnitEffects::default(),
     )
     .await
@@ -157,25 +204,22 @@ pub(super) async fn admit_forwarded_mls(
         return Ok(outcome);
     }
     request.validate().map_err(wire_refusal)?;
-    let Some(evidence) = verify_forwarded_producer(
+    let (producer, key) = resolve_forwarded_producer(
         state,
         peer,
         event,
         request.producer_device_evidence.as_ref(),
+        request.producer_agent_evidence.as_ref(),
+        &arkret_models_collaboration::authority_commit::authority_forward_body_digest(&request)
+            .map_err(wire_refusal)?,
         now,
-    )?
-    else {
-        return Err(ServiceError::internal(
-            "cross-Station Agent or Service producer resolution is not connected",
-        ));
-    };
-    let key = forwarded_producer_key(request.producer_device_evidence.as_ref())?;
+    )?;
     super::authority_mls_unit::admit_mls_event(
         state,
         event,
         &request.mls_submission.welcomes,
         None,
-        super::authority_self_event_unit::AdmittedProducer::Forwarded(evidence),
+        producer,
         &key,
     )
     .await
@@ -184,7 +228,7 @@ pub(super) async fn admit_forwarded_mls(
 /// The attested device key a verified forwarded producer proof verified
 /// under; the same producer seals the Commit's Welcomes with it.
 fn forwarded_producer_key(
-    evidence: Option<&AccountDeviceSignerEvidence>,
+    evidence: Option<&ForwardAccountDeviceSignerEvidence>,
 ) -> ServiceResult<arkret_signatures::PublicKeyMaterial> {
     let evidence = evidence.ok_or_else(|| {
         ServiceError::internal("a verified forwarded human producer carries its evidence")
@@ -212,7 +256,7 @@ fn forwarded_producer_key(
 /// PCR gate refuses a revoked, revocation-pending, fenced or out-of-window
 /// device with its registered code before anything is signed, and the
 /// retention transaction re-proves the same cut at `attested_at`.
-pub(crate) async fn fresh_producer_device_evidence(
+pub(super) async fn fresh_directory_device_evidence(
     state: &AppState,
     event: &Event,
 ) -> ServiceResult<Option<AccountDeviceSignerEvidence>> {
@@ -262,6 +306,263 @@ pub(crate) async fn fresh_producer_device_evidence(
         temporarily_unavailable("current producer device material is unavailable")
     })?;
     Ok(Some(evidence))
+}
+
+/// Fresh registered forward sibling, independently signed over the complete wrapper.
+pub(crate) async fn fresh_producer_device_evidence(
+    state: &AppState,
+    event: &Event,
+    destination: &DidCoreId,
+    body_digest: &arkret_wire::Hash,
+) -> ServiceResult<Option<ForwardAccountDeviceSignerEvidence>> {
+    let Some(directory) = fresh_directory_device_evidence(state, event).await? else {
+        return Ok(None);
+    };
+    let core = directory.device_projection_attestation.attestation;
+    let fact = state
+        .authority_commits()
+        .prepare_human_signer_fact(event, core.attested_at)
+        .await?
+        .ok_or_else(|| temporarily_unavailable("forward origin immutable source is unavailable"))?;
+    let forward_core = arkret_models_crypto::ForwardDeviceProjectionAttestationCore {
+        account_id: core.account_id,
+        device_id: core.device_id,
+        device_signing_key_did: core.device_signing_key_did,
+        hpke_key: core.hpke_key,
+        device_authorize_event_id: core.device_authorize_event_id,
+        authorized_generation_ref: core.authorized_generation_ref,
+        device_status: core.device_status,
+        authorization_window: core.authorization_window,
+        attested_at: core.attested_at,
+        expires_at: core.expires_at,
+        event_authorization: arkret_models_crypto::HumanEventAuthorization {
+            event_id: fact.event_id,
+            verification_method: fact.verification_method,
+            destination_service_id: destination.clone(),
+            forward_body_digest: body_digest.clone(),
+            authorization_ref: fact.key.authorization_ref,
+            revision: fact.key.revision,
+            governance_generation: fact.key.governance_generation,
+            accepted_at: fact.accepted_at,
+        },
+    };
+    let attestation =
+        arkret_signatures::device_projection::sign_forward_device_projection_attestation(
+            forward_core,
+            state
+                .service_verification_method("notary-key")
+                .map_err(ServiceError::internal)?,
+            state.notary_signing_key().as_ref(),
+        )
+        .map_err(wire_refusal)?;
+    let evidence = ForwardAccountDeviceSignerEvidence {
+        device_projection_attestation: attestation,
+        service_resolution: directory.service_resolution,
+    };
+    // Same original PCR lock re-prepares every immutable field and checks the
+    // fresh projection before retaining the complete signed origin root.
+    state
+        .persistence()
+        .retain_forward_current_signer_evidence(event, &evidence)
+        .await?;
+    Ok(Some(evidence))
+}
+
+/// Use the existing deployment-private AA operation. Request identity comes
+/// from the registered exact endpoint/credential, never from an Event header.
+async fn request_origin_controller_gate(
+    state: &AppState,
+    principal: &DidCoreId,
+    request_id: arkret_wire::RequestId,
+) -> ServiceResult<arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestation>
+{
+    use arkret_models_identity::agent_signer_evidence::{
+        ControllerAccountGateIssuanceInput, ControllerAccountGateIssuanceResult,
+    };
+    let channel = state
+        .config()
+        .internal_authority_channel
+        .as_ref()
+        .ok_or_else(|| {
+            temporarily_unavailable("Agent Origin has no registered controller gate channel")
+        })?;
+    let input = ControllerAccountGateIssuanceInput {
+        request_id: request_id.clone(),
+        principal_id: principal.clone(),
+        agent_authority_id: state.service_core_id(),
+    };
+    let body = arkret_canonical::canonical_json_bytes(&input)
+        .map_err(|error| temporarily_unavailable(error))?;
+    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        channel.controller_gate_url(),
+        "registered controller gate issuance",
+        state.config().development_mode,
+        std::time::Duration::from_secs(10),
+    )
+    .map_err(|_| temporarily_unavailable("controller gate egress is unavailable"))?;
+    // The client is pinned and redirect-disabled by the common egress helper.
+    let mut response = client
+        .post(url)
+        .bearer_auth(channel.credential())
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| temporarily_unavailable("controller gate response is unavailable"))?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(temporarily_unavailable(
+            "controller gate issuance was refused",
+        ));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| temporarily_unavailable("controller gate response is unavailable"))?
+    {
+        if bytes.len().saturating_add(chunk.len())
+            > arkret_models_identity::AGENT_AUTHORITY_EVIDENCE_MAX_CANONICAL_BYTES
+        {
+            return Err(temporarily_unavailable(
+                "controller gate response exceeds formal carrier bound",
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let outcome: ControllerAccountGateIssuanceResult =
+        serde_json::from_slice(&bytes).map_err(|_| {
+            temporarily_unavailable("controller gate outcome is not closed typed material")
+        })?;
+    let gate = outcome.controller_account_gate_attestation;
+    gate.validate().map_err(wire_refusal)?;
+    if outcome.request_id != request_id
+        || gate.principal_id != *principal
+        || gate.authority_id != state.service_core_id()
+        || !gate.is_valid_at(crate::wire::now())
+    {
+        return Err(wire_refusal(arkret_wire::WireError::ProtocolCode {
+            code: ErrorCode::SignatureInvalid,
+            message: "controller gate response differs from registered request".into(),
+        }));
+    }
+    // Signature, actual assertion method and observation history are verified
+    // by the full Agent verifier, not inferred from HTTP success or this shape.
+    Ok(gate)
+}
+
+/// Assemble, independently verify, then retain a full Origin Agent sibling.
+/// The default storage port refuses until the same-cut PG assembler exists.
+async fn fresh_producer_agent_evidence(
+    state: &AppState,
+    event: &Event,
+) -> ServiceResult<Option<arkret_models_identity::AgentProducerEvidence>> {
+    if event
+        .human_device_producer()
+        .map_err(wire_refusal)?
+        .is_some()
+        || event.actual_signer().as_account_id().is_none()
+    {
+        return Ok(None);
+    }
+    let account = event
+        .actual_signer()
+        .as_account_id()
+        .expect("checked above");
+    if account.station_id != state.service_core_id() {
+        return Err(wire_refusal(arkret_wire::WireError::ProtocolCode {
+            code: ErrorCode::SignatureInvalid,
+            message: "Agent Origin differs from producer Account Station".into(),
+        }));
+    }
+    use arkret_models_identity::agent_signer_evidence::AgentDetachedJws;
+    use arkret_models_identity::{
+        AgentAuthorityStateAttestation, AgentAuthorityStateEvidence, AgentProducerEvidence,
+    };
+    let at = crate::wire::now();
+    let original = state
+        .authority_commits()
+        .prepare_agent_origin_state(event, at)
+        .await?;
+    original.validate_binding(account).map_err(wire_refusal)?;
+    let request_id = state
+        .authority_commits()
+        .agent_origin_controller_gate_request(event, &original)
+        .await?;
+    let gate = request_origin_controller_gate(
+        state,
+        &original.authorization.controller_principal_id,
+        request_id,
+    )
+    .await?;
+    let issued_at = crate::wire::now();
+    let state_digest = original.digest().map_err(wire_refusal)?;
+    let mut attestation = AgentAuthorityStateAttestation {
+        authority_id: state.service_core_id(),
+        verification_method: state
+            .service_verification_method("notary-key")
+            .map_err(|_| temporarily_unavailable("Agent state issuer method is unavailable"))?,
+        state_digest: state_digest.clone(),
+        issued_at,
+        expires_at: issued_at + chrono::Duration::seconds(300),
+        proof: AgentDetachedJws {
+            kind: arkret_wire::NonEmptyString::new(arkret_wire::proof_kind::DETACHED_JWS)
+                .map_err(|e| temporarily_unavailable(e))?,
+            jws: arkret_wire::NonEmptyString::new("pending")
+                .map_err(|e| temporarily_unavailable(e))?,
+        },
+    };
+    attestation.proof.jws = arkret_wire::NonEmptyString::new(
+        arkret_signatures::sign_ed25519_detached_jws(
+            state.notary_signing_key().as_ref(),
+            &attestation.signing_bytes().map_err(wire_refusal)?,
+        )
+        .map_err(|_| temporarily_unavailable("Agent state signing failed"))?,
+    )
+    .map_err(|e| temporarily_unavailable(e))?;
+    let jwk =
+        arkret_signatures::jwk::JsonWebKey::ed25519(original.authorization.public_key.key.clone());
+    let signer = arkret_models_identity::authenticated_signer_resolution_evidence::build_agent_signer_evidence(
+        original.agent_id.clone(),original.authorization.verification_method.clone(),
+        serde_json::from_value(serde_json::to_value(jwk).map_err(|e|temporarily_unavailable(e))?)
+            .map_err(|e|temporarily_unavailable(e))?,
+        original.authorization.accepted_commit_id.clone(),original.authorization.accepted_at,
+    ).map_err(wire_refusal)?;
+    let resolution =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await
+            .map_err(|_| temporarily_unavailable("Agent current issuer history is unavailable"))?;
+    let evidence = AgentProducerEvidence {
+        authenticated_signer_evidence: signer,
+        agent_authority_state_evidence: AgentAuthorityStateEvidence {
+            schema: arkret_wire::NonEmptyString::new(
+                arkret_wire::SchemaId::AGENT_AUTHORITY_STATE_EVIDENCE_V1,
+            )
+            .map_err(|e| temporarily_unavailable(e))?,
+            state: Some(original),
+            state_digest,
+            attestation,
+        },
+        controller_account_gate_attestation: gate,
+        authority_resolution: resolution,
+    };
+    let verified = arkret_identity::agent_authority_evidence::verify_forwarded_agent_producer(
+        event,
+        &evidence,
+        &state.service_core_id(),
+        crate::wire::now(),
+        None,
+    )
+    .map_err(|error| {
+        ServiceError::protocol(
+            error.error_code().unwrap_or(ErrorCode::SignatureInvalid),
+            error,
+        )
+    })?;
+    state
+        .authority_commits()
+        .retain_agent_forward_evidence_at_same_cut(event, verified.evidence(), crate::wire::now())
+        .await?;
+    Ok(Some(verified.evidence().clone()))
 }
 
 /// A: the raw GroupInfo and ratchet tree an `ak.mls.genesis` forward
@@ -317,16 +618,30 @@ pub(crate) async fn forward_self_event(
     // particular, a revoked/pending/fenced producer must leave no queued
     // Event behind at the forwarding Station.
     let material = forwarded_genesis_material(state, &submission.event).await?;
-    let evidence = fresh_producer_device_evidence(state, &submission.event).await?;
+    let mut request = PeerAuthorityForwardEventRequest {
+        branch:
+            arkret_models_collaboration::authority_commit::AuthorityForwardBranch::AuthorityForward,
+        event_submission: submission.clone(),
+        mls_genesis_material: material,
+        producer_device_evidence: None,
+        producer_agent_evidence: None,
+    };
+    request.producer_agent_evidence =
+        fresh_producer_agent_evidence(state, &submission.event).await?;
+    let body_digest =
+        arkret_models_collaboration::authority_commit::authority_forward_body_digest(&request)
+            .map_err(wire_refusal)?;
+    request.producer_device_evidence =
+        fresh_producer_device_evidence(state, &submission.event, governance, &body_digest).await?;
+    request.validate().map_err(wire_refusal)?;
     // Retain the producer's exact signed Event before any forwarding attempt.
     // A transport failure leaves this row queued for an exact replay or a
     // later committed replica; neither path makes it visible as accepted.
     state
         .authority_commits()
-        .queue_event(&submission.event, crate::wire::now())
+        .queue_event(&request.event_submission.event, crate::wire::now())
         .await?;
-    let request = PeerAuthorityForwardEventRequest::new(submission, material, evidence)
-        .map_err(wire_refusal)?;
+
     send_forward(
         state,
         governance,
@@ -344,13 +659,27 @@ pub(super) async fn forward_self_mls(
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     // Match ordinary forwarding: the live device gate precedes every durable
     // forwarding effect, including the local queued Event.
-    let evidence = fresh_producer_device_evidence(state, &submission.commit_event).await?;
+    let mut request = PeerAuthorityForwardMlsRequest {
+        branch:
+            arkret_models_collaboration::authority_commit::AuthorityForwardBranch::AuthorityForward,
+        mls_submission: submission.clone(),
+        producer_device_evidence: None,
+        producer_agent_evidence: None,
+    };
+    request.producer_agent_evidence =
+        fresh_producer_agent_evidence(state, &submission.commit_event).await?;
+    let body_digest =
+        arkret_models_collaboration::authority_commit::authority_forward_body_digest(&request)
+            .map_err(wire_refusal)?;
+    request.producer_device_evidence =
+        fresh_producer_device_evidence(state, &submission.commit_event, governance, &body_digest)
+            .await?;
+    request.validate().map_err(wire_refusal)?;
     state
         .authority_commits()
         .queue_event(&submission.commit_event, crate::wire::now())
         .await?;
-    let request =
-        PeerAuthorityForwardMlsRequest::new(submission, evidence).map_err(wire_refusal)?;
+
     send_forward(
         state,
         governance,
@@ -373,6 +702,39 @@ async fn send_forward(
         }
         _ => unreachable!("only authority forwards reach send_forward"),
     };
+    let evidence = match &request {
+        PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
+            request.producer_device_evidence.as_ref()
+        }
+        PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => {
+            request.producer_device_evidence.as_ref()
+        }
+        _ => unreachable!("only authority forwards reach send_forward"),
+    };
+    let request_body = match &request {
+        PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => serde_json::to_value(request),
+        PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => serde_json::to_value(request),
+        _ => unreachable!("only authority forwards reach send_forward"),
+    }
+    .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
+    let body_digest =
+        arkret_models_collaboration::authority_commit::authority_forward_body_digest(&request_body)
+            .map_err(wire_refusal)?;
+    let producer_signer_fact = evidence
+        .map(|evidence| {
+            arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
+                evidence,
+                event,
+                &state.service_core_id(),
+                governance,
+                &body_digest,
+                event.realm_id.digest_suite_code().digest_suite(),
+                crate::wire::now(),
+            )
+            .map(|verified| verified.into_fact())
+            .map_err(|e| ServiceError::protocol(ErrorCode::SignatureInvalid, e))
+        })
+        .transpose()?;
     let result = async {
         let body = arkret_canonical::canonical_json_bytes(&request)
             .map_err(|error| ServiceError::internal(error.to_string()))?;
@@ -385,7 +747,14 @@ async fn send_forward(
         .map_err(temporarily_unavailable)?;
         let outcome = relay_governance_response(&request, response)?;
         if let AuthoritySubmitOutcome::Accepted { commit, .. } = &outcome {
-            verify_forwarded_commit(state, governance, event, commit).await?;
+            verify_forwarded_commit(
+                state,
+                governance,
+                event,
+                commit,
+                producer_signer_fact.as_ref(),
+            )
+            .await?;
         }
         Ok::<_, ServiceError>(outcome)
     }
@@ -422,6 +791,7 @@ async fn verify_forwarded_commit(
     governance: &DidCoreId,
     event: &Event,
     commit: &arkret_wire::RealmCommit,
+    fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
 ) -> ServiceResult<()> {
     let mut located = crate::routing::realm_join::resolve_verified_authority_of_service(
         state,
@@ -446,7 +816,7 @@ async fn verify_forwarded_commit(
         .await
         .map_err(|error| temporarily_unavailable(format!("RealmCommit signing key: {error}")))?;
     }
-    soland_services::committed_receipt::verify_committed_event_receipt(
+    soland_services::committed_receipt::verify_committed_event_receipt_with_fact(
         state.persistence(),
         event,
         commit,
@@ -457,6 +827,7 @@ async fn verify_forwarded_commit(
         state
             .projections()
             .realm_digest_suite(event.realm_id.as_str()),
+        fact,
     )
     .await
     .map_err(|error| temporarily_unavailable(format!("RealmCommit verification: {error}")))?;
@@ -541,3 +912,80 @@ fn relay_governance_response(
 #[cfg(test)]
 #[path = "authority_forward_tests.rs"]
 mod tests;
+
+/// Capture the original producer root before the Event acceptance timestamp.
+/// This is the Directory sibling, never a repackaged Forward signature.
+pub(super) async fn prepare_control_source(
+    state: &AppState,
+    event: &Event,
+) -> ServiceResult<
+    Option<(
+        arkret_models_identity::AgentSignerDependency,
+        arkret_models_identity::AuthenticatedServiceResolution,
+    )>,
+> {
+    let relevant = matches!(
+        event.kind,
+        arkret_wire::EventKind::AgentKeyAuthorize
+            | arkret_wire::EventKind::AgentKeyRevoke
+            | arkret_wire::EventKind::SelfAgentPause
+            | arkret_wire::EventKind::SelfAgentResume
+            | arkret_wire::EventKind::SelfAgentDeactivate
+    ) || (event.kind == arkret_wire::EventKind::RealmCreate
+        && event
+            .payload
+            .get("object")
+            .and_then(|v| v.get("purpose"))
+            .and_then(serde_json::Value::as_str)
+            == Some("agent_control"));
+    if !relevant {
+        return Ok(None);
+    }
+    let dependency = if let Some(root) = fresh_directory_device_evidence(state, event).await? {
+        arkret_models_identity::AgentSignerDependency::AccountDevice {
+            signer_resolution_evidence_ref: root.signer_evidence_ref().map_err(wire_refusal)?,
+            account_device_signer_evidence: root,
+        }
+    } else if let Some(agent) = fresh_producer_agent_evidence(state, event).await? {
+        arkret_models_identity::AgentSignerDependency::Agent {
+            signer_resolution_evidence_ref: agent
+                .authenticated_signer_evidence
+                .signer_evidence_ref()
+                .map_err(wire_refusal)?,
+            agent_evidence: Box::new(agent),
+        }
+    } else {
+        return Err(temporarily_unavailable(
+            "control original registered Service dependency is unavailable",
+        ));
+    };
+    let history =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await
+            .map_err(|_| temporarily_unavailable("control issuer original history unavailable"))?;
+    Ok(Some((dependency, history)))
+}
+
+pub(super) async fn stage_control_source(
+    state: &AppState,
+    transaction: &soland_storage::AuthorityCommitTransaction,
+    original: Option<(
+        arkret_models_identity::AgentSignerDependency,
+        arkret_models_identity::AuthenticatedServiceResolution,
+    )>,
+) -> ServiceResult<()> {
+    if let Some((dependency, history)) = original {
+        state
+            .authority_commits()
+            .stage_agent_control_source(
+                &arkret_wire::CommittedEventFullView {
+                    event: transaction.event.clone(),
+                    commit: transaction.commit.clone(),
+                },
+                &dependency,
+                &history,
+            )
+            .await?;
+    }
+    Ok(())
+}

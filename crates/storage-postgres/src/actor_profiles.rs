@@ -375,11 +375,26 @@ async fn commit_verified(
     queued_at: chrono::DateTime<chrono::Utc>,
     what: &str,
 ) -> Result<(), PgTransactionError> {
+    let historical = crate::agent_producer_signer_keys::prepare_admitted_own_pcr_in_connection(
+        conn,
+        &write.event,
+        &write.commit,
+    )
+    .await?;
     crate::authority_commit::queue_event_in_connection(conn, &write.event, queued_at).await?;
     match crate::authority_commit::commit_verified_pcr_typed_current_in_connection(conn, write)
         .await?
     {
-        AuthorityCommitWriteOutcome::Committed => Ok(()),
+        AuthorityCommitWriteOutcome::Committed => {
+            crate::agent_producer_signer_keys::retain_self_outcome_in_connection(
+                conn,
+                &write.event,
+                &write.commit,
+                historical,
+            )
+            .await?;
+            Ok(())
+        }
         AuthorityCommitWriteOutcome::Duplicate => Err(rejected(
             ConflictCode::DuplicateConflict,
             &format!("{what} Event was committed outside this unit"),

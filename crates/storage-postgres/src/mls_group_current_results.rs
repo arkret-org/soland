@@ -229,6 +229,7 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
     let key = scope_key(&event.scope_ref)?;
     let current = locked_group(conn, &key).await?;
     let payload = serde_json::to_value(&event.payload).map_err(PersistenceError::database)?;
+    let mut sidecar_cut = None;
     if let ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
         let cut = crate::sidecar_access::cut_in_connection(conn, &event.realm_id, sidecar_id)
             .await?
@@ -244,12 +245,14 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
                 .governance_binding()
                 .clone(),
         };
-        crate::sidecar_authority_cut::validate_mls_binding_in_connection(
-            conn,
-            &binding,
-            &cut.controller_account_id,
-        )
-        .await?;
+        sidecar_cut = Some(
+            crate::sidecar_authority_cut::validate_mls_binding_in_connection(
+                conn,
+                &binding,
+                &cut.controller_account_id,
+            )
+            .await?,
+        );
     }
     let next = match event.kind {
         EventKind::MlsGenesis => {
@@ -321,6 +324,21 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
         return Err(binding_mismatch(
             "the installed public state is not at the Commit's epoch",
         ));
+    }
+    if let Some(cut) = &sidecar_cut {
+        if !crate::sidecar_mls_readiness::tree_authorized_in_connection(
+            conn,
+            cut,
+            &next,
+            &installation.public_state,
+            Some(transaction),
+        )
+        .await?
+        {
+            return Err(binding_mismatch(
+                "the Sidecar post-transition tree retains an unauthorized endpoint",
+            ));
+        }
     }
     // encryption-and-audit.md section 2.4.1: while a Circle tree holds a leaf
     // of an actor that is no longer an effective Circle member, only a Commit
@@ -1157,6 +1175,17 @@ pub(crate) async fn require_mls_send_gate_in_connection(
             .governance_binding()
             .clone(),
         };
+        if !crate::sidecar_mls_readiness::tree_authorized_in_connection(
+            conn,
+            &current_cut,
+            &current.value,
+            &current.public_state,
+            None,
+        )
+        .await?
+        {
+            return Err(soland_storage::MlsSendGateRefusal::EpochUpdateRequired.into_conflict());
+        }
         if binding.sidecar_binding().is_none_or(|binding| {
             binding.participant_authority_digest != current_cut.participant_authority_digest
                 || binding.authority_stream_head != current_cut.authority_stream_head
@@ -1378,6 +1407,7 @@ mod tests {
 
     fn commit(event: &arkret_wire::Event, position: u64) -> arkret_wire::RealmCommit {
         arkret_wire::RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: arkret_wire::RealmCommitId::from_digest([position as u8; 32]),
             realm_id: realm_id(),
             stream_ref: arkret_wire::CommitStreamRef::Realm {

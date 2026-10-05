@@ -173,6 +173,93 @@ pub fn evaluate_grants<'g>(
     evaluate_grants_with_verified_approvals(operation, grants, &[])
 }
 
+/// Intersect an Agent's complete paths with its controller's current paths.
+/// Parent quota keys retain the controller actor and original grant identity.
+/// The returned candidates are parent-first in canonical GrantId order; callers
+/// must reserve each candidate's entire reservation set atomically.
+pub fn evaluate_controller_bounded_grants<'g>(
+    operation: &AuthorizationOperation<'_>,
+    agent_grants: &[&'g CapabilityGrant],
+    controller: &ActorId,
+    controller_grants: &[&CapabilityGrant],
+    approvals: &[VerifiedGrantApproval],
+    controller_owner: bool,
+) -> GrantEvaluation<'g> {
+    let agent_verdict =
+        evaluate_grants_with_verified_approvals(operation, agent_grants.iter().copied(), approvals);
+    let mut controller_facts = operation.facts.clone();
+    controller_facts.applet_id = None;
+    controller_facts.executed_by = None;
+    controller_facts.registration_epoch = None;
+    let controller_operation = AuthorizationOperation {
+        actor: controller,
+        facts: &controller_facts,
+        ..*operation
+    };
+    let controller_verdict =
+        evaluate_grants(&controller_operation, controller_grants.iter().copied());
+    // Refusals apply across all matching grants before selecting either path.
+    for effect in [0, 1, 2] {
+        for verdict in [&agent_verdict, &controller_verdict] {
+            match (effect, verdict) {
+                (0, GrantEvaluation::Denied) => return GrantEvaluation::Denied,
+                (1, GrantEvaluation::Quarantined) => return GrantEvaluation::Quarantined,
+                (2, GrantEvaluation::RequiresReview) => return GrantEvaluation::RequiresReview,
+                _ => {}
+            }
+        }
+    }
+    if !matches!(agent_verdict, GrantEvaluation::Allowed(_)) {
+        return agent_verdict;
+    }
+    let mut candidates = Vec::new();
+    for action in operation.actions {
+        let actions = [*action];
+        let agent_operation = AuthorizationOperation {
+            actions: &actions,
+            ..*operation
+        };
+        let GrantEvaluation::Allowed(agent_paths) = evaluate_grants_with_verified_approvals(
+            &agent_operation,
+            agent_grants.iter().copied(),
+            approvals,
+        ) else {
+            continue;
+        };
+        let controller_operation = AuthorizationOperation {
+            actor: controller,
+            facts: &controller_facts,
+            ..agent_operation
+        };
+        let parent_paths =
+            match evaluate_grants(&controller_operation, controller_grants.iter().copied()) {
+                GrantEvaluation::Allowed(paths) => paths,
+                _ => Vec::new(),
+            };
+        for agent in agent_paths {
+            if controller_owner {
+                candidates.push((None, agent.clone()));
+            }
+            for parent in &parent_paths {
+                let mut bounded = agent.clone();
+                bounded
+                    .reservations
+                    .extend(parent.reservations.iter().cloned());
+                candidates.push((Some(parent.grant.id.clone()), bounded));
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return GrantEvaluation::Unsatisfied;
+    }
+    candidates.sort_by(|(left_parent, left), (right_parent, right)| {
+        left_parent
+            .cmp(right_parent)
+            .then_with(|| left.grant.id.cmp(&right.grant.id))
+    });
+    GrantEvaluation::Allowed(candidates.into_iter().map(|(_, path)| path).collect())
+}
+
 /// Internal admission evidence for one immutable constraint of one grant. This
 /// is never deserialized from a request; the accepting transaction earns it by
 /// verifying exact detached evidence and the eligible roster at its cut.

@@ -121,6 +121,10 @@ pub(crate) async fn admit_agent_provision_in_connection(
         ));
     }
 
+    let historical = crate::agent_producer_signer_keys::prepare_admitted_own_pcr_in_connection(
+        conn, event, commit,
+    )
+    .await?;
     crate::authority_commit::queue_event_in_connection(conn, event, write.queued_at).await?;
     match crate::authority_commit::commit_verified_agent_provision_in_connection(
         conn,
@@ -217,6 +221,10 @@ pub(crate) async fn admit_agent_provision_in_connection(
         ));
     }
     crate::sidecar_authority_change_guard::after_current_writes_in_connection(conn, event).await?;
+    crate::agent_producer_signer_keys::retain_self_outcome_in_connection(
+        conn, event, commit, historical,
+    )
+    .await?;
     Ok(AgentProvisionAdmissionOutcome::Committed(values))
 }
 
@@ -225,20 +233,33 @@ pub(crate) async fn admit_agent_provision_in_connection(
 pub(crate) async fn declared_agent_provision_in_connection(
     conn: &mut AsyncPgConnection,
     agent_pcr_id: &arkret_wire::RealmId,
-) -> Result<Option<(arkret_wire::RealmId, AgentProvisionPayload)>, PgTransactionError> {
+) -> Result<
+    Option<(
+        arkret_wire::RealmId,
+        AgentProvisionPayload,
+        arkret_wire::CommittedEventRef,
+    )>,
+    PgTransactionError,
+> {
     #[derive(QueryableByName)]
     struct ProvisionRow {
         #[diesel(sql_type = Text)]
         realm_id: String,
         #[diesel(sql_type = Jsonb)]
         envelope: serde_json::Value,
+        #[diesel(sql_type = Jsonb)]
+        commit_json: serde_json::Value,
+        #[diesel(sql_type = Text)]
+        commit_id: String,
+        #[diesel(sql_type = BigInt)]
+        stream_position: i64,
     }
     let row = sql_query(
-        "SELECT d.realm_id,e.envelope \
+        "SELECT d.realm_id,e.envelope,c.commit_json,c.commit_id,c.stream_position \
          FROM agent_pcr_genesis_declaration_current_results d \
          JOIN realm_commits c ON c.commit_id=d.current_commit_id \
          JOIN canonical_events e ON e.pk=c.event_pk \
-         WHERE d.principal_control_realm_id=$1 FOR SHARE OF d",
+         WHERE d.principal_control_realm_id=$1 AND c.realm_id=d.realm_id AND c.stream_position=d.current_stream_position AND e.state='committed' FOR SHARE OF d",
     )
     .bind::<Text, _>(agent_pcr_id.as_str())
     .get_result::<ProvisionRow>(&mut *conn)
@@ -253,7 +274,22 @@ pub(crate) async fn declared_agent_provision_in_connection(
                 "agent_pcr_genesis_declaration row differs from its provision Event",
             ));
         }
-        Ok((realm_id, payload))
+        let commit: RealmCommit = serde_json::from_value(row.commit_json).map_err(corrupt)?;
+        if commit.commit_id.as_str() != row.commit_id
+            || i64::try_from(commit.stream_position).map_err(corrupt)? != row.stream_position
+            || commit.event_ref != event.event_id
+            || commit.realm_id != realm_id
+            || commit.stream_ref.realm_id() != &realm_id
+        {
+            return Err(corrupt("declared provision Commit differs"));
+        }
+        let reference = arkret_wire::CommittedEventRef {
+            event_id: event.event_id,
+            commit_id: commit.commit_id,
+            stream_ref: commit.stream_ref,
+            stream_position: commit.stream_position,
+        };
+        Ok((realm_id, payload, reference))
     })
     .transpose()
 }

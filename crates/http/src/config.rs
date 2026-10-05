@@ -366,6 +366,9 @@ pub struct AppConfig {
     /// proxy which decrypts or forwards its plaintext is a trusted member of
     /// the same TCB. The application does not model or inspect the proxy chain.
     pub internal_authority_channel: Option<InternalAuthorityChannelConfig>,
+    /// Target-local participation ceiling, independent of controller selection.
+    pub agent_participation_ceiling:
+        arkret_models_collaboration::governance::agent_participation::ParticipationBits,
     pub did_resolver_allow_methods: Vec<String>,
     /// Enable soland's built-in `did:webvh` provider. This is intended for
     /// ordinary self-hosted deployments and tests: coauth can discover it via
@@ -942,6 +945,8 @@ impl AppConfig {
             auth_session_logout_url: None,
             internal_authority_shared_secret: None,
             internal_authority_channel: None,
+            agent_participation_ceiling:
+                arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
             // Test fixtures intentionally allow bare `did:web` — the spec
             // conformance vectors use it. The production default
             // (`default_did_resolver_allow_methods`) is webvh-only.
@@ -1461,6 +1466,7 @@ impl AppConfig {
             auth_session_logout_url,
             internal_authority_shared_secret,
             internal_authority_channel,
+            agent_participation_ceiling: env_non_empty(values, "SOLAND_AGENT_PARTICIPATION_CEILING").map(|value| serde_json::from_str(&value)).transpose()?.unwrap_or(arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL),
             did_resolver_allow_methods,
             embedded_webvh_provider_enabled,
             embedded_webvh_registration_bearer,

@@ -218,14 +218,13 @@ fn bootstrap_unit_with_join_rule_for_station(
         OrdinaryRealmBootstrapUnitKind, OrdinaryRealmBootstrapUnitSubmission,
         SelfAuthoritySubmitRequest,
     };
-    use base64::Engine as _;
 
     let at =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
     let actor = founding_principal.cloned().unwrap_or_else(founder);
     let station = governing_station.clone();
-    let genesis_salt = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(arkret_canonical::sha256_bytes(seed.as_bytes()));
+    let genesis_salt =
+        arkret_canonical::base64url_encode(arkret_canonical::sha256_bytes(seed.as_bytes()));
     let genesis = event(
         arkret_wire::EventKind::RealmCreate,
         arkret_wire::ScopeRef::RealmGenesis,
@@ -310,6 +309,7 @@ fn bootstrap_unit_with_join_rule_for_station(
                 expected_authority: authority.clone(),
                 event: event.clone(),
                 commit: arkret_wire::RealmCommit {
+                    producer_signer_fact_digest: None,
                     commit_id: commit_id.clone(),
                     realm_id: realm_id.clone(),
                     stream_ref: arkret_wire::CommitStreamRef::Realm {
@@ -324,6 +324,7 @@ fn bootstrap_unit_with_join_rule_for_station(
                     signature: governing_did
                         .map_or_else(|| signature(&station, at), |did| signature_for_did(did, at)),
                 },
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,
@@ -388,6 +389,15 @@ pub fn next_request_for_actor(
         payload,
         at,
     );
+    let event = if let Some(fact) = previous
+        .producer_signer_fact
+        .as_ref()
+        .filter(|fact| fact.actor == event.actor_id)
+    {
+        human_profile::sign_original_device(event, fact.verification_method.clone())
+    } else {
+        event
+    };
     request_for_event(previous, event, at)
 }
 
@@ -417,7 +427,8 @@ pub fn request_for_event(
 ) -> EventCommitRequest {
     let realm_id = previous.event.realm_id.clone();
     let station = previous.expected_authority.service_id.clone();
-    let commit = arkret_wire::RealmCommit {
+    let mut commit = arkret_wire::RealmCommit {
+        producer_signer_fact_digest: None,
         commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
             format!("{}:{}", event.event_id, previous.commit.stream_position + 1).as_bytes(),
         )),
@@ -433,6 +444,32 @@ pub fn request_for_event(
         committed_at: at,
         signature: signature(&station, at),
     };
+    let fact = previous
+        .producer_signer_fact
+        .as_ref()
+        .filter(|fact| fact.actor == event.actor_id)
+        .cloned()
+        .map(|mut fact| {
+            fact.event_id = event.event_id.clone();
+            fact
+        });
+    commit.producer_signer_fact_digest = fact.as_ref().map(|f| f.digest().unwrap());
+    if fact.is_some() {
+        let identity =
+            arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"])
+                .unwrap();
+        commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+        ));
+        commit.signature = arkret_signatures::detached_object::sign_detached_object(
+            &arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap(),
+            arkret_wire::DetachedSignatureContext::RealmCommit,
+            previous.commit.signature.verification_method.clone(),
+            at,
+            &ed25519_dalek::SigningKey::from_bytes(&[83; 32]),
+        )
+        .unwrap();
+    }
     let projection = soland_storage::ProjectionEventRecord {
         event_id: event.event_id.to_string(),
         realm_id: realm_id.to_string(),
@@ -464,6 +501,7 @@ pub fn request_for_event(
             expected_authority: previous.expected_authority.clone(),
             event,
             commit,
+            producer_signer_fact: fact,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -472,6 +510,9 @@ pub fn request_for_event(
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         event: record,
         parent_membership_admission: None,
         contact_projection: None,

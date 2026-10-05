@@ -14,6 +14,65 @@ use soland_services::{ServiceError, ServiceResult};
 
 use crate::state::AppState;
 
+#[cfg(feature = "conformance-harness")]
+pub(crate) fn trace_submission_refusal(
+    stage: &'static str,
+    kind_class: &'static str,
+    actor_class: &'static str,
+    error: Option<&ServiceError>,
+) {
+    let code = error.and_then(ServiceError::conflict_code);
+    let wire_code = code
+        .and_then(|code| ErrorCode::from_wire(code.as_str()))
+        .map(|code| code.as_str())
+        .unwrap_or("unregistered");
+    let reason_code = code
+        .map(|code| code.as_str())
+        .filter(|code| arkret_wire::ReasonCode::is_registered(code))
+        .unwrap_or("unregistered");
+    tracing::warn!(
+        stage,
+        kind_class,
+        actor_class,
+        wire_code,
+        reason_code,
+        "self submission refusal boundary"
+    );
+}
+
+#[cfg(feature = "conformance-harness")]
+pub(crate) fn submission_kind_class(kind: &arkret_wire::EventKind) -> &'static str {
+    match kind {
+        arkret_wire::EventKind::KeyBackupActiveSeries => "key_backup_pointer",
+        arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit => "mls",
+        _ => "ordinary_event",
+    }
+}
+
+#[cfg(feature = "conformance-harness")]
+fn trace_stream_read_refusal(
+    stage: &'static str,
+    stream_class: &'static str,
+    code: Option<ErrorCode>,
+) {
+    tracing::warn!(
+        stage,
+        stream_class,
+        wire_code = code.map(ErrorCode::as_str).unwrap_or("unregistered"),
+        "self stream read refusal boundary"
+    );
+}
+
+#[cfg(feature = "conformance-harness")]
+fn diagnostic_stream_class(request: &StreamScanRequest) -> &'static str {
+    match request.stream_ref {
+        arkret_wire::CommitStreamRef::Realm { .. } => "realm",
+        arkret_wire::CommitStreamRef::Circle { .. } => "circle",
+        arkret_wire::CommitStreamRef::Sidecar { .. } => "sidecar",
+        _ => "other",
+    }
+}
+
 /// `ak.self.committed_event.read.scan.v1`, under the authenticated `self` tree.
 pub(super) fn self_router() -> Router {
     Router::with_path("streams/scan").post(scan_stream)
@@ -367,11 +426,15 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
         }
     };
     let Some(session) = crate::routing::auth_or_render(app_state, req, res).await else {
+        #[cfg(feature = "conformance-harness")]
+        trace_submission_refusal("authentication", "unparsed", "unresolved", None);
         return;
     };
     if let Err(error) =
         crate::routing::identity::session_actor::validated_session_actor(app_state, &session).await
     {
+        #[cfg(feature = "conformance-harness")]
+        trace_submission_refusal("session_actor", "unparsed", "unresolved", None);
         return crate::routing::render_error(
             res,
             error.http_status(),
@@ -383,6 +446,8 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
         &session,
         arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
     ) {
+        #[cfg(feature = "conformance-harness")]
+        trace_submission_refusal("agent_operation_scope", "unparsed", "agent", None);
         return crate::routing::render_error(
             res,
             error.http_status(),
@@ -412,6 +477,22 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
                 .map_err(invalid_application_output)?;
             Ok(outcome)
         });
+    #[cfg(feature = "conformance-harness")]
+    if let Err(error) = &result {
+        let kind_class = match &request {
+            SelfAuthoritySubmitRequest::Event(value) => submission_kind_class(&value.event.kind),
+            SelfAuthoritySubmitRequest::MlsCommit(_) => "mls",
+            SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(_) => "realm_bootstrap",
+            SelfAuthoritySubmitRequest::DirectConversationFounding(_) => "direct_founding",
+            SelfAuthoritySubmitRequest::MembershipCompensation(_) => "membership_compensation",
+        };
+        let actor_class = if session.agent_session().is_some() {
+            "agent"
+        } else {
+            "human"
+        };
+        trace_submission_refusal("authority_dispatch", kind_class, actor_class, Some(error));
+    }
     if let Ok(
         arkret_models_collaboration::authority_commit::SelfAuthoritySubmitOutcome::Ordinary(
             arkret_wire::AuthoritySubmitOutcome::Accepted {
@@ -469,6 +550,8 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
         }
     };
     let Some(session) = crate::routing::auth_or_render(app_state, req, res).await else {
+        #[cfg(feature = "conformance-harness")]
+        trace_stream_read_refusal("authentication", "other", None);
         return;
     };
     let actor =
@@ -477,6 +560,12 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
         {
             Ok(actor) => actor,
             Err(error) => {
+                #[cfg(feature = "conformance-harness")]
+                trace_stream_read_refusal(
+                    "session_actor",
+                    "other",
+                    ErrorCode::from_wire(error.wire_code()),
+                );
                 return crate::routing::render_error(
                     res,
                     error.http_status(),
@@ -489,6 +578,12 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
         &session,
         arkret_wire::ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1,
     ) {
+        #[cfg(feature = "conformance-harness")]
+        trace_stream_read_refusal(
+            "agent_operation_scope",
+            "other",
+            ErrorCode::from_wire(error.wire_code()),
+        );
         return crate::routing::render_error(
             res,
             error.http_status(),
@@ -509,6 +604,12 @@ async fn scan_stream(req: &mut Request, depot: &Depot, res: &mut Response) {
     // Stream readability is decided for an Account member; an actor with no
     // Account has no readable interval on any Realm stream here.
     let Some(account) = actor.as_account_id() else {
+        #[cfg(feature = "conformance-harness")]
+        trace_stream_read_refusal(
+            "account_actor_required",
+            diagnostic_stream_class(&request),
+            Some(ErrorCode::CapabilityDenied),
+        );
         return crate::error::render_error_code(
             ErrorCode::CapabilityDenied,
             res,
@@ -543,6 +644,12 @@ fn render_stream_scan(
             res.render(Json(outcome));
         }
         Ok(soland_storage::AccountStreamScan::NotAuthorized) => {
+            #[cfg(feature = "conformance-harness")]
+            trace_stream_read_refusal(
+                "stream_readability",
+                diagnostic_stream_class(request),
+                Some(ErrorCode::CapabilityDenied),
+            );
             crate::error::render_error_code(
                 ErrorCode::CapabilityDenied,
                 res,
@@ -550,6 +657,12 @@ fn render_stream_scan(
             );
         }
         Ok(soland_storage::AccountStreamScan::Unproved(reason)) => {
+            #[cfg(feature = "conformance-harness")]
+            trace_stream_read_refusal(
+                "interval_unproved",
+                diagnostic_stream_class(request),
+                Some(ErrorCode::TemporarilyUnavailable),
+            );
             tracing::info!(realm_id = %request.realm_id, reason,
                 "stream scan interval is not provable at this cut");
             crate::error::render_error_code(
@@ -558,7 +671,71 @@ fn render_stream_scan(
                 "the caller's readable interval cannot be proved at this cut",
             );
         }
-        Err(error) => render_service_error(res, error),
+        Err(error) => {
+            #[cfg(feature = "conformance-harness")]
+            trace_stream_read_refusal(
+                "scan_storage",
+                diagnostic_stream_class(request),
+                error
+                    .conflict_code()
+                    .and_then(|code| ErrorCode::from_wire(code.as_str())),
+            );
+            render_service_error(res, error);
+        }
+    }
+}
+fn render_peer_stream_scan(
+    res: &mut Response,
+    request: &StreamScanRequest,
+    result: ServiceResult<soland_storage::PeerStreamScan>,
+) {
+    match result {
+        Ok(soland_storage::PeerStreamScan::Page(outcome)) => {
+            if let Err(error) = outcome.validate_for_request(request) {
+                return render_service_error(res, invalid_application_output(error));
+            }
+            no_store(res);
+            res.render(Json(outcome));
+        }
+        Ok(soland_storage::PeerStreamScan::NotAuthorized) => {
+            #[cfg(feature = "conformance-harness")]
+            trace_stream_read_refusal(
+                "stream_readability",
+                diagnostic_stream_class(request),
+                Some(ErrorCode::CapabilityDenied),
+            );
+            crate::error::render_error_code(
+                ErrorCode::CapabilityDenied,
+                res,
+                "the stream is not readable by this caller",
+            );
+        }
+        Ok(soland_storage::PeerStreamScan::Unproved(reason)) => {
+            #[cfg(feature = "conformance-harness")]
+            trace_stream_read_refusal(
+                "interval_unproved",
+                diagnostic_stream_class(request),
+                Some(ErrorCode::TemporarilyUnavailable),
+            );
+            tracing::info!(realm_id = %request.realm_id, reason,
+                "stream scan interval is not provable at this cut");
+            crate::error::render_error_code(
+                ErrorCode::TemporarilyUnavailable,
+                res,
+                "the caller's readable interval cannot be proved at this cut",
+            );
+        }
+        Err(error) => {
+            #[cfg(feature = "conformance-harness")]
+            trace_stream_read_refusal(
+                "scan_storage",
+                diagnostic_stream_class(request),
+                error
+                    .conflict_code()
+                    .and_then(|code| ErrorCode::from_wire(code.as_str())),
+            );
+            render_service_error(res, error);
+        }
     }
 }
 
@@ -594,7 +771,7 @@ async fn peer_scan_stream(req: &mut Request, depot: &mut Depot, res: &mut Respon
         .authority()
         .scan_stream_for_peer(&peer, request.clone())
         .await;
-    render_stream_scan(res, &request, result);
+    render_peer_stream_scan(res, &request, result);
 }
 
 #[handler]

@@ -147,7 +147,7 @@ async fn third_party_claim_verifies_signatures_at_cut_and_accepts_exact_claimant
     )
     .await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
-    let unit = unit();
+    let unit = unit(&pool).await;
     let at = unit.transactions[0].commit.committed_at;
     store
         .admit_ordinary_realm_bootstrap_unit(&unit, at)

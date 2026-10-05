@@ -273,7 +273,18 @@ pub(crate) async fn materialize_founding_in_connection(
     for transaction in &unit.transactions {
         let event = &transaction.event;
         let commit = &transaction.commit;
+        crate::agent_producer_signer_keys::validate_human_fact_binding(
+            event,
+            commit,
+            transaction.producer_signer_fact.as_ref(),
+        )?;
         store_replica_rows(conn, event, commit, &key, received_at).await?;
+        if let Some(fact) = transaction.producer_signer_fact.as_ref() {
+            crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
+                conn, event, commit, fact,
+            )
+            .await?;
+        }
         crate::capability_grant_current_results::commit_realm_authority_root_current_result_in_connection(
             conn, event, commit,
         )
@@ -473,6 +484,11 @@ async fn held_duplicate(
         _ => true,
     };
     if existing.commit_json == commit_json && same_event {
+        // A previously withheld row has no Event or original Human fact yet.
+        // Its first permitted Full import is an atomic upgrade, not a replay.
+        if existing.envelope.is_none() && event.is_some() {
+            return Ok(None);
+        }
         return Ok(Some(CommittedReplicaOutcome::Duplicate));
     }
     Err(conflict(
@@ -672,7 +688,40 @@ pub(super) async fn install_committed_replica_in_connection(
     conn: &mut AsyncPgConnection,
     replica: &CommittedReplica,
 ) -> Result<CommittedReplicaOutcome, PgTransactionError> {
+    crate::agent_producer_signer_keys::validate_human_fact_binding(
+        &replica.event,
+        &replica.commit,
+        replica.producer_signer_fact.as_ref(),
+    )?;
     let outcome = install_replica_commit_in_connection(conn, replica).await?;
+    match outcome {
+        CommittedReplicaOutcome::Stored => {
+            if let Some(fact) = replica.producer_signer_fact.as_ref() {
+                crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
+                    conn,
+                    &replica.event,
+                    &replica.commit,
+                    fact,
+                )
+                .await?;
+            }
+        }
+        CommittedReplicaOutcome::Duplicate => {
+            let original =
+                crate::agent_producer_signer_keys::human_source_for_commit_in_connection(
+                    conn,
+                    &replica.event,
+                    &replica.commit,
+                )
+                .await?;
+            if original != replica.producer_signer_fact {
+                return Err(PersistenceError::Conflict(
+                    "replicated Human source differs from frozen original".into(),
+                )
+                .into());
+            }
+        }
+    }
     bind_mls_replica_genesis_in_connection(
         conn,
         &replica.event,
@@ -726,6 +775,74 @@ pub(super) async fn queue_welcomes_of_held_replica_in_connection(
     Ok(CommittedReplicaOutcome::Duplicate)
 }
 
+/// Materialize the body of a held withheld Commit only after a verified
+/// snapshot covers its effect and the existing current disclosure gate allows
+/// Full. Preserve the exact signed Commit, current projection and stream head.
+async fn upgrade_held_full_in_connection(
+    conn: &mut AsyncPgConnection,
+    replica: &CommittedReplica,
+) -> Result<Option<CommittedReplicaOutcome>, PgTransactionError> {
+    let commit = &replica.commit;
+    let existing = sql_query("SELECT c.commit_json,e.envelope FROM realm_commits c LEFT JOIN canonical_events e ON e.pk=c.event_pk WHERE c.commit_id=$1")
+        .bind::<Text,_>(commit.commit_id.as_str()).get_result::<HeldRow>(&mut *conn).await.optional()?;
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+    if existing.envelope.is_some() {
+        return Ok(None);
+    }
+    if existing.commit_json != serde_json::to_value(commit).map_err(PersistenceError::database)? {
+        return Err(conflict(
+            ConflictCode::DuplicateConflict,
+            "held withheld Commit differs from Full source",
+        ));
+    }
+    let key = stream_key(&commit.stream_ref)?;
+    let head = locked_head(conn, &key).await?.ok_or_else(|| {
+        conflict(
+            ConflictCode::DependencyMissing,
+            "held Full upgrade lacks stream head",
+        )
+    })?;
+    let anchor = anchored_head(locked_anchor(conn, &key).await?)?;
+    if commit.stream_position > anchor.stream_position
+        || commit.stream_position > head.stream_position
+    {
+        return Err(conflict(
+            ConflictCode::DependencyMissing,
+            "Full upgrade requires a verified snapshot covering the held Commit effect",
+        ));
+    }
+    if !hosts_joined_member(conn, &commit.stream_ref, &replica.local_service_id).await? {
+        return Err(conflict(
+            ConflictCode::CapabilityDenied,
+            "Full upgrade has no hosted exact-scope reader",
+        ));
+    }
+    require_visible(conn, &replica.event, &replica.local_service_id).await?;
+    super::queue_event_in_connection(conn, &replica.event, replica.received_at).await?;
+    let token = super::ids::parse_event_id(replica.event.event_id.as_str())
+        .ok_or_else(|| invalid("Full upgrade Event token is invalid"))?;
+    let event_pk = sql_query("SELECT pk FROM canonical_events WHERE id=$1 FOR UPDATE")
+        .bind::<super::Binary, _>(token.to_vec())
+        .get_result::<EventPkOnlyRow>(&mut *conn)
+        .await?
+        .pk;
+    let written = sql_query("UPDATE realm_commits SET event_pk=$2 WHERE commit_id=$1 AND event_pk IS NULL AND commit_json=$3")
+        .bind::<Text,_>(commit.commit_id.as_str()).bind::<BigInt,_>(event_pk)
+        .bind::<Jsonb,_>(serde_json::to_value(commit).map_err(PersistenceError::database)?)
+        .execute(&mut *conn).await?;
+    if written != 1 {
+        return Err(conflict(
+            ConflictCode::DuplicateConflict,
+            "Full upgrade source changed",
+        ));
+    }
+    sql_query("UPDATE canonical_events SET state='committed',committed_at=$2,rejection_reason=NULL WHERE pk=$1 AND state='queued'")
+        .bind::<BigInt,_>(event_pk).bind::<Timestamptz,_>(commit.committed_at).execute(&mut *conn).await?;
+    Ok(Some(CommittedReplicaOutcome::Stored))
+}
+
 async fn install_replica_commit_in_connection(
     conn: &mut AsyncPgConnection,
     replica: &CommittedReplica,
@@ -750,6 +867,9 @@ async fn install_replica_commit_in_connection(
         .await?;
     if let Some(outcome) = held_duplicate(conn, commit, Some(event)).await? {
         return Ok(outcome);
+    }
+    if let Some(upgraded) = upgrade_held_full_in_connection(conn, replica).await? {
+        return Ok(upgraded);
     }
     require_current_replica_authority(conn, &replica.authority, commit).await?;
     let key = stream_key(&commit.stream_ref)?;

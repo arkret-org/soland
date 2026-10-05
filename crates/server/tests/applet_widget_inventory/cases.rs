@@ -300,6 +300,7 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
                 .unwrap(),
             event: previous.event,
             commit: previous.commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: vec![],
             recipient_queue_capacity: 0,

@@ -409,6 +409,11 @@ pub(crate) async fn commit_key_backup_pointer_unit_in_connection(
         pointer_rejected("KeyBackup pointer producer proof does not match the device key")
     })?;
 
+    let historical =
+        crate::agent_producer_signer_keys::prepare_confirmed_human_outcome_in_connection(
+            conn, event, commit, &status, account, &device_id,
+        )
+        .await?;
     crate::authority_commit::queue_event_in_connection(conn, event, write.queued_at).await?;
     match crate::authority_commit::commit_verified_key_backup_pointer_in_connection(
         conn,
@@ -428,6 +433,10 @@ pub(crate) async fn commit_key_backup_pointer_unit_in_connection(
             ));
         }
     }
+    crate::agent_producer_signer_keys::retain_self_outcome_in_connection(
+        conn, event, commit, historical,
+    )
+    .await?;
     commit_key_backup_pointer_in_connection(conn, event, commit).await?;
     Ok(Outcome::Committed(commit.clone()))
 }
@@ -662,6 +671,7 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: arkret_wire::RealmCommitId::from_digest([position as u8 + 10; 32]),
             realm_id: realm_id.clone(),
             stream_ref: CommitStreamRef::Realm { realm_id },
@@ -833,6 +843,7 @@ mod tests {
                 },
                 event: event.clone(),
                 commit: successor.clone(),
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,

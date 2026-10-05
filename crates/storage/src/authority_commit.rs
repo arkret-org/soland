@@ -38,6 +38,14 @@ pub enum AccountStreamScan {
     Unproved(&'static str),
 }
 
+/// Peer-only Full disclosure and its original immutable Human sources.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PeerStreamScan {
+    Page(arkret_models_collaboration::authority_commit::PeerStreamScanOutcome),
+    NotAuthorized,
+    Unproved(&'static str),
+}
+
 /// Result of `ak.self.realm.read.streams.v1` for one authenticated Account
 /// at one governing read cut.
 #[derive(Clone, Debug, PartialEq)]
@@ -329,6 +337,8 @@ pub struct AuthorityCommitTransaction {
     pub expected_authority: CurrentRealmAuthority,
     pub event: Event,
     pub commit: RealmCommit,
+    pub producer_signer_fact:
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
     pub mls_state: Option<MlsStateInstallation>,
     pub welcomes: Vec<VerifiedMlsWelcome>,
     /// Service-configured maximum outstanding deliveries for each exact
@@ -1243,6 +1253,8 @@ pub struct CommittedReplica {
     pub authority: CurrentRealmAuthority,
     pub event: arkret_wire::Event,
     pub commit: arkret_wire::RealmCommit,
+    pub producer_signer_fact:
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
     /// The immutable Genesis selector carried by an authenticated
     /// committed-replication item. A verified scan has no such carrier.
     pub genesis_event_ref: Option<EventId>,
@@ -1322,6 +1334,77 @@ pub enum MlsMemberGroupStateMaterialRead {
 
 #[async_trait]
 pub trait AuthorityCommitStore: Send + Sync {
+    /// Assemble the complete registered Agent sibling from immutable accepted
+    /// producer records and one current Origin cut. This is an internal port,
+    /// not a new disclosure surface. ASRE alone is never a successful result.
+    /// Original accepted producer material is staged before the admission unit.
+    /// Only the exact signed candidate can consume it in the Commit transaction.
+    async fn stage_agent_control_source(
+        &self,
+        _full: &arkret_wire::CommittedEventFullView,
+        _dependency: &arkret_models_identity::AgentSignerDependency,
+        _history: &arkret_models_identity::AuthenticatedServiceResolution,
+    ) -> PersistenceResult<()> {
+        Err(PersistenceError::Conflict(
+            "dependency_missing: Origin source storage unavailable".into(),
+        ))
+    }
+
+    async fn prepare_agent_origin_state(
+        &self,
+        event: &Event,
+        at: DateTime<Utc>,
+    ) -> PersistenceResult<arkret_models_identity::AgentAuthorityState> {
+        let _ = (event, at);
+        Err(crate::PersistenceError::Conflict(
+            "dependency_missing: Agent Origin complete evidence assembly is unavailable".into(),
+        ))
+    }
+
+    async fn agent_origin_controller_gate_request(
+        &self,
+        event: &Event,
+        evidence: &arkret_models_identity::AgentAuthorityState,
+    ) -> PersistenceResult<arkret_wire::RequestId> {
+        let _ = (event, evidence);
+        Err(crate::PersistenceError::Conflict(
+            "dependency_missing: durable Agent Origin gate request is unavailable".into(),
+        ))
+    }
+
+    /// Under the original PCR/controller locks, reassemble and compare the
+    /// complete typed source, check current key/lifecycle/gate, and persist the
+    /// full carrier/ref before queueing the forwarding Event. A stale cut must
+    /// refuse; it must not refresh or rewrite the supplied historical records.
+    async fn retain_agent_forward_evidence_at_same_cut(
+        &self,
+        event: &Event,
+        evidence: &arkret_models_identity::AgentProducerEvidence,
+        at: DateTime<Utc>,
+    ) -> PersistenceResult<()> {
+        let _ = (event, evidence, at);
+        Err(crate::PersistenceError::Conflict(
+            "dependency_missing: Agent Origin same-cut retention is unavailable".into(),
+        ))
+    }
+
+    /// Exact retained source; never read current authority to fill a missing historical row.
+    async fn human_signer_fact(
+        &self,
+        event: &Event,
+        commit: &RealmCommit,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    >;
+    /// Read an immutable source-only candidate. Admission repeats this at the locked cut.
+    async fn prepare_human_signer_fact(
+        &self,
+        event: &Event,
+        admitted_at: DateTime<Utc>,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    >;
+
     /// Bind the member's accepted target to immutable Genesis provenance at
     /// one current/target authorized cut, without disclosing a prejoin Event.
     async fn mls_member_roster_selector(
@@ -1335,14 +1418,26 @@ pub trait AuthorityCommitStore: Send + Sync {
         ))
     }
 
-    /// Return only the producer key frozen at this exact accepted Agent Event.
+    /// Return only the producer key frozen at this exact accepted Event.
     /// Current key state must never substitute for a missing admission record.
-    async fn historical_agent_signer_key(
+    async fn historical_producer_signer_key(
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
     ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
         let _ = (realm_id, selector);
+        Ok(None)
+    }
+
+    /// Return a key-only immutable original self-admission fact to its actual Human producer.
+    /// Missing provenance never authorizes a PCR history read or current-key fallback.
+    async fn historical_self_pcr_producer_signer_key(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_models_identity::SignerKeyQuerySelector,
+        recipient: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+        let _ = (realm_id, selector, recipient);
         Ok(None)
     }
 
@@ -1916,6 +2011,23 @@ pub trait AuthorityCommitStore: Send + Sync {
         realm_id: &arkret_wire::RealmId,
     ) -> PersistenceResult<Option<crate::RealmStreamFrontier>>;
 
+    /// Freeze one controller-owned context's exact current for a signed attach draft.
+    async fn sidecar_context_prepare_current(
+        &self,
+        _realm: &arkret_wire::RealmId,
+        _controller: &arkret_wire::AccountId,
+        _context: &arkret_models_collaboration::sidecar_operations::SidecarContextRef,
+    ) -> PersistenceResult<
+        Option<(
+            arkret_wire::EventId,
+            Option<crate::AgentSidecarContextRecord>,
+        )>,
+    > {
+        Err(crate::PersistenceError::Internal(
+            "authoritative Sidecar context cut is unavailable".into(),
+        ))
+    }
+
     /// Derive native Sidecar participants from one accepted durable cut.
     async fn sidecar_participant_authority_cut(
         &self,
@@ -2131,7 +2243,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         request: &arkret_wire::StreamScanRequest,
         peer: &arkret_wire::DidCoreId,
         issuer: &arkret_wire::DidCoreId,
-    ) -> PersistenceResult<AccountStreamScan>;
+    ) -> PersistenceResult<PeerStreamScan>;
 
     /// The committed Event `event_id` with its RealmCommit when `peer` may
     /// read it at one governing read cut of `issuer`: its Realm-stream

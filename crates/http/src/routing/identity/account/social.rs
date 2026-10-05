@@ -16,6 +16,14 @@ pub(crate) use contact_write::{
     verify_contact_service_signature_bytes,
 };
 
+fn contact_summary_diagnostic(branch: &'static str) {
+    #[cfg(feature = "conformance-harness")]
+    tracing::warn!(target: "conformance_harness", stage = "contact_summary", diag_branch = branch,
+        "Contact summary fixed diagnostic");
+    #[cfg(not(feature = "conformance-harness"))]
+    let _ = branch;
+}
+
 #[endpoint(
     operation_id = "ak.self.contact.command.request",
     summary = "Prepare or commit a holder-signed Contact request",
@@ -593,20 +601,27 @@ async fn contact_list_rows(
         row.bidirectional_scopes =
             intersection(&row.granted_to_peer_scopes, &row.granted_by_peer_scopes);
         row.effective_scopes = Some(row.bidirectional_scopes.clone());
-        if let Ok(pair_key) = direct_pair_key(state, actor, &row.peer.contact_actor_id())
+        if let Ok(pair_key) =
+            direct_pair_key(state, actor, &row.peer.contact_actor_id()).map_err(|error| {
+                contact_summary_diagnostic("pair_key_failed");
+                error
+            })
             && let Some(facts) = state
                 .event_queries()
                 .direct_conversation_durable_state(state.config().trust_domain.as_str(), &pair_key)
                 .await
                 .map_err(|error| {
+                    contact_summary_diagnostic("durable_lookup_failed");
                     AppError::internal(format!("direct durable-state lookup failed: {error}"))
                 })?
             && let Some(current) = facts.binding.as_ref()
         {
             let binding = super::durable_binding_record(current)?;
             let summary_state = if direct_binding_matches_projection(state, &binding) {
+                contact_summary_diagnostic("found");
                 DirectConversationSummaryState::Found
             } else {
+                contact_summary_diagnostic("suspended");
                 DirectConversationSummaryState::Suspended
             };
             row.direct_conversation = Some(direct_summary(binding, summary_state));

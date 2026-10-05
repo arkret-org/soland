@@ -507,6 +507,10 @@ pub struct CommitAcceptedEventCommand {
     /// Verified `producer_device_evidence` of a cross-Station human-device
     /// producer, retained for audit with the Event's first Commit.
     pub forwarded_producer_evidence: Option<soland_storage::ForwardedProducerDeviceEvidence>,
+    pub forwarded_agent_producer:
+        Option<arkret_identity::agent_authority_evidence::VerifiedAgentProducer>,
+    pub agent_deployment_ceiling:
+        arkret_models_collaboration::governance::agent_participation::ParticipationBits,
     pub event: AcceptedEvent,
     pub parent_membership_admission: Option<soland_storage::ParentMembershipAdmissionCheck>,
     pub contact_projection: Option<CommitContactProjection>,
@@ -1683,6 +1687,7 @@ mod tests {
                 producer_proof: None,
             },
             commit: arkret_wire::RealmCommit {
+                producer_signer_fact_digest: None,
                 commit_id: arkret_wire::RealmCommitId::from_digest([0x32; 32]),
                 realm_id: realm_id.clone(),
                 stream_ref,
@@ -1705,6 +1710,7 @@ mod tests {
                     sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
                 },
             },
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -1730,6 +1736,8 @@ mod tests {
                 applet_producer_guard: None,
                 widget_token_gate: None,
                 forwarded_producer_evidence: None,
+                forwarded_agent_producer: None,
+                agent_deployment_ceiling: arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
                 parent_membership_admission: None,
                 contact_projection: None,
 

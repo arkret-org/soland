@@ -715,6 +715,208 @@ fn rate(scope: GrantConstraintScope) -> GrantConstraint {
     constraint
 }
 
+fn bounded<'g>(
+    agents: &'g [CapabilityGrant],
+    parents: &[CapabilityGrant],
+    actions: &[&str],
+    facts: &OperationFacts,
+) -> GrantEvaluation<'g> {
+    let agent = actor();
+    let controller = ActorId::account(arkret_wire::AccountId::new(
+        "ak:did_core:web:controller.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    ));
+    evaluate_controller_bounded_grants(
+        &AuthorizationOperation {
+            actor: &agent,
+            actions,
+            target: &strand(STRAND_A),
+            at: now(),
+            facts,
+        },
+        &agents.iter().collect::<Vec<_>>(),
+        &controller,
+        &parents.iter().collect::<Vec<_>>(),
+        &[],
+        false,
+    )
+}
+
+#[test]
+fn controller_bound_execution_loses_authority_without_revoking_agent_grant() {
+    let agents = [grant(1, &["ak.message.create"], realm_wide(), vec![])];
+    let parents = [grant(2, &["ak.message.create"], realm_wide(), vec![])];
+    let facts = OperationFacts::default();
+    assert!(allowed(&bounded(
+        &agents,
+        &parents,
+        &["ak.message.create"],
+        &facts
+    )));
+    assert!(matches!(
+        bounded(&agents, &[], &["ak.message.create"], &facts),
+        GrantEvaluation::Unsatisfied
+    ));
+    assert!(allowed(&bounded(
+        &agents,
+        &parents,
+        &["ak.message.create"],
+        &facts
+    )));
+}
+
+#[test]
+fn controller_bound_execution_never_splices_action_and_resource_paths() {
+    let agents = [grant(1, &["ak.message.create"], realm_wide(), vec![])];
+    let parents = [
+        grant(2, &["ak.reaction.add"], realm_wide(), vec![]),
+        grant(
+            3,
+            &["ak.message.create"],
+            serde_json::json!([{"kind":"strand","realm_id":REALM,"strand_id":STRAND_B}]),
+            vec![],
+        ),
+    ];
+    assert!(matches!(
+        bounded(
+            &agents,
+            &parents,
+            &["ak.message.create", "ak.reaction.add"],
+            &OperationFacts::default()
+        ),
+        GrantEvaluation::Unsatisfied
+    ));
+}
+
+#[test]
+fn controller_bound_execution_preserves_global_refusals() {
+    let agents = [grant(1, &["ak.message.create"], realm_wide(), vec![])];
+    for effect in [
+        GrantConstraintEffect::Deny,
+        GrantConstraintEffect::Quarantine,
+        GrantConstraintEffect::RequireReview,
+    ] {
+        let mut refusal = window(None, Some("2026-10-21T00:00:00Z"));
+        refusal.effect = effect;
+        let parents = [
+            grant(2, &["ak.message.create"], realm_wide(), vec![]),
+            grant(3, &["ak.message.create"], realm_wide(), vec![refusal]),
+        ];
+        assert!(
+            bounded(
+                &agents,
+                &parents,
+                &["ak.message.create"],
+                &OperationFacts::default()
+            )
+            .is_refusal()
+        );
+    }
+}
+
+#[test]
+fn controller_bound_quotas_keep_original_parent_keys_and_agent_limits() {
+    let agents = [grant(
+        1,
+        &["ak.message.create"],
+        realm_wide(),
+        vec![rate(GrantConstraintScope::PerActor)],
+    )];
+    let parents = [grant(
+        2,
+        &["ak.message.create"],
+        realm_wide(),
+        vec![rate(GrantConstraintScope::PerActor)],
+    )];
+    let facts = OperationFacts::default();
+    let GrantEvaluation::Allowed(paths) =
+        bounded(&agents, &parents, &["ak.message.create"], &facts)
+    else {
+        panic!("both paths satisfy")
+    };
+    assert_eq!(paths[0].reservations.len(), 2);
+    let parent_counter = paths[0]
+        .reservations
+        .iter()
+        .find(|row| row.grant_id == parents[0].id)
+        .unwrap();
+    assert!(parent_counter.counter_key.contains("controller.example"));
+    assert!(!parent_counter.counter_key.contains("reader.example"));
+    let controller = ActorId::account(arkret_wire::AccountId::new(
+        "ak:did_core:web:controller.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    ));
+    let GrantEvaluation::Allowed(owner_paths) = evaluate_grants(
+        &AuthorizationOperation {
+            actor: &controller,
+            actions: &["ak.message.create"],
+            target: &strand(STRAND_A),
+            at: now(),
+            facts: &facts,
+        },
+        parents.iter(),
+    ) else {
+        panic!("controller path satisfies")
+    };
+    assert_eq!(*parent_counter, owner_paths[0].reservations[0]);
+}
+
+#[test]
+fn controller_bound_parent_selection_is_canonical_not_quota_free_first() {
+    let agents = [grant(1, &["ak.message.create"], realm_wide(), vec![])];
+    let mut parents = [
+        grant(
+            2,
+            &["ak.message.create"],
+            realm_wide(),
+            vec![rate(GrantConstraintScope::PerActor)],
+        ),
+        grant(3, &["ak.message.create"], realm_wide(), vec![]),
+    ];
+    parents.sort_by(|a, b| a.id.cmp(&b.id));
+    parents[0].constraints = vec![rate(GrantConstraintScope::PerActor)];
+    parents[1].constraints.clear();
+    let GrantEvaluation::Allowed(paths) = bounded(
+        &agents,
+        &parents,
+        &["ak.message.create"],
+        &OperationFacts::default(),
+    ) else {
+        panic!("two parent paths")
+    };
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[0].reservations[0].grant_id, parents[0].id);
+    assert!(paths[1].reservations.is_empty());
+}
+
+#[test]
+fn controller_bound_execution_cannot_borrow_agent_runtime_evidence() {
+    let applet = arkret_wire::AppletId::new_v7_at(1_790_876_000_000);
+    let executor = ActorId::service("ak:did_core:web:bridge.example".parse().unwrap());
+    let epoch: arkret_wire::Hash = format!("sha256:{}", "1".repeat(64)).parse().unwrap();
+    let agents = [grant(1, &["ak.message.create"], realm_wide(), vec![])];
+    let parents = [grant(
+        2,
+        &["ak.message.create"],
+        realm_wide(),
+        vec![GrantConstraint::applet_authority(
+            applet.clone(),
+            executor.clone(),
+            epoch.clone(),
+        )],
+    )];
+    let facts = OperationFacts {
+        applet_id: Some(applet.to_string()),
+        executed_by: Some(executor),
+        registration_epoch: Some(epoch.to_string()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        bounded(&agents, &parents, &["ak.message.create"], &facts),
+        GrantEvaluation::Unsatisfied
+    ));
+}
+
 #[test]
 fn a_rate_quota_is_owed_as_a_reservation_and_is_required_for_broadcast() {
     let broadcast = CapabilityActionId::MESSAGE_MENTION_BROADCAST;

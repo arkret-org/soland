@@ -92,6 +92,8 @@ fn persistence_event_commit_request(
         applet_producer_guard: command.applet_producer_guard,
         widget_token_gate: command.widget_token_gate,
         forwarded_producer_evidence: command.forwarded_producer_evidence,
+        forwarded_agent_producer: command.forwarded_agent_producer,
+        agent_deployment_ceiling: command.agent_deployment_ceiling,
         event: command.event,
         parent_membership_admission: command.parent_membership_admission,
         contact_projection: command.contact_projection,

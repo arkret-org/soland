@@ -1380,7 +1380,7 @@ async fn postgres_historical_agent_key_survives_revocation_at_exact_coordinate()
         },
     };
     let frozen = historical_store
-        .historical_agent_signer_key(&realm_id, &historical_selector)
+        .historical_producer_signer_key(&realm_id, &historical_selector)
         .await
         .unwrap()
         .unwrap();
@@ -1399,7 +1399,11 @@ async fn postgres_historical_agent_key_survives_revocation_at_exact_coordinate()
     );
     assert_eq!(
         frozen.accepted_at(),
-        Some(accepted.authority_commit.commit.committed_at)
+        historical_store
+            .committed_event(&agent.authorization_ref.event_id)
+            .await
+            .unwrap()
+            .map(|original| original.commit.committed_at)
     );
     assert_eq!(
         historical_store
@@ -1411,7 +1415,7 @@ async fn postgres_historical_agent_key_survives_revocation_at_exact_coordinate()
     agent.revoke_key().await;
     assert_eq!(
         historical_store
-            .historical_agent_signer_key(&realm_id, &historical_selector)
+            .historical_producer_signer_key(&realm_id, &historical_selector)
             .await
             .unwrap(),
         Some(frozen)
@@ -1429,7 +1433,7 @@ async fn postgres_historical_agent_key_survives_revocation_at_exact_coordinate()
     }
     assert!(
         historical_store
-            .historical_agent_signer_key(&realm_id, &mismatched)
+            .historical_producer_signer_key(&realm_id, &mismatched)
             .await
             .unwrap()
             .is_none()

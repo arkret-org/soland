@@ -1,30 +1,17 @@
 //! Non-governance receipt of one committed Event (federation §3,
 //! device-lifecycle §8.2.2).
 //!
-//! A `committed_replication` member Station, an invite delivery receiver and
-//! every other non-governance consumer of a committed Event never resolves or
-//! fetches a foreign human device key. The governance `RealmCommit` is the
-//! signed commitment to the admitting Station's device-authorization decision,
-//! so such a receiver checks only:
-//!
-//! 1. the producer proof is self-consistent (`event_digest` over the exact canonical Event bytes,
-//!    the method's bare DID projecting to the actual signer, and a human device fragment equal to
-//!    the full `device_id`);
-//! 2. the `RealmCommit` verifies under the governance Station the verified genesis/handoff chain
-//!    names for the Commit's generation;
-//! 3. the Commit/Event ref binding and, on a held stream, position and `previous_commit_ref`
-//!    continuity.
-//!
-//! A human device of an Account this Station hosts is still verified against
-//! local PCR. Every check is pure and writes nothing.
+//! Digest-bearing ordinary Human receipts use the exact original frozen fact:
+//! governance chain, Commit content ID/signature, target binding and real Event
+//! Ed signature are independently checked. Receipt never resolves current PCR
+//! keys for these rows. Legacy/native receipts keep their separate role gates;
+//! absence never manufactures a historical signer fact.
 
 use arkret_canonical::DigestSuite;
 use arkret_identity::{
     RealmAuthorityChainError, RealmAuthorityKeyDirectory, VerifiedRealmAuthority,
 };
-use arkret_wire::{
-    CommitStreamRef, DidCoreId, DidKey, ErrorCode, Event, HumanDeviceProducer, RealmCommit,
-};
+use arkret_wire::{CommitStreamRef, DidCoreId, ErrorCode, Event, HumanDeviceProducer, RealmCommit};
 use soland_storage::DeviceRevocationStore;
 
 use crate::{ServiceError, ServiceResult};
@@ -46,13 +33,11 @@ pub enum CommitContinuity<'a> {
 /// How the producer of an accepted receipt is established.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReceivedProducer {
-    /// A human device of an Account on another Station. No key was resolved:
-    /// the verified governance `RealmCommit` is the signed commitment to its
-    /// authorization.
+    /// A Human device on another Station; the complete receipt boundary also
+    /// verifies its original frozen key against the governance-bound fact.
     GovernanceCommittedHumanDevice,
     /// A human device of an Account this Station hosts; its producer proof
-    /// still has to verify under the local PCR key
-    /// ([`verify_committed_event_receipt`] does so).
+    /// verifies under the original frozen fact, independently of current PCR.
     HostedHumanDevice(HumanDeviceProducer),
     /// Not a human Account device (Agent, Service or controller method); the
     /// caller applies that producer's own signer evidence rule.
@@ -94,10 +79,9 @@ pub fn verify_non_governance_committed_event(
     })
 }
 
-/// [`verify_non_governance_committed_event`] on this Station: a human device
-/// of an Account it hosts is then fully verified against the key of its local
-/// PCR `device_authorization`, and a key mismatch is `signature_invalid`.
-/// Nothing is read for a foreign human device.
+/// Receipt compatibility entry without an immutable Human fact. Ordinary
+/// Human rows remain unavailable here; callers holding the registered fact
+/// use `verify_committed_event_receipt_with_fact`.
 #[allow(clippy::too_many_arguments)]
 pub async fn verify_committed_event_receipt(
     local_pcr: &dyn DeviceRevocationStore,
@@ -109,6 +93,32 @@ pub async fn verify_committed_event_receipt(
     receiver: &DidCoreId,
     digest_suite: DigestSuite,
 ) -> ServiceResult<ReceivedProducer> {
+    verify_committed_event_receipt_with_fact(
+        local_pcr,
+        event,
+        commit,
+        continuity,
+        authority,
+        keys,
+        receiver,
+        digest_suite,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn verify_committed_event_receipt_with_fact(
+    local_pcr: &dyn DeviceRevocationStore,
+    event: &Event,
+    commit: &RealmCommit,
+    continuity: CommitContinuity<'_>,
+    authority: &VerifiedRealmAuthority,
+    keys: &(dyn RealmAuthorityKeyDirectory + Sync),
+    receiver: &DidCoreId,
+    digest_suite: DigestSuite,
+    fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+) -> ServiceResult<ReceivedProducer> {
     let received = verify_non_governance_committed_event(
         event,
         commit,
@@ -118,60 +128,31 @@ pub async fn verify_committed_event_receipt(
         receiver,
         digest_suite,
     )?;
-    if let ReceivedProducer::HostedHumanDevice(producer) = &received {
-        let key = local_pcr
-            .pcr_device_authorization_key(&producer.account_id, &producer.device_id)
-            .await
-            .map_err(|error| {
-                ServiceError::protocol(
-                    ErrorCode::TemporarilyUnavailable,
-                    format!("local PCR device authorization: {error}"),
-                )
-            })?
-            .ok_or_else(|| {
-                ServiceError::protocol(
-                    ErrorCode::DeviceUnauthorized,
-                    "hosted producer device has no accepted local PCR authorization",
-                )
-            })?;
-        verify_hosted_human_device_proof(event, &key, digest_suite)?;
+    match (commit.producer_signer_fact_digest.as_ref(), fact) {
+        (Some(_), Some(fact)) => {
+            arkret_identity::account_device_signer_evidence::verify_historical_human_committed_event(
+                &arkret_wire::CommittedEventFullView { event: event.clone(), commit: commit.clone() },
+                fact, authority, keys, digest_suite,
+            ).map_err(|e| ServiceError::protocol(ErrorCode::SignatureInvalid, e))?;
+            return Ok(received);
+        }
+        (None, None) => {}
+        _ => {
+            return Err(ServiceError::protocol(
+                ErrorCode::SignatureInvalid,
+                "original Human source and Commit digest must be paired",
+            ));
+        }
     }
+    if received != ReceivedProducer::OtherSigner {
+        return Err(ServiceError::protocol(
+            ErrorCode::TemporarilyUnavailable,
+            "original ordinary Human signer source is unavailable",
+        ));
+    }
+    // Native PCR audit does not enter this ordinary Full receipt boundary.
+    let _ = local_pcr;
     Ok(received)
-}
-
-fn verify_hosted_human_device_proof(
-    event: &Event,
-    key: &DidKey,
-    digest_suite: DigestSuite,
-) -> ServiceResult<()> {
-    let proof = event
-        .producer_proof
-        .as_ref()
-        .ok_or_else(|| ServiceError::SchemaViolation("Event has no producer proof".to_owned()))?;
-    let multibase = key.as_str().strip_prefix("did:key:").ok_or_else(|| {
-        ServiceError::protocol(
-            ErrorCode::SignatureInvalid,
-            "local PCR device key is not did:key",
-        )
-    })?;
-    let bytes = arkret_signatures::EventProofBuilder::new()
-        .envelope_bytes(event)
-        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-    arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
-        proof,
-        &bytes,
-        &event.actor_id,
-        &arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
-            value: multibase.to_owned(),
-        },
-        digest_suite,
-    )
-    .map_err(|error| {
-        ServiceError::protocol(
-            ErrorCode::SignatureInvalid,
-            format!("producer proof does not verify under the local PCR device key: {error}"),
-        )
-    })
 }
 
 fn verify_commit_binding(event: &Event, commit: &RealmCommit) -> ServiceResult<()> {

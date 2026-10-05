@@ -128,6 +128,7 @@ async fn provision_ref_65_is_refused_without_accepted_source_or_current_writes()
                 expected_authority: authority.clone(),
                 event,
                 commit: commit.clone(),
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,

@@ -80,6 +80,7 @@ fn write(
             expected_authority: f.unit.transactions[1].expected_authority.clone(),
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,

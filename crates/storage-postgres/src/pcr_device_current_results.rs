@@ -278,6 +278,7 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: arkret_wire::RealmCommitId::from_digest([77; 32]),
             realm_id: event.realm_id.clone(),
             stream_ref: CommitStreamRef::Realm {
@@ -532,6 +533,7 @@ mod tests {
                 },
                 event: revoke.clone(),
                 commit: self::commit(&revoke),
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,

@@ -125,6 +125,7 @@ fn genesis_unit(station: DidCoreId, fixture: &DeviceHistoryFixture) -> PcrGenesi
         expected_authority: authority.clone(),
         event,
         commit,
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,

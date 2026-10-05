@@ -32,6 +32,297 @@ struct AcceptedGroup {
     genesis: serde_json::Value,
 }
 
+/// Validate every occupied endpoint, including leaves outside the projected
+/// desired subset. Accepted Add/Genesis provenance pins the endpoint and its
+/// authorization dot; a newer authorization for the same Actor is not a lease
+/// for an old leaf. Pending desired endpoints need not have a leaf yet.
+pub(crate) async fn tree_authorized_in_connection(
+    conn: &mut crate::AsyncPgConnection,
+    cut: &crate::sidecar_authority_cut::SidecarParticipantAuthorityCut,
+    current: &arkret_wire::MlsGroupCurrent,
+    public_state: &[u8],
+    candidate: Option<&soland_storage::AuthorityCommitTransaction>,
+) -> soland_storage::PersistenceResult<bool> {
+    use diesel::sql_types::Jsonb;
+    use soland_storage::PersistenceError;
+    let scope = ScopeRef::Sidecar {
+        realm_id: cut.realm_id.clone(),
+        sidecar_id: cut.sidecar_id.clone(),
+    };
+    if current.effective_scope != scope {
+        return Ok(false);
+    }
+    let group = scope
+        .canonical_mls_group_id()
+        .map_err(PersistenceError::database)?;
+    let leaves =
+        arkret_mls::MlsPublicGroupTracker::restore(public_state, group.as_str(), current.epoch)
+            .and_then(|tracker| tracker.leaves())
+            .map_err(PersistenceError::database)?;
+    for leaf in leaves {
+        let Some(account) = leaf.actor_id.as_account_id() else {
+            return Ok(false);
+        };
+        if account != &cut.controller_account_id
+            && (account.station_id != cut.controller_account_id.station_id
+                || !cut.desired_agent_ids.contains(&account.principal_id))
+        {
+            return Ok(false);
+        }
+        let Some((endpoint, authorization)) =
+            leaf_origin_in_connection(conn, current, &leaf, candidate).await?
+        else {
+            return Ok(false);
+        };
+        match endpoint {
+            MlsWelcomeRecipientEndpoint::Device { device_id } => {
+                if account != &cut.controller_account_id {
+                    return Ok(false);
+                }
+                let Some(status) =
+                    crate::pcr_device_status_reader::confirmed_pcr_device_status_cut_in_connection(
+                        conn,
+                        account,
+                        &device_id,
+                        chrono::Utc::now(),
+                    )
+                    .await
+                    .map_err(crate::PgTransactionError::into_persistence)?
+                else {
+                    return Ok(false);
+                };
+                if status.lifecycle != crate::pcr_device_status_fold::PcrDeviceLifecycle::Active {
+                    return Ok(false);
+                }
+                let Some(source) = status.authority.authorization else {
+                    return Ok(false);
+                };
+                if source.event_id != authorization {
+                    return Ok(false);
+                }
+                let Some(key) = source
+                    .payload
+                    .device_public_key_did
+                    .as_str()
+                    .strip_prefix("did:key:")
+                else {
+                    return Ok(false);
+                };
+                let key = arkret_canonical::multibase::decode_ed25519_multibase(key)
+                    .map_err(PersistenceError::database)?;
+                if arkret_canonical::base64url_encode(&key) != leaf.signature_key.as_str() {
+                    return Ok(false);
+                }
+            }
+            MlsWelcomeRecipientEndpoint::AgentRuntime {
+                verification_method,
+            } => {
+                if account == &cut.controller_account_id {
+                    return Ok(false);
+                }
+                #[derive(QueryableByName)]
+                struct RuntimeRow {
+                    #[diesel(sql_type = Jsonb)]
+                    value: serde_json::Value,
+                    #[diesel(sql_type = Text)]
+                    agent_key_id: String,
+                }
+                let keys = diesel::sql_query("SELECT k.value,k.agent_key_id FROM agent_key_current_results k \
+                    JOIN agent_status_current_results s ON s.realm_id=k.realm_id AND s.agent_id=k.agent_id \
+                    JOIN realm_commits c ON c.realm_id=k.realm_id AND c.commit_id=k.current_commit_id AND c.stream_position=k.current_stream_position \
+                    JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
+                    WHERE k.agent_id=$1 AND s.actor_id=$2::jsonb")
+                    .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(leaf.actor_id.to_string())
+                    .load::<RuntimeRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+                let tag = format!("{}:1", authorization);
+                let mut authorized = false;
+                for key in keys {
+                    let Some(entries) = key
+                        .value
+                        .get("authorizations")
+                        .and_then(serde_json::Value::as_array)
+                    else {
+                        return Ok(false);
+                    };
+                    for entry in entries {
+                        if entry.get("tag_id").and_then(serde_json::Value::as_str)
+                            != Some(tag.as_str())
+                        {
+                            continue;
+                        }
+                        let payload: arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload =
+                            serde_json::from_value(entry["value"].clone()).map_err(PersistenceError::database)?;
+                        if payload.agent_id != account.principal_id
+                            || payload.key_id.as_str() != key.agent_key_id
+                            || payload.verification_method != verification_method
+                            || payload
+                                .expires_at
+                                .is_some_and(|expiry| expiry <= chrono::Utc::now())
+                        {
+                            continue;
+                        }
+                        arkret_signatures::agent::validate_agent_runtime_public_key(
+                            &payload.public_key,
+                            &verification_method,
+                        )
+                        .map_err(PersistenceError::database)?;
+                        let value = serde_json::to_value(&payload.public_key)
+                            .map_err(PersistenceError::database)?;
+                        if value.get("key").and_then(serde_json::Value::as_str)
+                            != Some(leaf.signature_key.as_str())
+                        {
+                            continue;
+                        }
+                        #[derive(QueryableByName)]
+                        struct Source {
+                            #[diesel(sql_type = Jsonb)]
+                            payload: serde_json::Value,
+                        }
+                        let source = diesel::sql_query("SELECT e.envelope->'payload' AS payload FROM canonical_events e \
+                            JOIN realm_commits c ON c.event_pk=e.pk JOIN agent_status_current_results s ON s.realm_id=c.realm_id \
+                            WHERE e.envelope->>'event_id'=$1 AND e.state='committed' AND e.kind=$3 \
+                            AND e.envelope->'actor_id'=$2::jsonb AND s.actor_id=$2::jsonb")
+                            .bind::<Text,_>(authorization.as_str()).bind::<Jsonb,_>(serde_json::to_value(&leaf.actor_id).map_err(PersistenceError::database)?)
+                            .bind::<Text,_>(arkret_wire::EventKind::AgentKeyAuthorize.as_str())
+                            .get_result::<Source>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+                        authorized |= source.is_some_and(|source| serde_json::from_value::<arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload>(source.payload).ok().is_some_and(|original|
+                            serde_json::to_value(original).ok() == serde_json::to_value(&payload).ok()));
+                    }
+                }
+                if !authorized {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
+async fn leaf_origin_in_connection(
+    conn: &mut crate::AsyncPgConnection,
+    current: &arkret_wire::MlsGroupCurrent,
+    leaf: &arkret_mls::MlsPublicEndpointLeaf,
+    candidate: Option<&soland_storage::AuthorityCommitTransaction>,
+) -> soland_storage::PersistenceResult<Option<(MlsWelcomeRecipientEndpoint, EventId)>> {
+    use arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody;
+    use diesel::sql_types::{BigInt, Jsonb};
+    use soland_storage::PersistenceError;
+    if let Some(candidate) = candidate {
+        if candidate.event.kind == arkret_wire::EventKind::MlsGenesis {
+            let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+                serde_json::from_value(
+                    serde_json::to_value(&candidate.event.payload)
+                        .map_err(PersistenceError::database)?,
+                )
+                .map_err(PersistenceError::database)?;
+            if leaf.leaf_index == 0
+                && leaf.actor_id == candidate.event.actor_id
+                && leaf.signature_key == payload.creator_leaf_authority.leaf_signature_key_b64u
+            {
+                return Ok(Some((
+                    payload.creator_leaf_authority.endpoint,
+                    payload.creator_leaf_authority.authorization_event_ref,
+                )));
+            }
+            return Ok(None);
+        }
+        if candidate
+            .mls_state
+            .as_ref()
+            .and_then(|state| {
+                state.consumed_proposals.iter().find(|proposal| {
+                    proposal.proposal_type == 1
+                        && proposal.target_after.as_ref().is_some_and(|target| {
+                            target.leaf_index == leaf.leaf_index
+                                && target.actor_id == leaf.actor_id
+                                && target.signature_key == leaf.signature_key
+                        })
+                })
+            })
+            .is_some()
+        {
+            for welcome in &candidate.welcomes {
+                let Some(witness) = &welcome.roster_witness else {
+                    continue;
+                };
+                let proof: MlsAttestAddRequestBody =
+                    serde_json::from_slice(&witness.signed_attest_add_request_canonical_json)
+                        .map_err(PersistenceError::database)?;
+                proof
+                    .validate_claim_binding()
+                    .map_err(PersistenceError::database)?;
+                let a = proof.attestation;
+                if a.effective_scope == current.effective_scope
+                    && a.genesis_event_ref == current.genesis_event_ref
+                    && a.mls_group_id
+                        == current
+                            .effective_scope
+                            .canonical_mls_group_id()
+                            .map_err(PersistenceError::database)?
+                    && a.commit_event_ref == candidate.event.event_id
+                    && a.epoch == current.epoch
+                    && welcome.delivery.commit_event_ref == candidate.event.event_id
+                    && welcome.delivery.recipient_actor_id == leaf.actor_id
+                    && welcome.delivery.recipient_endpoint == a.endpoint
+                    && a.actor_id == leaf.actor_id
+                    && a.leaf_signature_key_b64u == leaf.signature_key
+                {
+                    return Ok(Some((a.endpoint, a.authorization_event_ref)));
+                }
+            }
+            return Ok(None);
+        }
+    }
+    #[derive(QueryableByName)]
+    struct Origin {
+        #[diesel(sql_type = Jsonb)]
+        request_json: serde_json::Value,
+    }
+    let scope_key = crate::mls_group_current_results::scope_key(&current.effective_scope)?;
+    let origin = diesel::sql_query("SELECT a.request_json FROM mls_consumed_proposal_provenance p \
+        JOIN mls_add_authority_attestations a ON a.scope_key=p.scope_key AND a.commit_event_ref=p.commit_event_ref AND a.consumed_proposal_ordinal=p.consumed_proposal_ordinal \
+        JOIN canonical_events e ON e.envelope->>'event_id'=p.commit_event_ref AND e.state='committed' \
+        JOIN realm_commits c ON c.event_pk=e.pk AND c.stream_position=p.commit_stream_position \
+        WHERE p.scope_key=$1 AND p.proposal_type=1 AND p.epoch<=$2 AND p.target_after_leaf_index=$3 \
+        ORDER BY p.commit_stream_position DESC,p.consumed_proposal_ordinal DESC LIMIT 1")
+        .bind::<Text,_>(&scope_key).bind::<BigInt,_>(i64::try_from(current.epoch).map_err(PersistenceError::database)?)
+        .bind::<BigInt,_>(i64::from(leaf.leaf_index)).get_result::<Origin>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if let Some(origin) = origin {
+        let proof: MlsAttestAddRequestBody =
+            serde_json::from_value(origin.request_json).map_err(PersistenceError::database)?;
+        proof
+            .validate_claim_binding()
+            .map_err(PersistenceError::database)?;
+        let a = proof.attestation;
+        return Ok((a.effective_scope == current.effective_scope
+            && a.genesis_event_ref == current.genesis_event_ref
+            && a.actor_id == leaf.actor_id
+            && a.leaf_signature_key_b64u == leaf.signature_key)
+            .then_some((a.endpoint, a.authorization_event_ref)));
+    }
+    let genesis = diesel::sql_query("SELECT e.envelope AS payload FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+        WHERE e.envelope->>'event_id'=$1 AND e.state='committed' AND e.kind='ak.mls.genesis' AND e.envelope->'scope_ref'=$2")
+        .bind::<Text,_>(current.genesis_event_ref.as_str()).bind::<Jsonb,_>(serde_json::to_value(&current.effective_scope).map_err(PersistenceError::database)?)
+        .get_result::<super::JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    let Some(genesis) = genesis else {
+        return Ok(None);
+    };
+    let event: arkret_wire::Event =
+        serde_json::from_value(genesis.payload).map_err(PersistenceError::database)?;
+    let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+        serde_json::from_value(
+            serde_json::to_value(event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(PersistenceError::database)?;
+    Ok((leaf.leaf_index == 0
+        && event.actor_id == leaf.actor_id
+        && payload.creator_leaf_authority.leaf_signature_key_b64u == leaf.signature_key)
+        .then_some((
+            payload.creator_leaf_authority.endpoint,
+            payload.creator_leaf_authority.authorization_event_ref,
+        )))
+}
+
 pub(crate) async fn controller_device_ready_in_connection(
     conn: &mut crate::AsyncPgConnection,
     cut: &crate::sidecar_authority_cut::SidecarParticipantAuthorityCut,
@@ -88,6 +379,9 @@ pub(crate) async fn controller_device_ready_in_connection(
     let Some(group) = group else {
         return Ok(false);
     };
+    if !tree_authorized_in_connection(conn, cut, current, &group.public_state, None).await? {
+        return Ok(false);
+    }
     let event: arkret_wire::Event =
         serde_json::from_value(group.envelope).map_err(PersistenceError::database)?;
     let binding = match event.kind {

@@ -132,6 +132,7 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
             &key,
             at,
         )
+        .await
         .unwrap();
     store
         .admit_ordinary_realm_bootstrap_unit(&unit, at)

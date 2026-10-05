@@ -15,9 +15,9 @@
 //!
 //! Selectors are serialized from the SDK request model and only then mutated,
 //! so every negative case differs from an accepted body by exactly the member
-//! under test. No signer rows are seeded: this Station has no durable
-//! account-device signer producer yet, so every accepted selector here resolves
-//! to `unavailable`.
+//! under test. The rejection matrix has no frozen producer rows. The final
+//! positive case admits a real PCR and genuinely signed ordinary bootstrap;
+//! its historical result comes from the production admission transaction.
 
 use arkret_canonical::DigestSuite;
 use arkret_models_identity::{
@@ -597,4 +597,63 @@ async fn budget_body() {
         "64 KiB plus one canonical byte",
     )
     .await;
+}
+
+#[path = "../../../storage-postgres/tests/support/historical_human.rs"]
+mod historical_human;
+
+#[test]
+fn signer_keys_query_resolves_frozen_human_and_rejects_unproven_foreign_coordinates() {
+    run_on_deep_stack("signer_keys_query_human_frozen", human_frozen_body);
+}
+
+async fn human_frozen_body() {
+    use soland_storage::AuthorityCommitStore as _;
+    let (state, pool) = soland_test_support::app_state_with_pool(test_config());
+    let fixture = historical_human::HumanFixture::new(&pool, state.service_did()).await;
+    fixture.admit(&pool).await;
+    let token = dev_token_for_device(
+        state.clone(),
+        fixture.pcr.history.did.as_str(),
+        fixture.pcr.history.founding_device_id.as_str(),
+        "Historical producer",
+    )
+    .await;
+    let app = app_from_state(state);
+    let target = fixture.unit.transactions.last().unwrap();
+    let selector = fixture.selector(target);
+    let durable = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() }
+        .historical_producer_signer_key(&target.event.realm_id, &selector)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut foreign = selector.clone();
+    if let SignerKeyQuerySelector::HistoricalEvent {
+        sender: HistoricalSignerKeyQuerySender::AccountDevice { actor, .. },
+    } = &mut foreign
+    {
+        let mut account = actor.as_account_id().unwrap().clone();
+        account.station_id = DidCoreId::new("ak:did_core:web:foreign-history.example").unwrap();
+        *actor = ActorId::account(account);
+    }
+    let queries = vec![selector.clone(), foreign.clone()];
+    let body = request(
+        fixture.pcr.history.account.clone(),
+        &target.event.realm_id,
+        queries,
+    );
+    let (status, response) = send(&app, Some(&token), &body).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "real accepted Human query must use ordinary HTTP resolution"
+    );
+    assert_eq!(
+        response["results"][0],
+        serde_json::to_value(durable).unwrap()
+    );
+    assert_eq!(
+        response["results"][1],
+        serde_json::json!({"status":"unavailable","selector":foreign})
+    );
 }

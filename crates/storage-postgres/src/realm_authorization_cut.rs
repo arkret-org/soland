@@ -281,8 +281,86 @@ impl RealmAuthorizationCut {
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<ActionAdmission> {
         let evaluation = self.evaluate(actions, target, facts, at);
-        self.admit_evaluation_in_connection(conn, evaluation, owner_covers, identity)
-            .await
+        let operation = AuthorizationOperation {
+            actor: &self.actor,
+            actions,
+            target,
+            at,
+            facts,
+        };
+        self.admit_evaluation_in_connection(
+            conn,
+            evaluation,
+            owner_covers,
+            identity,
+            &operation,
+            &[],
+        )
+        .await
+    }
+
+    async fn owned_controller_in_connection(
+        &self,
+        conn: &mut AsyncPgConnection,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<Option<ActorId>> {
+        let Some(agent) = self.actor.as_account_id() else {
+            return Ok(None);
+        };
+        #[derive(QueryableByName)]
+        struct Present {
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            present: bool,
+        }
+        // Classification is accepted ownership material, never a profile label.
+        // A broken/removed binding must not turn a known Agent into a human.
+        let known = sql_query("SELECT EXISTS(SELECT 1 FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id JOIN realm_commits c ON c.commit_id=p.current_commit_id AND c.realm_id=p.realm_id AND c.stream_position=p.current_stream_position WHERE p.agent_id=$1 AND g.station_id=$2) OR EXISTS(SELECT 1 FROM member_state_current_results m JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' WHERE m.realm_id=$3 AND m.member_id=$4 AND e.envelope->'payload' ? 'agent_controller_binding') AS present")
+            .bind::<Text,_>(agent.principal_id.as_str())
+            .bind::<Text,_>(agent.station_id.as_str())
+            .bind::<Text,_>(self.realm_id.as_str())
+            .bind::<Text,_>(self.actor.to_string())
+            .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+        if !known {
+            return Ok(None);
+        }
+        let controller = crate::agent_interaction_current_results::controller_in_connection(
+            conn,
+            &self.realm_id,
+            agent,
+            at,
+        )
+        .await?
+        .ok_or_else(|| {
+            capability_denied("owned Agent current controller binding is unavailable")
+        })?;
+        let nested = sql_query("SELECT EXISTS(SELECT 1 FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id WHERE p.agent_id=$1 AND g.station_id=$2) AS present")
+            .bind::<Text,_>(controller.principal_id.as_str())
+            .bind::<Text,_>(controller.station_id.as_str())
+            .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+        if nested {
+            return Err(capability_denied(
+                "an Agent cannot supply another Agent's controller authority",
+            ));
+        }
+        let account = sql_query("SELECT 'active' AS membership FROM accounts WHERE principal_id=$1 AND station_id=$2 FOR SHARE")
+            .bind::<Text,_>(controller.principal_id.as_str())
+            .bind::<Text,_>(controller.station_id.as_str())
+            .get_result::<MembershipRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+        if account.is_none() {
+            return Err(capability_denied(
+                "owned Agent controller account is unavailable",
+            ));
+        }
+        let lifecycle = sql_query("SELECT l.state AS membership FROM account_lifecycle l JOIN accounts a ON a.pk=l.account_pk WHERE a.principal_id=$1 AND a.station_id=$2")
+            .bind::<Text,_>(controller.principal_id.as_str())
+            .bind::<Text,_>(controller.station_id.as_str())
+            .get_result::<MembershipRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+        if lifecycle.is_some_and(|row| row.membership != "active") {
+            return Err(capability_denied(
+                "owned Agent controller account is not active",
+            ));
+        }
+        Ok(Some(ActorId::account(controller)))
     }
 
     async fn admit_evaluation_in_connection(
@@ -291,7 +369,41 @@ impl RealmAuthorizationCut {
         evaluation: GrantEvaluation<'_>,
         owner_covers: bool,
         identity: &str,
+        operation: &AuthorizationOperation<'_>,
+        approvals: &[soland_storage::VerifiedGrantApproval],
     ) -> PersistenceResult<ActionAdmission> {
+        let controller = if self.is_direct_conversation() {
+            None
+        } else {
+            self.owned_controller_in_connection(conn, operation.at)
+                .await?
+        };
+        let controller_cut = match &controller {
+            Some(controller) => Some(Self::read(conn, &self.realm_id, controller).await?),
+            None => None,
+        };
+        let bounded = controller_cut.is_some();
+        let evaluation = if let Some(controller_cut) = &controller_cut {
+            controller_cut.require_governed_member(&EventKind::CapabilityGrant)?;
+            soland_storage::evaluate_controller_bounded_grants(
+                operation,
+                &self
+                    .effective_grants(operation.at)
+                    .map(|(_, grant)| grant)
+                    .collect::<Vec<_>>(),
+                &controller_cut.actor,
+                &controller_cut
+                    .effective_grants(operation.at)
+                    .map(|(_, grant)| grant)
+                    .collect::<Vec<_>>(),
+                approvals,
+                controller_cut.actor_is_root_controller()
+                    && operation.actions.contains(&CapabilityActionId::REALM_OWNER),
+            )
+        } else {
+            evaluation
+        };
+        let owner_covers = owner_covers && !bounded;
         match evaluation {
             GrantEvaluation::Denied => Err(capability_denied(
                 "a deny constraint of an effective grant matches the operation",
@@ -304,7 +416,9 @@ impl RealmAuthorizationCut {
                 ))
             }
             GrantEvaluation::Allowed(satisfied) => {
-                if satisfied.iter().any(|grant| grant.reservations.is_empty()) || owner_covers {
+                if (!bounded && satisfied.iter().any(|grant| grant.reservations.is_empty()))
+                    || owner_covers
+                {
                     return Ok(ActionAdmission::Admitted);
                 }
                 for grant in &satisfied {
@@ -356,6 +470,7 @@ impl RealmAuthorizationCut {
                     .issuer_authority_refs
                     .iter()
                     .all(|authority_ref| match authority_ref {
+                        IssuerAuthorityRef::OwnedAgent { .. } => false,
                         IssuerAuthorityRef::RealmRoot {
                             realm_id: root_realm_id,
                             authority_event_ref,
@@ -496,10 +611,34 @@ impl RealmAuthorizationCut {
     ) -> PersistenceResult<()> {
         let kind = &event.kind;
         self.require_open_lifecycle(event)?;
+        if *kind == EventKind::CapabilityRevoke && event.executed_by.is_none() {
+            let payload: arkret_models_collaboration::events_payloads::CapabilityRevokePayload =
+                serde_json::from_value(
+                    serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            if self.grants.get(&payload.grant_id).is_some_and(|grant| {
+                grant
+                    .owned_agent_issuer()
+                    .is_some_and(|controller| event.actor_id.as_account_id() == Some(controller))
+            }) {
+                return Ok(());
+            }
+        }
         self.require_governed_member(kind)?;
         let root_only = arkret_schema::capability_actions_for_event_kind(kind.as_str())
             .any(|descriptor| descriptor.root_control_only);
         if root_only {
+            if !self.is_direct_conversation()
+                && self
+                    .owned_controller_in_connection(conn, at)
+                    .await?
+                    .is_some()
+            {
+                return Err(capability_denied(
+                    "owned Agent execution cannot substitute the exact Realm root controller",
+                ));
+            }
             return if self.actor_is_root_controller() {
                 Ok(())
             } else {
@@ -633,7 +772,20 @@ impl RealmAuthorizationCut {
             _ => Vec::new(),
         };
         match self
-            .admit_evaluation_in_connection(conn, evaluate(), owner, event.event_id.as_str())
+            .admit_evaluation_in_connection(
+                conn,
+                evaluate(),
+                owner,
+                event.event_id.as_str(),
+                &AuthorizationOperation {
+                    actor: &self.actor,
+                    actions: &actions,
+                    target: &target,
+                    at,
+                    facts: &facts,
+                },
+                &discharges,
+            )
             .await?
         {
             ActionAdmission::Admitted => {}
@@ -781,7 +933,20 @@ impl RealmAuthorizationCut {
             _ => Vec::new(),
         };
         if self
-            .admit_evaluation_in_connection(conn, evaluation, owner, event.event_id.as_str())
+            .admit_evaluation_in_connection(
+                conn,
+                evaluation,
+                owner,
+                event.event_id.as_str(),
+                &AuthorizationOperation {
+                    actor: &self.actor,
+                    actions: &actions,
+                    target,
+                    at: commit.committed_at,
+                    facts: &facts,
+                },
+                &markers,
+            )
             .await?
             != ActionAdmission::Admitted
         {

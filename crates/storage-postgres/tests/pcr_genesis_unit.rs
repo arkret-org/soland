@@ -399,6 +399,7 @@ fn assemble(station: DidCoreId, fixture: DeviceHistoryFixture) -> PcrGenesisComm
         expected_authority: authority.clone(),
         event,
         commit,
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,
@@ -1118,6 +1119,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             expected_authority: genesis.transactions[1].expected_authority.clone(),
             event: revoke.clone(),
             commit: covering.clone(),
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -1378,6 +1380,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
                 expected_authority: genesis.transactions[1].expected_authority.clone(),
                 event: reject_event.clone(),
                 commit: reject_commit.clone(),
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,
@@ -1480,13 +1483,15 @@ fn station_successor(
     offset_seconds: i64,
 ) -> arkret_wire::RealmCommit {
     let mut commit = previous.clone();
-    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-        format!("{}:{}:successor", event.event_id, previous.commit_id).as_bytes(),
-    ));
     commit.stream_position = previous.stream_position + 1;
     commit.previous_commit_ref = Some(previous.commit_id.clone());
     commit.event_ref = event.event_id.clone();
     commit.committed_at = previous.committed_at + chrono::TimeDelta::seconds(offset_seconds);
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        &arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned,
@@ -1628,6 +1633,7 @@ async fn key_backup_active_series_pointer_unit_commits_only_at_the_active_device
                 expected_authority: authority.clone(),
                 event,
                 commit,
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,
@@ -2155,6 +2161,7 @@ async fn accepted_device_unit_admits_only_a_current_active_approver() {
             expected_authority: authority.clone(),
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -2357,6 +2364,7 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
             expected_authority: authority.clone(),
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -2999,6 +3007,7 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
             expected_authority: authority.clone(),
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -3959,6 +3968,7 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
             expected_authority: authority.clone(),
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -4080,6 +4090,33 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
             .is_err()
     );
     assert_eq!(policy_footprint(&pool, &realm_id, &account).await, before);
+
+    // Imported current-row collision tests the recovery writer's family guard;
+    // it does not model an admitted Agent management Policy.
+    {
+        use diesel::sql_types::Text;
+        use diesel_async::RunQueryDsl;
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,0,'imported-agent-policy','{\"schema\":\"ak.schema.policy.v1\",\"policy_kind\":\"agent\"}',now())")
+            .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(&genesis_id)
+            .bind::<Text,_>(head.commit_id.as_str()).execute(&mut conn).await.unwrap();
+        let collision = policy_footprint(&pool, &realm_id, &account).await;
+        let error = publish(&v1, commit_v1.clone()).await.unwrap_err();
+        assert_eq!(
+            error.conflict_code(),
+            Some(ConflictCode::FailedPrecondition)
+        );
+        assert_eq!(
+            policy_footprint(&pool, &realm_id, &account).await,
+            collision
+        );
+        diesel::sql_query("DELETE FROM policy_current_results WHERE policy_id=$1")
+            .bind::<Text, _>(&genesis_id)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(policy_footprint(&pool, &realm_id, &account).await, before);
+    }
 
     // The founding device publishes v1: Event, Commit and policy together.
     let RecoveryPolicyPublicationOutcome::Committed(accepted) =
@@ -4345,6 +4382,7 @@ async fn profile_update_commits_actor_profile_current_and_rejects_forbidden_patc
             expected_authority: authority.clone(),
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -4571,6 +4609,7 @@ async fn profile_accountability_requires_active_grant_at_commit_cut() {
         expected_authority: authority.clone(),
         event,
         commit,
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,
@@ -4910,6 +4949,7 @@ async fn agent_provision_commits_four_families_or_none() {
         expected_authority: authority.clone(),
         event,
         commit,
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,
@@ -5144,6 +5184,7 @@ async fn agent_profile_accountability_follows_the_provision_projection() {
         expected_authority: authority.clone(),
         event,
         commit,
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,
@@ -5158,7 +5199,7 @@ async fn agent_profile_accountability_follows_the_provision_projection() {
     let realms = [&controller_realm, &agent_realm];
     let t0 = agent_head.committed_at;
 
-    let provision = agent_provision_event(
+    let before_authorization = agent_provision_event(
         &controller,
         &controller_realm,
         &controller_method,
@@ -5168,6 +5209,46 @@ async fn agent_profile_accountability_follows_the_provision_projection() {
         "endorsed",
         t0 - chrono::TimeDelta::days(1),
         t0 - chrono::TimeDelta::days(1),
+    );
+    let unchanged = profile_footprint(&pool, &realms).await;
+    let unchanged_provision = provision_footprint(&pool, &realms).await;
+    let before_authorization_commit =
+        station_successor(&controller_head, &before_authorization, &station_did, 1);
+    let error = profiles
+        .admit_agent_provision(AgentProvisionAdmissionWrite {
+            commit: tx(
+                &controller_authority,
+                before_authorization,
+                before_authorization_commit.clone(),
+            ),
+            queued_at: before_authorization_commit.committed_at,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, PersistenceError::Conflict(reason) if reason == "Human historical producer is outside its accepted authorization window"),
+        "a later target Commit cannot authorize an earlier producer proof: {error}"
+    );
+    assert_eq!(
+        profile_footprint(&pool, &realms).await,
+        unchanged,
+        "pre-authorization proof leaves no durable admission"
+    );
+    assert_eq!(
+        provision_footprint(&pool, &realms).await,
+        unchanged_provision,
+        "pre-authorization proof rolls back every provision family"
+    );
+    let provision = agent_provision_event(
+        &controller,
+        &controller_realm,
+        &controller_method,
+        controller_seed,
+        &agent.principal_id,
+        &declared_pcr_id(&format!("{}:genesis", agent.principal_id)),
+        "endorsed",
+        t0,
+        t0,
     );
     let provision_commit = station_successor(&controller_head, &provision, &station_did, 1);
     let AgentProvisionAdmissionOutcome::Committed(provisioned) = profiles
@@ -5287,9 +5368,6 @@ fn station_genesis_commit(
 ) -> arkret_wire::RealmCommit {
     let realm_id = RealmId::from_event_id(&event.event_id);
     let mut commit = template.clone();
-    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-        format!("{}:genesis", event.event_id).as_bytes(),
-    ));
     commit.realm_id = realm_id.clone();
     commit.stream_ref = arkret_wire::CommitStreamRef::Realm { realm_id };
     commit.stream_position = 0;
@@ -5299,6 +5377,11 @@ fn station_genesis_commit(
     commit.authority_ref =
         arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(event.event_id.clone());
     commit.committed_at = committed_at;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        &arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned,
@@ -5442,6 +5525,7 @@ async fn agent_pcr_genesis_requires_its_provision_declaration() {
                     },
                     event: event.clone(),
                     commit,
+                    producer_signer_fact: None,
                     mls_state: None,
                     welcomes: Vec::new(),
                     recipient_queue_capacity: 0,
@@ -5480,6 +5564,7 @@ async fn agent_pcr_genesis_requires_its_provision_declaration() {
                     expected_authority: controller_authority.clone(),
                     event: provision.clone(),
                     commit: provision_commit.clone(),
+                    producer_signer_fact: None,
                     mls_state: None,
                     welcomes: Vec::new(),
                     recipient_queue_capacity: 0,
@@ -5672,6 +5757,7 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
     let method = controller_fixture.device_verification_method.clone();
     let seed = controller_fixture.founding_device_signing_seed;
     let station_did = controller_fixture.station_did.clone();
+    let controller_device = controller_fixture.founding_device_id.clone();
     let controller_genesis = admit_genesis(controller_fixture).await;
     let stranger_fixture = fixture(&station);
     let stranger = stranger_fixture.account.clone();
@@ -5692,6 +5778,7 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
             expected_authority: authority,
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -5777,6 +5864,141 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
         .await
         .unwrap();
 
+    let historical_store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
+    let producer_selector = |event: &arkret_wire::Event, commit: &arkret_wire::RealmCommit| {
+        arkret_models_identity::SignerKeyQuerySelector::HistoricalEvent {
+            sender: arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice {
+                actor: event.actual_signer().clone(),
+                device_id: controller_device.clone(),
+                verification_method: method.clone(),
+                committed_event_ref: arkret_wire::CommittedEventRef {
+                    event_id: event.event_id.clone(),
+                    commit_id: commit.commit_id.clone(),
+                    stream_ref: commit.stream_ref.clone(),
+                    stream_position: commit.stream_position,
+                },
+            },
+        }
+    };
+    for (original, accepted) in [(&provision, &provision_commit), (&genesis, &genesis_commit)] {
+        let selector = producer_selector(original, accepted);
+        let frozen = soland_storage::AuthorityCommitStore::historical_self_pcr_producer_signer_key(
+            &historical_store,
+            &original.realm_id,
+            &selector,
+            &controller,
+        )
+        .await
+        .unwrap()
+        .expect("original self admission freezes a key-only fact");
+        assert_eq!(
+            frozen
+                .key()
+                .unwrap()
+                .authorization_ref
+                .stream_ref
+                .realm_id(),
+            &controller_realm
+        );
+        let mut foreign = controller.clone();
+        foreign.station_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign-history.example").unwrap();
+        assert!(
+            soland_storage::AuthorityCommitStore::historical_self_pcr_producer_signer_key(
+                &historical_store,
+                &original.realm_id,
+                &selector,
+                &foreign
+            )
+            .await
+            .unwrap()
+            .is_none(),
+            "recipient must equal complete actual Human producer"
+        );
+        let mut wrong = selector.clone();
+        if let arkret_models_identity::SignerKeyQuerySelector::HistoricalEvent {
+            sender:
+                arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice {
+                    committed_event_ref,
+                    ..
+                },
+        } = &mut wrong
+        {
+            committed_event_ref.stream_position += 1;
+        }
+        assert!(
+            soland_storage::AuthorityCommitStore::historical_self_pcr_producer_signer_key(
+                &historical_store,
+                &original.realm_id,
+                &wrong,
+                &controller
+            )
+            .await
+            .unwrap()
+            .is_none(),
+            "target must preserve all four original coordinates"
+        );
+    }
+    // Removing the original provenance must not be repaired from the still
+    // present Agent/current delegation rows or from its canonical envelope.
+    {
+        let mut conn = pool.get().await.unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct FrozenSource {
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            value: serde_json::Value,
+        }
+        let source: FrozenSource = diesel::sql_query("SELECT self_admission_provenance AS value FROM agent_producer_signer_keys WHERE commit_id=$1").bind::<diesel::sql_types::Text,_>(genesis_commit.commit_id.as_str()).get_result(&mut *conn).await.unwrap();
+        let mut wrong_source = source.value.clone();
+        wrong_source["controller_delegation_ref"] =
+            serde_json::json!(format!("{agent_did}#wrong-controller"));
+        diesel::sql_query(
+            "UPDATE agent_producer_signer_keys SET self_admission_provenance=$2 WHERE commit_id=$1",
+        )
+        .bind::<diesel::sql_types::Text, _>(genesis_commit.commit_id.as_str())
+        .bind::<diesel::sql_types::Jsonb, _>(wrong_source)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+        assert!(
+            soland_storage::AuthorityCommitStore::historical_self_pcr_producer_signer_key(
+                &historical_store,
+                &genesis.realm_id,
+                &producer_selector(&genesis, &genesis_commit),
+                &controller
+            )
+            .await
+            .unwrap()
+            .is_none(),
+            "current accepted Agent rows cannot replace the original delegation fact"
+        );
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("UPDATE agent_producer_signer_keys SET self_admission_provenance=NULL,self_admission_account=NULL,self_admission_kind=NULL WHERE commit_id=$1").bind::<diesel::sql_types::Text,_>(genesis_commit.commit_id.as_str()).execute(&mut *conn).await.unwrap();
+        drop(conn);
+        assert!(
+            soland_storage::AuthorityCommitStore::historical_self_pcr_producer_signer_key(
+                &historical_store,
+                &genesis.realm_id,
+                &producer_selector(&genesis, &genesis_commit),
+                &controller
+            )
+            .await
+            .unwrap()
+            .is_none(),
+            "missing original admission provenance cannot be recovered from current state"
+        );
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "UPDATE agent_producer_signer_keys SET self_admission_provenance=$2,self_admission_account=$3,self_admission_kind='agent_pcr_genesis' WHERE commit_id=$1",
+        )
+        .bind::<diesel::sql_types::Text, _>(genesis_commit.commit_id.as_str())
+        .bind::<diesel::sql_types::Jsonb, _>(source.value)
+        .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(&controller).unwrap())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    }
     let t0 = genesis_commit.committed_at;
     let control = |executed_by: &arkret_wire::AccountId,
                    signer_method: &DidUrl,
@@ -5831,6 +6053,18 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
         ),
     );
     let first_commit = committed(admit(&first, &genesis_commit).await);
+    assert!(
+        soland_storage::AuthorityCommitStore::historical_self_pcr_producer_signer_key(
+            &historical_store,
+            &agent_pcr,
+            &producer_selector(&first, &first_commit),
+            &controller
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "controller Agent PCR Event keeps its original accepted provision/delegation fact"
+    );
     assert!(matches!(
         admit(&first, &first_commit).await.unwrap(),
         AgentControlAdmissionOutcome::Duplicate(stored) if stored == first_commit

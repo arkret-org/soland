@@ -26,7 +26,9 @@ use arkret_wire::{
     CommitStreamHead, CommitStreamRef, CommittedEventView, DidCoreId, RealmCommit, RealmId,
     RequestId, StreamScanDirection, StreamScanOutcome, StreamScanRequest,
 };
-use soland_services::committed_receipt::{CommitContinuity, verify_committed_event_receipt};
+use soland_services::committed_receipt::{
+    CommitContinuity, verify_committed_event_receipt_with_fact,
+};
 use soland_storage::{
     CommittedChainNode, CommittedReplica, CommittedReplicaRole, ReplicaAnchorInstall,
     ReplicaStreamAnchor,
@@ -179,9 +181,7 @@ pub(crate) async fn refresh_account_snapshot(
             && serde_json::from_value::<arkret_wire::MemberStateCurrent>(value.clone())
                 .is_ok_and(|member| member.membership == arkret_wire::MembershipState::Join)
     )).ok_or("the hosted Account has no accepted current opening join")?;
-    let TypedCurrentResult::Value { revision, .. } = own_join else {
-        unreachable!()
-    };
+    let TypedCurrentResult::Value { revision, .. } = own_join;
     let governance = commits
         .current_authority(realm_id)
         .await
@@ -495,13 +495,19 @@ async fn fill_to_head(
             limit: SCAN_PAGE_LIMIT,
         };
         let body = post_peer(state, governance, SCAN_PATH, &request, SCAN_MAX_BYTES).await?;
-        let page: StreamScanOutcome = serde_json::from_slice(&body).map_err(temporary)?;
+        let page: arkret_models_collaboration::authority_commit::PeerStreamScanOutcome =
+            serde_json::from_slice(&body).map_err(temporary)?;
         page.validate_for_request(&request).map_err(temporary)?;
         if page.committed_events.is_empty() {
             return Ok(());
         }
         for item in &page.committed_events {
-            store_scanned(state, realm_id, anchored, located, &held, item).await?;
+            let fact = page
+                .producer_signer_facts
+                .iter()
+                .find(|entry| entry.target.commit_id == item.commit().commit_id)
+                .map(|entry| &entry.producer_signer_fact);
+            store_scanned(state, realm_id, anchored, located, &held, item, fact).await?;
             held = item.commit().clone();
         }
         if !page.truncated {
@@ -517,13 +523,14 @@ async fn store_scanned(
     located: &mut LocatedRealmAuthority,
     held: &RealmCommit,
     item: &CommittedEventView,
+    fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
 ) -> Result<(), String> {
     let commit = item.commit();
     ensure_historical_method_key(state, located, &commit.signature).await?;
     let commits = state.authority_commits();
     match item {
         CommittedEventView::Full(view) => {
-            verify_committed_event_receipt(
+            verify_committed_event_receipt_with_fact(
                 state.persistence(),
                 &view.event,
                 commit,
@@ -532,6 +539,7 @@ async fn store_scanned(
                 &located.keys,
                 &state.service_core_id(),
                 state.projections().realm_digest_suite(realm_id.as_str()),
+                fact,
             )
             .await
             .map_err(temporary)?;
@@ -541,6 +549,7 @@ async fn store_scanned(
                     authority: located.current_authority(),
                     event: view.event.clone(),
                     commit: commit.clone(),
+                    producer_signer_fact: fact.cloned(),
                     genesis_event_ref: None,
                     role: CommittedReplicaRole::HeldStream,
                     received_at: crate::wire::now(),

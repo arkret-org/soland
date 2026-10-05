@@ -1238,6 +1238,7 @@ impl ContractCommitStream {
         AuthorityCommitTransaction {
             expected_authority: self.authority.clone(),
             commit: arkret_wire::RealmCommit {
+                producer_signer_fact_digest: None,
                 commit_id,
                 realm_id: event.realm_id.clone(),
                 stream_ref,
@@ -1250,6 +1251,7 @@ impl ContractCommitStream {
                 signature: contract_authority_signature(record.received_at),
             },
             event,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -1457,6 +1459,9 @@ fn contract_applet_event_request(
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         parent_membership_admission: None,
         contact_projection: None,
 
@@ -2542,6 +2547,9 @@ pub async fn assert_event_commit_unit_of_work_contract(
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         parent_membership_admission: None,
         contact_projection: Some(ContactProjectionCommit {
             completion_intent: None,
@@ -2639,6 +2647,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
             applet_producer_guard: None,
             widget_token_gate: None,
             forwarded_producer_evidence: None,
+            forwarded_agent_producer: None,
+            agent_deployment_ceiling: arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
             parent_membership_admission: None,
             contact_projection: Some(ContactProjectionCommit {
                 completion_intent: None,

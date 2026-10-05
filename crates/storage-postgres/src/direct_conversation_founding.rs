@@ -835,6 +835,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                 transaction.commit.committed_at,
             )
             .await?;
+            let prepared_human = crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(conn, transaction).await?;
             queue_event_in_connection(conn, &transaction.event, queued_at).await?;
             match commit_transaction_in_connection(conn, transaction).await? {
                 AuthorityCommitWriteOutcome::Committed => {}
@@ -851,6 +852,11 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                     )
                     .into());
                 }
+            }
+            if let Some(fact) = prepared_human.as_ref() {
+                crate::agent_producer_signer_keys::retain_prepared_human_in_connection(conn, &transaction.event, &transaction.commit, fact).await?;
+            } else {
+                crate::agent_producer_signer_keys::retain_in_connection(conn, &transaction.event, &transaction.commit, Some(guard)).await?;
             }
             let event = &transaction.event;
             let commit = &transaction.commit;
@@ -909,6 +915,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                                 CommittedEventSubmission {
                                     event_submission: unit.submission.events[index].clone(),
                                     source_commit: commits[index].clone(),
+                                    producer_signer_fact: unit.transactions[index].producer_signer_fact.clone(),
                                     genesis_event_ref: None,
                                     welcomes: None,
                                 }
@@ -1053,6 +1060,12 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
             let stored: [arkret_wire::RealmCommit; 4] =
                 serde_json::from_value(occupied.commits_json).map_err(PersistenceError::database)?;
             if occupied.founding_unit_digest == digest && stored == commits {
+                for transaction in &unit.transactions {
+                    let original = crate::agent_producer_signer_keys::human_source_for_commit_in_connection(conn, &transaction.event, &transaction.commit).await?;
+                    if original != transaction.producer_signer_fact {
+                        return Err(PersistenceError::Conflict("Direct founding source differs from original".into()).into());
+                    }
+                }
                 return Ok(AggregateAcceptanceStatus::Duplicate);
             }
             return Err(conflict(

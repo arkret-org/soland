@@ -105,6 +105,7 @@ fn realm_transaction(
         expected_authority: authority.clone(),
         event: event.clone(),
         commit: RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
                 format!("{}:{position}", event.event_id).as_bytes(),
             )),
@@ -118,6 +119,7 @@ fn realm_transaction(
             committed_at: at,
             signature: commit_signature(method, at),
         },
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: Vec::new(),
         recipient_queue_capacity: 0,
@@ -168,6 +170,9 @@ async fn commit_projected_invite(
         applet_producer_guard: None,
         widget_token_gate: None,
         forwarded_producer_evidence: None,
+        forwarded_agent_producer: None,
+        agent_deployment_ceiling:
+            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
         parent_membership_admission: None,
         contact_projection: None,
 

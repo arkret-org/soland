@@ -11,6 +11,7 @@ description = "PostgreSQL storage adapter and database bootstrap for Soland."
 
 [features]
 default = []
+conformance-harness = []
 # Leased test databases (`test_database`). Soland has one storage
 # implementation, so every test that needs storage takes a real database from
 # this module instead of a second in-memory adapter.
@@ -53,6 +54,8 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+soland-test-support.workspace = true
+soland-http = { workspace = true, features = ["test-support"] }
 arkret-schema-conformance.workspace = true
 rand_chacha = "0.10.0"
 rand_core = "0.10.1"

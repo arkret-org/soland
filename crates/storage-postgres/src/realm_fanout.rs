@@ -752,6 +752,11 @@ pub(crate) async fn plan_realm_fanout_in_connection(
     let idempotency_key = fanout_idempotency_key(&commit.commit_id);
     let genesis_event_ref = accepted_mls_genesis_for_fanout(conn, event).await?;
     freeze_welcomes_in_connection(conn, event, commit, welcomes).await?;
+    let producer_signer_fact =
+        crate::agent_producer_signer_keys::human_source_for_commit_in_connection(
+            conn, event, commit,
+        )
+        .await?;
     let mut inserted = 0;
     for (station, authority_witnesses) in targets {
         let request =
@@ -760,6 +765,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
                 replications: vec![CommittedEventSubmission::from_source_submission(
                     source,
                     commit.clone(),
+                    producer_signer_fact.clone(),
                     genesis_event_ref.clone(),
                     replicated_welcomes.remove(&station),
                 )],

@@ -578,6 +578,7 @@ mod account_summary_query_tests {
             .unwrap();
             arkret_wire::CommittedEventFullView {
                 commit: arkret_wire::RealmCommit {
+                    producer_signer_fact_digest: None,
                     commit_id: commit_id(u8::try_from(position).unwrap() + 2),
                     realm_id: realm_id.clone(),
                     stream_ref: stream_ref.clone(),

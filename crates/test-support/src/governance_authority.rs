@@ -107,6 +107,7 @@ fn unsigned_commit(
     authority_ref: RealmCommitAuthorityRef,
 ) -> RealmCommit {
     RealmCommit {
+        producer_signer_fact_digest: None,
         commit_id: RealmCommitId::from_digest([seed; 32]),
         realm_id: realm_id.clone(),
         stream_ref: CommitStreamRef::Realm {
@@ -130,6 +131,11 @@ fn seal_commit(
     key: &SigningKey,
     at: DateTime<Utc>,
 ) -> RealmCommit {
+    let identity =
+        canonical::unsigned_value(&commit, &["commit_id", "signature"]).expect("Commit identity");
+    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        &arkret_canonical::canonical_json_bytes(&identity).expect("canonical Commit identity"),
+    ));
     let unsigned = canonical::unsigned_value(&commit, &["signature"]).expect("unsigned Commit");
     commit.signature = sign_detached_object(
         &unsigned,
@@ -139,6 +145,9 @@ fn seal_commit(
         key,
     )
     .expect("Commit signature");
+    commit
+        .verify_commit_id_matches_content()
+        .expect("fixture Commit content ID");
     commit
 }
 
@@ -273,7 +282,7 @@ impl GovernanceChain {
                 to_service_id: core_id(STATION_B),
                 final_stream_heads_digest: hash('a'),
                 snapshot_ref: RealmSnapshotId::from_digest([0x44; 32]),
-                snapshot_digest: hash('b'),
+                historical_signer_facts_digest: None,
                 change_event_ref: change_event.event_id.clone(),
                 change_commit_id: change_commit.commit_id.clone(),
                 old_authority_signature: placeholder_signature(
@@ -377,7 +386,7 @@ impl GovernanceChain {
     /// sealed by `signer` under generation 1.
     #[must_use]
     pub fn commit_next(&self, event: &Event, signer: GovernanceSigner) -> RealmCommit {
-        let mut commit = unsigned_commit(
+        let commit = unsigned_commit(
             &self.realm_id,
             self.at,
             0,
@@ -387,9 +396,6 @@ impl GovernanceChain {
             1,
             RealmCommitAuthorityRef::Handoff(self.handoff_id.clone()),
         );
-        commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-            format!("commit:{}", event.event_id).as_bytes(),
-        ));
         self.seal(commit, signer)
     }
 

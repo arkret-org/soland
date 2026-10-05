@@ -648,6 +648,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
             authority_commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: authority.clone(),
                 commit: arkret_wire::RealmCommit {
+                    producer_signer_fact_digest: None,
                     commit_id: arkret_wire::RealmCommitId::from_digest(
                         arkret_canonical::sha256_bytes(event.event_id.as_str().as_bytes()),
                     ),
@@ -675,6 +676,7 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
                     },
                 },
                 event,
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,
@@ -683,6 +685,9 @@ async fn racing_realm_commit_accepts_only_one_event_and_rolls_back_the_loser() {
             applet_producer_guard: None,
             widget_token_gate: None,
             forwarded_producer_evidence: None,
+            forwarded_agent_producer: None,
+            agent_deployment_ceiling:
+                arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
             parent_membership_admission: None,
             event: record,
             contact_projection: None,

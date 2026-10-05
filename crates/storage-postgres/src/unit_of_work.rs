@@ -2490,7 +2490,11 @@ async fn commit_one_in_connection(
         )
         .into());
     }
-    if request.self_producer_guard.is_some() && request.forwarded_producer_evidence.is_some() {
+    let producer_guards = usize::from(request.self_producer_guard.is_some())
+        + usize::from(request.forwarded_producer_evidence.is_some())
+        + usize::from(request.forwarded_agent_producer.is_some())
+        + usize::from(request.applet_producer_guard.is_some());
+    if producer_guards > 1 {
         return Err(PersistenceError::SchemaViolation(
             "an Event producer is either local or forwarded, never both".to_owned(),
         )
@@ -2499,12 +2503,82 @@ async fn commit_one_in_connection(
 
     if matches!(
         event.scope_ref,
-        arkret_wire::ScopeRef::Realm { .. } | arkret_wire::ScopeRef::Circle { .. }
+        arkret_wire::ScopeRef::Realm { .. }
+            | arkret_wire::ScopeRef::Circle { .. }
+            | arkret_wire::ScopeRef::Sidecar { .. }
     ) {
         // Shared writes acquire the Realm cut before controller or Agent producer current.
         crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
     }
 
+    // Only the full original accepted Event and Commit witness permits replay.
+    // Return its existing outcome before current producer or policy gates;
+    // do not replay projections, quotas, outbox or replace the original fact.
+    // The caller's outer transaction obligations and verified transport remain.
+    if crate::authority_commit::is_exact_accepted_event_replay(
+        conn,
+        event,
+        &request.authority_commit.commit,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+    let prepared_human = if request.forwarded_producer_evidence.is_none() {
+        crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(
+            conn,
+            &request.authority_commit,
+        )
+        .await?
+    } else {
+        let retained = request
+            .forwarded_producer_evidence
+            .as_ref()
+            .expect("presence checked");
+        let core = &retained.evidence.device_projection_attestation.attestation;
+        let source = &core.event_authorization;
+        if crate::authority_commit::is_exact_accepted_event_replay(
+            conn,
+            event,
+            &request.authority_commit.commit,
+        )
+        .await?
+        {
+            None
+        } else {
+            if crate::agent_producer_signer_keys::native_control_target_in_connection(
+                conn,
+                &event.realm_id,
+            )
+            .await?
+            {
+                return Err(PersistenceError::Conflict(
+                    "ordinary Human source is forbidden for native control Realm".into(),
+                )
+                .into());
+            }
+            let verified = arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
+                &retained.evidence, event, &core.account_id.station_id,
+                &request.authority_commit.expected_authority.service_id, &source.forward_body_digest,
+                event.realm_id.digest_suite_code().digest_suite(), request.authority_commit.commit.committed_at,
+            ).map_err(|e| PersistenceError::Conflict(format!("forward original source failed acceptance: {e}")))?;
+            let fact = verified.into_fact();
+            if request.authority_commit.producer_signer_fact.as_ref() != Some(&fact)
+                || retained.producer_signer_fact != fact
+            {
+                return Err(PersistenceError::Conflict(
+                    "forward source differs from signed candidate".into(),
+                )
+                .into());
+            }
+            crate::agent_producer_signer_keys::validate_human_fact_binding(
+                event,
+                &request.authority_commit.commit,
+                Some(&fact),
+            )?;
+            Some(fact)
+        }
+    };
     if let Some(guard) = request.self_producer_guard.as_ref() {
         crate::authority_commit::check_self_producer_guard_in_connection(
             conn,
@@ -2513,6 +2587,24 @@ async fn commit_one_in_connection(
             request.authority_commit.commit.committed_at,
         )
         .await?;
+    }
+
+    if let Some(producer) = request.forwarded_agent_producer.as_ref() {
+        arkret_identity::agent_authority_evidence::verify_forwarded_agent_producer(
+            event,
+            producer.evidence(),
+            &producer.account().station_id,
+            request.authority_commit.commit.committed_at,
+            None,
+        )
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "{}: {error}",
+                error
+                    .error_code()
+                    .unwrap_or(arkret_wire::ErrorCode::SignatureInvalid)
+            ))
+        })?;
     }
 
     if let Some(guard) = request.applet_producer_guard.as_ref() {
@@ -2541,6 +2633,7 @@ async fn commit_one_in_connection(
         if request.self_producer_guard.is_none()
             && request.applet_producer_guard.is_none()
             && request.forwarded_producer_evidence.is_none()
+            && request.forwarded_agent_producer.is_none()
         {
             return Err(PersistenceError::Conflict(
                 "capability_denied: widget token cannot replace the original producer guard".into(),
@@ -2575,6 +2668,14 @@ async fn commit_one_in_connection(
         )
         .await?;
     }
+    crate::agent_participation_admission::require_current(
+        conn,
+        event,
+        &request.authority_commit.commit,
+        &request.authority_commit.expected_authority.service_id,
+        request.agent_deployment_ceiling,
+    )
+    .await?;
     crate::agent_interaction_current_results::require_shared_producer_in_connection(
         conn,
         event,
@@ -2629,8 +2730,12 @@ async fn commit_one_in_connection(
     // executed_by alone selects ordinary delegated Agent Events as well, and
     // must not introduce a confirmation requirement for all such Events.
 
-    let policy_approvals = if let Some(target) =
-        crate::policy_current_results::admit_in_connection(conn, event).await?
+    let policy_approvals = if let Some(target) = crate::policy_current_results::admit_in_connection(
+        conn,
+        event,
+        &request.authority_commit.commit,
+    )
+    .await?
     {
         crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
         let cut =
@@ -2648,6 +2753,14 @@ async fn commit_one_in_connection(
         Vec::new()
     };
 
+    let self_pcr_outcome =
+        crate::agent_producer_signer_keys::prepare_self_pcr_outcome_in_connection(
+            conn,
+            event,
+            &request.authority_commit.commit,
+            request.self_producer_guard.as_ref(),
+        )
+        .await?;
     queue_event_in_connection(conn, event, request.event.received_at).await?;
     let authority_write = commit_transaction_in_connection(conn, &request.authority_commit).await?;
     match authority_write {
@@ -2665,13 +2778,26 @@ async fn commit_one_in_connection(
     let commit = &request.authority_commit.commit;
     crate::approval_admission::validate_candidate(event, commit, event_approvals)?;
     if matches!(authority_write, AuthorityCommitWriteOutcome::Committed) {
-        crate::agent_producer_signer_keys::retain_in_connection(
-            conn,
-            event,
-            commit,
-            request.self_producer_guard.as_ref(),
-        )
-        .await?;
+        if let Some(prepared) = self_pcr_outcome {
+            crate::agent_producer_signer_keys::retain_self_outcome_in_connection(
+                conn, event, commit, prepared,
+            )
+            .await?;
+        }
+        if let Some(fact) = prepared_human.as_ref() {
+            crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
+                conn, event, commit, fact,
+            )
+            .await?;
+        } else {
+            crate::agent_producer_signer_keys::retain_in_connection(
+                conn,
+                event,
+                commit,
+                request.self_producer_guard.as_ref(),
+            )
+            .await?;
+        }
         crate::policy_current_results::commit_in_connection(conn, event, commit).await?;
         crate::agent_confirmation_admission::commit_confirmation(conn, event, commit).await?;
         crate::approval_admission::consume_and_audit(
@@ -2687,6 +2813,10 @@ async fn commit_one_in_connection(
                 conn, event, commit, retained,
             )
             .await?;
+        }
+        if let Some(producer) = request.forwarded_agent_producer.as_ref() {
+            crate::agent_producer_evidence::retain_in_connection(conn, event, commit, producer)
+                .await?;
         }
         if let Some(guard @ soland_storage::SelfProducerCommitGuard::MimiFacade { .. }) =
             request.self_producer_guard.as_ref()

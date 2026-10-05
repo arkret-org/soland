@@ -44,6 +44,7 @@ pub(super) async fn submit_self_agent_key_revoke(
             "an Agent key revocation is executed by the authenticated controller".to_owned(),
         ));
     }
+    let origin_source = super::authority_forward::prepare_control_source(state, event).await?;
     let committed_at = Utc::now();
     let method = arkret_wire::DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
@@ -61,6 +62,7 @@ pub(super) async fn submit_self_agent_key_revoke(
             committed_at,
         )
         .await?;
+    super::authority_forward::stage_control_source(state, &transaction, origin_source).await?;
     let outcome = state
         .persistence()
         .admit_agent_control_event(AgentControlAdmissionWrite {

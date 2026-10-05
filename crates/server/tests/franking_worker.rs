@@ -76,6 +76,7 @@ async fn fixture() -> Fixture {
             &key,
             at,
         )
+        .await
         .unwrap();
     let guards = vec![
         soland_storage::SelfProducerCommitGuard::HumanDevice(device.clone());

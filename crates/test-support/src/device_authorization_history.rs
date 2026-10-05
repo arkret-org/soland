@@ -357,6 +357,7 @@ impl DeviceHistoryFixture {
                     .expect("a fixture Event scope always names one commit stream");
             let stream_position = self.commits.len() as u64;
             let mut commit = RealmCommit {
+                producer_signer_fact_digest: None,
                 commit_id: RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
                     format!("{}:{stream_position}", event.event_id).as_bytes(),
                 )),
@@ -377,7 +378,17 @@ impl DeviceHistoryFixture {
                     sig: Base64UrlString::new("AA".to_owned()).unwrap(),
                 },
             };
+            let identity =
+                arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"])
+                    .expect("fixture Commit identity");
+            commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                &arkret_canonical::canonical_json_bytes(&identity)
+                    .expect("canonical fixture Commit identity"),
+            ));
             commit.signature = self.authority_signature(&commit);
+            commit
+                .verify_commit_id_matches_content()
+                .expect("fixture Commit exact content ID");
             commit
                 .validate_shape()
                 .expect("a fixture RealmCommit is well shaped");

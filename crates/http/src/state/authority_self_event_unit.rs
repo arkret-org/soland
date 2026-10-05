@@ -89,6 +89,7 @@ pub(super) enum AdmittedProducer {
     /// Cross-Station human device; the verified evidence is retained with
     /// the Event's first Commit.
     Forwarded(soland_storage::ForwardedProducerDeviceEvidence),
+    ForwardedAgent(arkret_identity::agent_authority_evidence::VerifiedAgentProducer),
 }
 
 /// Kind-specific durable effects committed atomically with the Event.
@@ -331,6 +332,7 @@ async fn commit_event_unit_with_idempotency_impl(
             return Err(ServiceError::Conflict(reason));
         }
     }
+    let origin_source = super::authority_forward::prepare_control_source(state, event).await?;
     let committed_at = Utc::now();
     let method = arkret_wire::DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
@@ -346,11 +348,15 @@ async fn commit_event_unit_with_idempotency_impl(
         event.kind,
         arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
     );
+    let candidate = match &producer {
+        AdmittedProducer::Forwarded(retained) => Some(&retained.producer_signer_fact),
+        _ => None,
+    };
     let mut transaction = match mls {
         Some(mls) if is_mls => {
             state
                 .authority_commits()
-                .prepare_self_mls_transaction(
+                .prepare_self_mls_transaction_with_signer_fact(
                     event,
                     mls.state,
                     mls.welcomes,
@@ -358,18 +364,20 @@ async fn commit_event_unit_with_idempotency_impl(
                     method,
                     state.notary_signing_key().as_ref(),
                     committed_at,
+                    candidate,
                 )
                 .await?
         }
         None if !is_mls => {
             state
                 .authority_commits()
-                .prepare_self_event_transaction(
+                .prepare_self_event_transaction_with_signer_fact(
                     event,
                     &state.service_core_id(),
                     method,
                     state.notary_signing_key().as_ref(),
                     committed_at,
+                    candidate,
                 )
                 .await?
         }
@@ -379,6 +387,7 @@ async fn commit_event_unit_with_idempotency_impl(
             ));
         }
     };
+    super::authority_forward::stage_control_source(state, &transaction, origin_source).await?;
     if event.kind == arkret_wire::EventKind::MlsCommit {
         super::authority_mls_unit::attach_local_roster_witnesses(state, &mut transaction).await?;
     }
@@ -403,10 +412,16 @@ async fn commit_event_unit_with_idempotency_impl(
         envelope,
         received_at: committed_at,
     };
-    let (self_producer_guard, forwarded_producer_evidence, applet_producer_guard) = match producer {
-        AdmittedProducer::Local(guard) => (Some(guard), None, None),
-        AdmittedProducer::Forwarded(evidence) => (None, Some(evidence), None),
-        AdmittedProducer::Applet(guard) => (None, None, Some(guard)),
+    let (
+        self_producer_guard,
+        forwarded_producer_evidence,
+        forwarded_agent_producer,
+        applet_producer_guard,
+    ) = match producer {
+        AdmittedProducer::Local(guard) => (Some(guard), None, None, None),
+        AdmittedProducer::Forwarded(evidence) => (None, Some(evidence), None, None),
+        AdmittedProducer::ForwardedAgent(evidence) => (None, None, Some(evidence), None),
+        AdmittedProducer::Applet(guard) => (None, None, None, Some(guard)),
     };
     let command = soland_services::events::CommitAcceptedEventCommand {
         authority_commit: transaction.clone(),
@@ -414,6 +429,8 @@ async fn commit_event_unit_with_idempotency_impl(
         applet_producer_guard,
         widget_token_gate: None,
         forwarded_producer_evidence,
+        forwarded_agent_producer,
+        agent_deployment_ceiling: state.config().agent_participation_ceiling,
         event: record,
         parent_membership_admission: None,
         contact_projection: None,

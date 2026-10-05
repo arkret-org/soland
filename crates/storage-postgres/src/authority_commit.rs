@@ -482,6 +482,24 @@ fn invalid(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::SchemaViolation(detail.to_string())
 }
 
+/// The Snapshot ref names its complete canonical identity body, never its
+/// signature digest. Cryptographic authority verification remains separate.
+pub(crate) fn verify_snapshot_content_id(
+    snapshot: &arkret_wire::RealmStateSnapshot,
+) -> PersistenceResult<()> {
+    let body = arkret_canonical::canonical::unsigned_value(snapshot, &["snapshot_id", "signature"])
+        .map_err(invalid)?;
+    let expected = arkret_wire::RealmSnapshotId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(&body).map_err(invalid)?,
+    ));
+    if snapshot.snapshot_id != expected {
+        return Err(invalid(
+            "handoff snapshot canonical content address mismatch",
+        ));
+    }
+    Ok(())
+}
+
 fn require_exact_commit_replay(
     existing_commit: &Value,
     candidate_commit: &Value,
@@ -492,6 +510,51 @@ fn require_exact_commit_replay(
     Err(PersistenceError::Conflict(
         "duplicate_conflict: Event already has a different RealmCommit".into(),
     ))
+}
+
+/// Recognize a durable replay without bypassing the normal authority writer.
+/// The caller holds the Realm authorization lock; only a complete accepted
+/// Event and Commit witness can replace a current-state successor check.
+pub(crate) async fn is_exact_accepted_event_replay(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<bool> {
+    #[derive(QueryableByName)]
+    struct AcceptedReplay {
+        #[diesel(sql_type = Binary)]
+        canonical_bytes: Vec<u8>,
+        #[diesel(sql_type = Jsonb)]
+        envelope: Value,
+        #[diesel(sql_type = Jsonb)]
+        commit_json: Value,
+    }
+    let existing = sql_query(
+        "SELECT e.canonical_bytes,e.envelope,c.commit_json FROM canonical_events e \
+         JOIN realm_commits c ON c.event_pk=e.pk \
+         WHERE e.id=$1 AND e.state='committed'",
+    )
+    .bind::<Binary, _>(event.event_id.token_bytes().to_vec())
+    .get_result::<AcceptedReplay>(conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let Some(existing) = existing else {
+        return Ok(false);
+    };
+    let canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().map_err(invalid)?)
+            .map_err(PersistenceError::database)?;
+    if existing.canonical_bytes != canonical_bytes
+        || existing.envelope != serde_json::to_value(event).map_err(PersistenceError::database)?
+    {
+        return Err(PersistenceError::Conflict("event_hash_collision".into()));
+    }
+    require_exact_commit_replay(
+        &existing.commit_json,
+        &serde_json::to_value(commit).map_err(PersistenceError::database)?,
+    )?;
+    Ok(true)
 }
 
 fn decode_json<T: DeserializeOwned>(value: Value, what: &str) -> PersistenceResult<T> {
@@ -1795,6 +1858,12 @@ async fn commit_transaction_in_connection_with_device_guard(
     .bind::<Timestamptz, _>(transaction.commit.committed_at)
     .execute(&mut *conn)
     .await?;
+    crate::agent_origin::accept_staged_control_source_in_connection(
+        conn,
+        &transaction.event,
+        &transaction.commit,
+    )
+    .await?;
     crate::realm_lifecycle_current_results::commit_in_connection(
         conn,
         &transaction.event,
@@ -2144,6 +2213,7 @@ impl PgAuthorityCommitStore {
                     )
                     .await?;
                 }
+                let prepared_human = crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(conn, transaction).await?;
                 queue_event_in_connection(conn, &transaction.event, queued_at).await?;
                 match commit_transaction_in_connection(conn, transaction).await? {
                     AuthorityCommitWriteOutcome::Committed => {}
@@ -2158,7 +2228,9 @@ impl PgAuthorityCommitStore {
                         );
                     }
                 }
-                if let Some(guards) = producer_guards {
+                if let Some(fact) = prepared_human.as_ref() {
+                    crate::agent_producer_signer_keys::retain_prepared_human_in_connection(conn, &transaction.event, &transaction.commit, fact).await?;
+                } else if let Some(guards) = producer_guards {
                     crate::agent_producer_signer_keys::retain_in_connection(
                         conn, &transaction.event, &transaction.commit, Some(&guards[index]),
                     ).await?;
@@ -2370,7 +2442,111 @@ async fn accepted_realm_roster_in_connection(
 
 #[async_trait]
 impl AuthorityCommitStore for PgAuthorityCommitStore {
-    async fn historical_agent_signer_key(
+    async fn stage_agent_control_source(
+        &self,
+        full: &arkret_wire::CommittedEventFullView,
+        dependency: &arkret_models_identity::AgentSignerDependency,
+        history: &arkret_models_identity::AuthenticatedServiceResolution,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_origin::stage_control_source_in_connection(conn, full, dependency, history)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+    async fn prepare_agent_origin_state(
+        &self,
+        event: &arkret_wire::Event,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<arkret_models_identity::AgentAuthorityState> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_origin::assemble_state_in_connection(conn, event)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+    async fn agent_origin_controller_gate_request(
+        &self,
+        event: &arkret_wire::Event,
+        state: &arkret_models_identity::AgentAuthorityState,
+    ) -> PersistenceResult<arkret_wire::RequestId> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_origin::gate_request_in_connection(conn, event, state)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+    async fn retain_agent_forward_evidence_at_same_cut(
+        &self,
+        event: &arkret_wire::Event,
+        evidence: &arkret_models_identity::AgentProducerEvidence,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_origin::retain_in_connection(conn, event, evidence, at)
+                .await
+                .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn human_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    > {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::agent_producer_signer_keys::human_source_for_commit_in_connection(
+            &mut conn, event, commit,
+        )
+        .await
+    }
+
+    async fn prepare_human_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        admitted_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    > {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::agent_producer_signer_keys::prepare_local_human_source_in_connection(
+                conn,
+                event,
+                admitted_at,
+            )
+            .await
+            .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn historical_self_pcr_producer_signer_key(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_models_identity::SignerKeyQuerySelector,
+        recipient: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+        crate::agent_producer_signer_keys::read_self_pcr(&self.pool, realm_id, selector, recipient)
+            .await
+    }
+
+    async fn historical_producer_signer_key(
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
@@ -3496,6 +3672,21 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         transaction.validate().map_err(invalid)?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::realm_authorization_cut::lock_realm_authorization_cut(
+                conn,
+                &transaction.event.realm_id,
+            )
+            .await?;
+            if is_exact_accepted_event_replay(conn, &transaction.event, &transaction.commit).await?
+            {
+                return Ok(AuthorityCommitWriteOutcome::Duplicate);
+            }
+            let prepared_human =
+                crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(
+                    conn,
+                    transaction,
+                )
+                .await?;
             check_self_producer_guard_in_connection(
                 conn,
                 &transaction.event,
@@ -3508,13 +3699,23 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                 commit_transaction_in_connection(conn, transaction).await?,
             )?;
             if matches!(outcome, AuthorityCommitWriteOutcome::Committed) {
-                crate::agent_producer_signer_keys::retain_in_connection(
-                    conn,
-                    &transaction.event,
-                    &transaction.commit,
-                    Some(guard),
-                )
-                .await?;
+                if let Some(fact) = prepared_human.as_ref() {
+                    crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
+                        conn,
+                        &transaction.event,
+                        &transaction.commit,
+                        fact,
+                    )
+                    .await?;
+                } else {
+                    crate::agent_producer_signer_keys::retain_in_connection(
+                        conn,
+                        &transaction.event,
+                        &transaction.commit,
+                        Some(guard),
+                    )
+                    .await?;
+                }
                 commit_capability_grant_current_result_in_connection(
                     conn,
                     &transaction.event,
@@ -3856,6 +4057,23 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn sidecar_context_prepare_current(
+        &self,
+        realm: &arkret_wire::RealmId,
+        controller: &arkret_wire::AccountId,
+        context: &arkret_models_collaboration::sidecar_operations::SidecarContextRef,
+    ) -> PersistenceResult<
+        Option<(
+            arkret_wire::EventId,
+            Option<soland_storage::AgentSidecarContextRecord>,
+        )>,
+    > {
+        crate::sidecar_current_results::prepare_context_current(
+            &self.pool, realm, controller, context,
+        )
+        .await
+    }
+
     async fn sidecar_access_cut(
         &self,
         realm: &arkret_wire::RealmId,
@@ -4032,7 +4250,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         request: &arkret_wire::StreamScanRequest,
         peer: &arkret_wire::DidCoreId,
         issuer: &arkret_wire::DidCoreId,
-    ) -> PersistenceResult<soland_storage::AccountStreamScan> {
+    ) -> PersistenceResult<soland_storage::PeerStreamScan> {
         crate::account_stream_scan::scan_stream_for_peer(&self.pool, request, peer, issuer).await
     }
 
@@ -4111,6 +4329,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         snapshot: &arkret_wire::RealmStateSnapshot,
     ) -> PersistenceResult<()> {
         handoff.validate_shape().map_err(invalid)?;
+        verify_snapshot_content_id(snapshot)?;
         if final_stream_heads.is_empty()
             || !final_stream_heads
                 .windows(2)
@@ -4133,7 +4352,6 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             || snapshot.realm_id != handoff.realm_id
             || snapshot.governance_generation != handoff.from_generation
             || snapshot.visible_stream_heads != final_stream_heads
-            || snapshot.signature.signed_digest != handoff.snapshot_digest
             || snapshot.signature.context != arkret_wire::DetachedSignatureContext::RealmSnapshot
             || signature_service_id(&snapshot.signature)? != handoff.from_service_id
         {

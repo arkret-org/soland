@@ -456,8 +456,15 @@ fn recovery_operation_for_request(method: &str, path: &str) -> Option<&'static s
 fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
     use arkret_wire::ServiceOperationId;
     match (method, path) {
+        ("POST", "/_arkret/self/signer-keys/query") => {
+            Some(ServiceOperationId::SELF_SIGNER_KEYS_READ_RESOLVE_V1)
+        }
+
         ("POST", "/_arkret/self/streams/scan") => {
             Some(ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1)
+        }
+        ("POST", "/_arkret/self/current-results/exact") => {
+            Some(ServiceOperationId::SELF_CURRENT_RESULTS_READ_EXACT_V1)
         }
         ("POST", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1),
         ("POST", "/_arkret/self/signal") => Some(ServiceOperationId::SELF_SIGNAL_COMMAND_SEND_V1),
@@ -941,6 +948,11 @@ mod tests {
         for (method, path, operation) in [
             (
                 "POST",
+                "/_arkret/self/signer-keys/query",
+                ServiceOperationId::SELF_SIGNER_KEYS_READ_RESOLVE_V1,
+            ),
+            (
+                "POST",
                 "/_arkret/self/streams/scan",
                 ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1,
             ),
@@ -948,6 +960,11 @@ mod tests {
                 "GET",
                 "/_arkret/self/realm-state-snapshot/head",
                 ServiceOperationId::SELF_REALM_STATE_SNAPSHOT_READ_MANIFEST_HEAD_V1,
+            ),
+            (
+                "POST",
+                "/_arkret/self/current-results/exact",
+                ServiceOperationId::SELF_CURRENT_RESULTS_READ_EXACT_V1,
             ),
             (
                 "POST",
@@ -1016,6 +1033,15 @@ mod tests {
             ("GET", "/_arkret/self/account/stream"),
             ("GET", "/_arkret/self/account/subscribe"),
             ("GET", "/_arkret/self/keys/backups"),
+            ("GET", "/_arkret/self/current-results/exact"),
+            ("POST", "/_arkret/self/current-results"),
+            ("POST", "/_arkret/self/current-results/exact/extra"),
+            ("GET", "/_arkret/self/signer-keys/query"),
+            ("POST", "/_arkret/self/signer-keys/query/other"),
+            (
+                "GET",
+                "/_arkret/self/committed-events/not-a-formal-selector",
+            ),
         ] {
             assert!(agent_recipient_operation(method, path).is_none());
         }

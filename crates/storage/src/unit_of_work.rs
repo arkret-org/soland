@@ -89,6 +89,10 @@ pub struct EventCommitRequest {
     /// Cross-Station human-device producer evidence verified from an
     /// `authority_forward`; retained only with the Event's first Commit.
     pub forwarded_producer_evidence: Option<crate::ForwardedProducerDeviceEvidence>,
+    pub forwarded_agent_producer:
+        Option<arkret_identity::agent_authority_evidence::VerifiedAgentProducer>,
+    pub agent_deployment_ceiling:
+        arkret_models_collaboration::governance::agent_participation::ParticipationBits,
     pub event: CanonicalEventRecord,
     /// Internal result of projection-owned join-gate validation.  It is not
     /// authority: PostgreSQL must lock the exact policy named by the digest

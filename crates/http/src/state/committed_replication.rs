@@ -25,7 +25,9 @@ use arkret_models_collaboration::governance::membership_invite::{
 };
 use arkret_wire::{CommitStreamRef, ErrorCode, RealmId};
 use soland_services::authority_commit::AuthenticatedPeerContext;
-use soland_services::committed_receipt::{CommitContinuity, verify_committed_event_receipt};
+use soland_services::committed_receipt::{
+    CommitContinuity, verify_committed_event_receipt_with_fact,
+};
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
     CommittedReplica, CommittedReplicaOutcome, CommittedReplicaRole, ConflictCode,
@@ -268,6 +270,15 @@ async fn replicate_one(
         .await?
     {
         if existing.commit == *commit && existing.event == *event {
+            let original_fact = state
+                .authority_commits()
+                .human_signer_fact(event, commit)
+                .await?;
+            if original_fact != item.producer_signer_fact {
+                return Err(ServiceError::Conflict(
+                    "duplicate_conflict: original replicated Human source differs".into(),
+                ));
+            }
             if welcomes.is_empty() && event.kind != arkret_wire::EventKind::MlsCommit {
                 return Ok(CommittedReplicaOutcome::Duplicate);
             }
@@ -342,7 +353,7 @@ async fn replicate_one(
         .map_or(CommittedReplicaRole::HeldStream, |member_account_id| {
             CommittedReplicaRole::OpeningJoin { member_account_id }
         });
-    verify_committed_event_receipt(
+    verify_committed_event_receipt_with_fact(
         state.persistence(),
         event,
         commit,
@@ -353,6 +364,7 @@ async fn replicate_one(
         state
             .projections()
             .realm_digest_suite(event.realm_id.as_str()),
+        item.producer_signer_fact.as_ref(),
     )
     .await?;
     let welcomes = prepare_replica_roster_witnesses(state, item, welcomes).await?;
@@ -363,6 +375,7 @@ async fn replicate_one(
             authority: located.current_authority(),
             event: event.clone(),
             commit: commit.clone(),
+            producer_signer_fact: item.producer_signer_fact.clone(),
             genesis_event_ref: item.genesis_event_ref.clone(),
             role,
             received_at: crate::wire::now(),

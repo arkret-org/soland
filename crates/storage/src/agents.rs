@@ -20,8 +20,6 @@ pub trait AgentParticipationStore: Send + Sync {
     /// Ceiling rows whose scope_key is in `scope_keys`.
     async fn ceilings_for_scope_keys(&self, scope_keys: &[String])
     -> PersistenceResult<Vec<Value>>;
-    /// Upsert a governance ceiling row keyed by scope_key.
-    async fn put_ceiling(&self, record: Value) -> PersistenceResult<()>;
 }
 /// AKP-0008 — Agent principal persistence (provision /
 /// list / get / lifecycle). The typed persistence model keeps database column

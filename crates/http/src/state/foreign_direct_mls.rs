@@ -1,9 +1,7 @@
 //! Read-only MLS facts for a hosted participant in a foreign Direct Realm.
 //! Replays public RFC 9420 material; never installs governing admission state.
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
-use arkret_models_collaboration::mls_group_state_material::{
-    MlsGroupStateMaterialOutcome, MlsGroupStateMaterialRequestBody,
-};
+use arkret_models_collaboration::mls_group_state_material::MlsMemberGroupStateMaterialReadRequestBody;
 use arkret_models_crypto::MlsCommitPayload;
 use arkret_wire::{ActorId, EventKind, MlsGroupCurrent, RealmId, ScopeRef, TypedCurrentResult};
 use soland_storage::ForeignDirectMlsInput;
@@ -18,9 +16,16 @@ pub(crate) async fn refresh(
     let Some(account) = caller.as_account_id() else {
         return Ok(false);
     };
-    // Tail MLS transitions invalidate the old authorization cut. A new signed
-    // member snapshot is required before even selecting the winning MLS row.
-    super::refresh_account_snapshot(state, realm, account).await?;
+    // Reuse locally verified cuts and public prefixes before asking the origin.
+    // Tail MLS transitions clear the authorization cut and require a new snapshot.
+    let mut next_input = state
+        .event_queries()
+        .foreign_direct_mls_input(realm, caller)
+        .await
+        .map_err(|error| error.to_string())?;
+    if next_input.is_none() {
+        super::refresh_account_snapshot(state, realm, account).await?;
+    }
     let started = std::time::Instant::now();
     let mut pages = 0;
     loop {
@@ -28,12 +33,16 @@ pub(crate) async fn refresh(
             return Ok(false);
         }
         pages += 1;
-        let Some(input) = state
-            .event_queries()
-            .foreign_direct_mls_input(realm, caller)
-            .await
-            .map_err(|error| error.to_string())?
-        else {
+        let selected = if let Some(input) = next_input.take() {
+            Some(input)
+        } else {
+            state
+                .event_queries()
+                .foreign_direct_mls_input(realm, caller)
+                .await
+                .map_err(|error| error.to_string())?
+        };
+        let Some(input) = selected else {
             return Ok(false);
         };
         let TypedCurrentResult::Value { value, .. } = &input.current;
@@ -52,7 +61,7 @@ pub(crate) async fn refresh(
                 serde_json::to_value(&genesis.payload).map_err(|error| error.to_string())?,
             )
             .map_err(|error| error.to_string())?;
-            let request = MlsGroupStateMaterialRequestBody {
+            let request = MlsMemberGroupStateMaterialReadRequestBody {
                 realm_id: realm.clone(),
                 effective_scope: ScopeRef::Realm {
                     realm_id: realm.clone(),
@@ -60,37 +69,40 @@ pub(crate) async fn refresh(
                 mls_group_id: payload.mls_group_id().map_err(|error| error.to_string())?,
                 epoch: arkret_models_collaboration::events_payloads::mls::MlsGenesisEpoch,
                 group_state_event_id: genesis.event_id.clone(),
-                caller_actor_id: Some(caller.clone()),
-                target_commit_event_ref: Some(current.current_mls_commit_event_ref.clone()),
-                target_epoch: Some(current.epoch),
+                caller_actor_id: caller.clone(),
+                target_commit_event_ref: current.current_mls_commit_event_ref.clone(),
+                target_epoch: current.epoch,
                 group_info_ref: payload.group_info_ref.clone(),
                 ratchet_tree_ref: payload.ratchet_tree_ref.clone(),
                 max_response_bytes: None,
             };
-            request.validate().map_err(|error| error.to_string())?;
-            let body = arkret_canonical::canonical_json_bytes(&request)
+            request
+                .as_peer_request()
+                .validate()
                 .map_err(|error| error.to_string())?;
-            let response = crate::routing::federation::outbox::signed_peer_request(
-                state,
-                input.service_id.as_str(),
-                arkret_wire::PATH_PEER_MLS_GROUP_STATE_MATERIAL,
-                &body,
-                16 * 1024 * 1024,
-            )
-            .await?;
-            if response.status != 200 {
-                return Ok(false);
-            }
-            let outcome: MlsGroupStateMaterialOutcome =
-                serde_json::from_slice(&response.body).map_err(|error| error.to_string())?;
-            let bytes = outcome
-                .validate_for_request(&request)
-                .map_err(|error| error.to_string())?;
-            (bytes.group_info_bytes, bytes.ratchet_tree_bytes)
+            public_genesis_material(state, &request).await?
         } else {
             (vec![], vec![])
         };
         let (result, exact) = replay(&input, &group_info, &tree)?;
+        if input.base.is_none() {
+            let (commit, genesis) = &input.history[0];
+            let payload: MlsGenesisPayload = serde_json::from_value(
+                serde_json::to_value(&genesis.payload).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            cache_public_genesis_material(
+                state,
+                &input.realm_id,
+                commit,
+                genesis,
+                [
+                    (&payload.group_info_ref, group_info),
+                    (&payload.ratchet_tree_ref, tree),
+                ],
+            )
+            .await?;
+        }
         if !state
             .event_queries()
             .install_foreign_direct_mls_public_state(&input, &result, exact)
@@ -105,6 +117,113 @@ pub(crate) async fn refresh(
         // Each accepted page persists a public-only prefix. The next page starts
         // there, so ordinary messages and long epoch lineages have no hard limit.
     }
+}
+
+async fn public_genesis_material(
+    state: &AppState,
+    request: &MlsMemberGroupStateMaterialReadRequestBody,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let info_row = state
+        .deliveries()
+        .blob(request.group_info_ref.as_str())
+        .await
+        .map_err(|error| error.to_string())?;
+    let tree_row = state
+        .deliveries()
+        .blob(request.ratchet_tree_ref.as_str())
+        .await
+        .map_err(|error| error.to_string())?;
+    if info_row.as_ref().is_some_and(|row| row.redacted)
+        || tree_row.as_ref().is_some_and(|row| row.redacted)
+    {
+        return Err("public Genesis material is redacted".into());
+    }
+    let limit = arkret_models_collaboration::mls_group_state_material::MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES as usize;
+    if info_row.is_some() && tree_row.is_some() {
+        let info = crate::routing::mls::load_mls_public_blob(
+            state,
+            request.group_info_ref.as_str(),
+            limit,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let tree = crate::routing::mls::load_mls_public_blob(
+            state,
+            request.ratchet_tree_ref.as_str(),
+            limit.saturating_sub(info.len()),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok((info, tree))
+    } else {
+        let outcome = crate::routing::mls::read_member_group_state_material(state, request)
+            .await
+            .map_err(|error| error.to_string())?;
+        let bytes = outcome
+            .validate_for_request(&request.as_peer_request())
+            .map_err(|error| error.to_string())?;
+        Ok((bytes.group_info_bytes, bytes.ratchet_tree_bytes))
+    }
+}
+
+async fn cache_public_genesis_material(
+    state: &AppState,
+    realm: &RealmId,
+    commit: &arkret_wire::RealmCommit,
+    genesis: &arkret_wire::Event,
+    material: [(&arkret_wire::BlobRef, Vec<u8>); 2],
+) -> Result<(), String> {
+    // Only RFC-validated public Genesis bytes reach this create-only cache.
+    // Existing redaction, retention and ownership metadata always win.
+    for (reference, bytes) in material {
+        if state
+            .deliveries()
+            .blob(reference.as_str())
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            let sha256 = arkret_canonical::sha256_digest(&bytes)
+                .trim_start_matches("sha256:")
+                .to_owned();
+            let key = state.deliveries().object_key_for_sha256(&sha256);
+            let size_bytes = bytes.len() as i64;
+            state.deliveries().put_object(&key, bytes).await?;
+            state
+                .deliveries()
+                .store_blob_if_absent(
+                    reference.as_str(),
+                    soland_storage::BlobRecord {
+                        sha256,
+                        size_bytes,
+                        storage_backend: state.deliveries().object_storage_backend_name(),
+                        storage_key: key,
+                        media_type: "application/octet-stream".into(),
+                        filename: None,
+                        realm_id: Some(realm.to_string()),
+                        encryption: None,
+                        legal_hold: false,
+                        redacted: false,
+                        visibility:
+                            arkret_models_collaboration::objects::blob::BlobVisibility::RealmBound,
+                        uploaded_by: genesis.actor_id.signing_principal_id().to_string(),
+                        created_at: commit.committed_at,
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        if state
+            .deliveries()
+            .blob(reference.as_str())
+            .await
+            .map_err(|error| error.to_string())?
+            .is_none_or(|row| row.redacted)
+        {
+            return Err("cached Genesis material disappeared or was redacted".into());
+        }
+    }
+    Ok(())
 }
 
 fn replay(
@@ -351,6 +470,7 @@ mod tests {
     fn commit(event: &Event, position: u64) -> RealmCommit {
         let at = event.created_at;
         RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: RealmCommitId::from_digest([position as u8 + 1; 32]),
             realm_id: event.realm_id.clone(),
             stream_ref: CommitStreamRef::Realm {
@@ -530,6 +650,7 @@ mod tests {
                     },
                     value: serde_json::to_value(value).unwrap(),
                 },
+                current_state_entries: vec![],
                 participants: [actor("alice"), actor("bob")].into_iter().collect(),
                 history,
                 base: None,
@@ -736,7 +857,18 @@ mod tests {
             .bind::<Text,_>(input.caller.to_string()).bind::<Text,_>(payload.pair_key.as_str()).bind::<Text,_>(actor("bob").to_string()).bind::<Text,_>(payload.founding_unit_digest.as_str()).bind::<Text,_>(input.realm_id.as_str()).bind::<Text,_>(payload.main_strand_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(&payload.authorization_basis).unwrap()).bind::<Jsonb,_>(serde_json::json!([id(83),id(84),id(85),id(86)])).bind::<Jsonb,_>(serde_json::json!([opening,opening,opening,opening])).execute(&mut conn).await.unwrap();
         let binding=arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingCurrentValue{endorsements:vec![arkret_models_collaboration::events_payloads::direct_conversation::DirectConversationBindingEndorsementEntry{tag_id:arkret_models_collaboration::exact_current_results::CanonicalEventDot::new(id(86),0).unwrap(),value:payload}]};
         diesel::sql_query("INSERT INTO direct_conversation_binding_current_results(realm_id,pair_key,binding_digest,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,now())")
-            .bind::<Text,_>(input.realm_id.as_str()).bind::<Text,_>(arkret_canonical::sha256_digest(b"pair")).bind::<Text,_>(binding.binding_digest().unwrap().as_str()).bind::<Text,_>(input.head.commit_id.as_str()).bind::<BigInt,_>(input.head.stream_position as i64).bind::<Jsonb,_>(serde_json::to_value(binding).unwrap()).execute(&mut conn).await.unwrap();
+            .bind::<Text,_>(input.realm_id.as_str()).bind::<Text,_>(arkret_canonical::sha256_digest(b"pair")).bind::<Text,_>(binding.binding_digest().unwrap().as_str()).bind::<Text,_>(input.head.commit_id.as_str()).bind::<BigInt,_>(input.head.stream_position as i64).bind::<Jsonb,_>(serde_json::to_value(&binding).unwrap()).execute(&mut conn).await.unwrap();
+        diesel::sql_query("INSERT INTO replica_authorization_rows(realm_id,selector,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,now())")
+            .bind::<Text,_>(input.realm_id.as_str())
+            .bind::<Jsonb,_>(serde_json::to_value(arkret_wire::CurrentSelector::DirectConversationBinding { pair_key: binding.endorsements[0].value.pair_key.clone() }).unwrap())
+            .bind::<Jsonb,_>(serde_json::to_value(&input.head.stream_ref).unwrap())
+            .bind::<Text,_>(input.head.commit_id.as_str()).bind::<BigInt,_>(input.head.stream_position as i64)
+            .bind::<Jsonb,_>(serde_json::to_value(&binding).unwrap()).execute(&mut conn).await.unwrap();
+        // Unrelated selectors are deliberately malformed; production must use
+        // bounded Direct point reads rather than deserialize the whole Realm.
+        diesel::sql_query("INSERT INTO replica_authorization_rows(realm_id,selector,source_stream_ref,current_commit_id,current_stream_position,value,updated_at) SELECT $1,jsonb_build_object('unrelated',n),$2,$3,0,'null'::jsonb,now() FROM generate_series(1,1000) n")
+            .bind::<Text,_>(input.realm_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(&input.head.stream_ref).unwrap())
+            .bind::<Text,_>(opening.commit_id.as_str()).execute(&mut conn).await.unwrap();
         drop(conn);
         (database, soland_storage_postgres::PgEventStore { pool })
     }
@@ -791,6 +923,31 @@ mod tests {
         assert!(cached.base.is_some());
         let pool = database.pool();
         let mut conn = pool.get().await.unwrap();
+        // A held binding table cannot replace the governing signed typed row.
+        diesel::sql_query("UPDATE replica_authorization_rows SET value='null'::jsonb WHERE selector->>'kind'='direct_conversation_binding'")
+            .execute(&mut conn).await.unwrap();
+        assert!(
+            store
+                .foreign_direct_mls_input(&fixture.realm_id, &fixture.caller)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !store
+                .install_foreign_direct_mls_public_state(&input, &base, exact)
+                .await
+                .unwrap()
+        );
+        diesel::sql_query("UPDATE replica_authorization_rows r SET value=b.value FROM direct_conversation_binding_current_results b WHERE r.realm_id=b.realm_id AND r.selector->>'kind'='direct_conversation_binding'")
+            .execute(&mut conn).await.unwrap();
+        assert!(
+            store
+                .foreign_direct_mls_input(&fixture.realm_id, &fixture.caller)
+                .await
+                .unwrap()
+                .is_some()
+        );
         // More than one replay page of ordinary accepted continuity nodes
         // does not invalidate a cache whose signed winning MLS row is unchanged.
         let mut last = input.head.clone();

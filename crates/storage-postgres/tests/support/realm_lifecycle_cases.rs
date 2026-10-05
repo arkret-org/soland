@@ -4,7 +4,7 @@ use super::*;
 async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let unit = unit_with_plaintext_service();
+    let unit = unit_with_plaintext_service(&pool).await;
     let at = unit.transactions[0].commit.committed_at;
     human_profile::admit(
         &pool,
@@ -19,15 +19,18 @@ async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() 
         .unwrap();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let strand = strand_create_request(&unit);
+    let strand = source_if_human(&pool, strand).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let actor = creator_account(&unit);
     let mut head = invite_grant_request(
+        &pool,
         &strand,
         &unit,
         unit.transactions[0].event.event_id.as_str(),
         &actor,
         &["ak.realm.archive", "ak.realm.freeze"],
-    );
+    )
+    .await;
     uow.commit_event(head.clone()).await.unwrap();
     for (close, reopen, selector, field) in [
         (
@@ -44,6 +47,7 @@ async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() 
         ),
     ] {
         head = realm_event_request_as(&head, &actor, close, serde_json::json!({}));
+        head = source_if_human(&pool, head).await;
         uow.commit_event(head.clone()).await.unwrap();
         let blocked = realm_event_request_as(
             &head,
@@ -51,6 +55,7 @@ async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() 
             arkret_wire::EventKind::RealmProfile,
             serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"blocked ordinary write"}),
         );
+        let blocked = source_if_human(&pool, blocked).await;
         let error = uow.commit_event(blocked.clone()).await.unwrap_err();
         assert!(error.to_string().contains("realm_frozen"), "{error}");
         assert_eq!(
@@ -58,6 +63,7 @@ async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() 
             0
         );
         head = realm_event_request_as(&head, &actor, reopen, serde_json::json!({}));
+        head = source_if_human(&pool, head).await;
         uow.commit_event(head.clone()).await.unwrap();
         let material = store
             .realm_state_snapshot_material(&head.authority_commit.event.realm_id)
@@ -75,6 +81,7 @@ async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() 
             arkret_wire::EventKind::RealmProfile,
             serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":format!("reopened after {field}")}),
         );
+        head = source_if_human(&pool, head).await;
         uow.commit_event(head.clone()).await.unwrap();
     }
 }
@@ -83,7 +90,7 @@ async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() 
 async fn tombstone_commits_current_and_fences_fresh_writes_without_destroy_bypass() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let unit = unit_with_plaintext_service();
+    let unit = unit_with_plaintext_service(&pool).await;
     let at = unit.transactions[0].commit.committed_at;
     human_profile::admit(
         &pool,
@@ -98,15 +105,18 @@ async fn tombstone_commits_current_and_fences_fresh_writes_without_destroy_bypas
         .unwrap();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let strand = strand_create_request(&unit);
+    let strand = source_if_human(&pool, strand).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let actor = creator_account(&unit);
     let grant = invite_grant_request(
+        &pool,
         &strand,
         &unit,
         unit.transactions[0].event.event_id.as_str(),
         &actor,
         &["ak.realm.archive", "ak.realm.freeze"],
-    );
+    )
+    .await;
     uow.commit_event(grant.clone()).await.unwrap();
     let strand = grant;
     let realm = strand.authority_commit.event.realm_id.clone();
@@ -130,6 +140,7 @@ async fn tombstone_commits_current_and_fences_fresh_writes_without_destroy_bypas
         ),
     ] {
         let request = realm_event_request_as(&strand, &actor, kind, payload);
+        let request = source_if_human(&pool, request).await;
         assert!(uow.commit_event(request.clone()).await.is_err());
         assert_eq!(
             event_row_count(&pool, request.authority_commit.event.event_id.as_str()).await,
@@ -154,6 +165,7 @@ async fn tombstone_commits_current_and_fences_fresh_writes_without_destroy_bypas
         arkret_wire::EventKind::RealmTombstone,
         payload.clone(),
     );
+    let terminal = source_if_human(&pool, terminal).await;
     uow.commit_event(terminal.clone()).await.unwrap();
     let material = store
         .realm_state_snapshot_material(&realm)
@@ -195,6 +207,7 @@ async fn tombstone_commits_current_and_fences_fresh_writes_without_destroy_bypas
         (arkret_wire::EventKind::RealmRestore, serde_json::json!({})),
     ] {
         let request = realm_event_request_as(&terminal, &actor, kind, payload);
+        let request = source_if_human(&pool, request).await;
         let error = uow.commit_event(request.clone()).await.unwrap_err();
         assert!(error.to_string().contains("failed_precondition"), "{error}");
         assert_eq!(

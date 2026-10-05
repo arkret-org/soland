@@ -598,9 +598,26 @@ async fn self_invites_dispatch(
     let invite_event: arkret_wire::Event = serde_json::from_value(accepted.envelope.clone())
         .map_err(|error| AppError::internal(format!("stored invite Event is invalid: {error}")))?;
     let (invite_commit, governance) = governance_invite_commit(state, &invite_event).await?;
+    let producer_signer_fact = state
+        .authority_commits()
+        .human_signer_fact(&invite_event, &invite_commit)
+        .await
+        .map_err(receipt_refusal)?;
+    if invite_event
+        .human_device_producer()
+        .map_err(|e| AppError::param_invalid(e.to_string()))?
+        .is_some()
+        && producer_signer_fact.is_none()
+    {
+        return Err(AppError::from_rejection(
+            soland_http::error::ErrorCode::TemporarilyUnavailable,
+            "original accepted Invite Human signer fact is unavailable",
+        ));
+    }
     let delivery = InviteDeliveryRequestBody::new(
         invite_event,
         invite_commit,
+        producer_signer_fact,
         vec![RealmJoinCandidate {
             service_kind: RealmJoinCandidateServiceKind::Station,
             service_id: governance,
@@ -610,7 +627,8 @@ async fn self_invites_dispatch(
         dispatch.invite_address,
         dispatch.introduction_evidence,
         dispatch.idempotency_key,
-    );
+    )
+    .map_err(|e| AppError::internal(format!("invite submission encoding: {e}")))?;
     delivery
         .validate_minimal()
         .map_err(|error| AppError::internal(format!("invite delivery is malformed: {error}")))?;
@@ -2277,17 +2295,32 @@ async fn authenticate_invite_notification(
     }
 }
 
-/// invite-addressing §7 step 4 under the non-governance receiver rule of
-/// federation §3. The inviter's device key is never resolved or fetched: the
-/// producer proof must be self-consistent and `invite_commit` must verify
-/// under the governance Station the verified authority chain names for its
-/// generation. The chain is discovered only through the untrusted
-/// `authority_locator_hints`. An inviter this Station hosts is still verified
-/// against local PCR. Nothing is written on any refusal.
+/// Verify the original Invite Full receipt using its governance chain,
+/// exact immutable signer fact and actual Event Ed signature before holder
+/// lookup. Locator hints discover the authority; no member scan or current
+/// producer key lookup supplies the missing historical fact.
 async fn verify_invite_commit(
     state: &AppState,
     delivery: &InviteDeliveryRequestBody,
 ) -> Result<(), AppError> {
+    // Reject malformed or cryptographically impossible source material before
+    // network discovery and before any holder-private lookup. This is a
+    // rejection-only precheck: successful receipt still requires the complete
+    // independent historical governance verification below.
+    delivery.validate_minimal().map_err(|e| {
+        AppError::from_rejection(
+            soland_http::error::ErrorCode::SchemaViolation,
+            e.to_string(),
+        )
+    })?;
+    match delivery.producer_signer_fact.as_ref() {
+        Some(fact) => arkret_identity::account_device_signer_evidence::verify_historical_human_event_signature(
+            &delivery.invite_event,fact,state.projections().realm_digest_suite(delivery.invite_event.realm_id.as_str())
+        ).map_err(|e| AppError::from_rejection(soland_http::error::ErrorCode::SignatureInvalid,e.to_string()))?,
+        None if delivery.invite_event.human_device_producer().map_err(|e| AppError::param_invalid(e.to_string()))?.is_some() =>
+            return Err(AppError::from_rejection(soland_http::error::ErrorCode::TemporarilyUnavailable,"original Invite Human source is unavailable")),
+        None => {},
+    }
     let unavailable = |detail: String| {
         AppError::from_rejection(
             soland_http::error::ErrorCode::TemporarilyUnavailable,
@@ -2314,7 +2347,7 @@ async fn verify_invite_commit(
     )
     .await
     .map_err(|error| unavailable(format!("invite_commit signing key is unavailable: {error}")))?;
-    let received = soland_services::committed_receipt::verify_committed_event_receipt(
+    let received = soland_services::committed_receipt::verify_committed_event_receipt_with_fact(
         state.persistence(),
         &delivery.invite_event,
         &delivery.invite_commit,
@@ -2323,6 +2356,7 @@ async fn verify_invite_commit(
         &located.keys,
         &state.service_core_id(),
         state.projections().realm_digest_suite(realm_id.as_str()),
+        delivery.producer_signer_fact.as_ref(),
     )
     .await
     .map_err(receipt_refusal)?;
@@ -2698,6 +2732,7 @@ mod invite_locator_security_tests {
         // helpers directly; §7 step 4 has its own coverage and is not on their
         // path.
         let invite_commit = arkret_wire::RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
                 event.event_id.as_str().as_bytes(),
             )),
@@ -2723,19 +2758,14 @@ mod invite_locator_security_tests {
                 sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
             },
         };
-        InviteDeliveryRequestBody::new(
-            event,
-            invite_commit,
-            vec![RealmJoinCandidate {
-                service_kind: RealmJoinCandidateServiceKind::Station,
-                service_id: state.service_core_id(),
-                endpoint_url: None,
-                source: AuthorityLocatorSource::Invite,
-            }],
-            address,
-            IntroductionEvidence::ExplicitAddress,
-            "ak:idempotency:production-service-fanout",
-        )
+        serde_json::from_value(json!({
+            "schema": arkret_wire::SchemaId::INVITE_DELIVERY_REQUEST_V1,
+            "invite_event": event, "invite_commit": invite_commit,
+            "authority_locator_hints": [{"service_kind":"station", "service_id":state.service_core_id(),
+                "endpoint_url":null, "source":"invite"}],
+            "invite_address":address, "introduction_evidence":IntroductionEvidence::ExplicitAddress,
+            "idempotency_key":"ak:idempotency:production-service-fanout"
+        })).expect("legacy policy-only fixture; not a new accepted Human submission")
     }
 
     /// `invite-addressing.md` §7 — a step-4 rejection MUST leave zero
@@ -2793,6 +2823,199 @@ mod invite_locator_security_tests {
                 .is_none(),
             "a step-4 rejection must not create the holder invite delivery cell"
         );
+    }
+
+    #[tokio::test]
+    async fn genuine_invite_source_refusals_precede_holder_quarantine_delivery_and_outbox_writes() {
+        use soland_storage::EventCommitUnitOfWork as _;
+        use soland_test_support::AppStateTestExt as _;
+        let (state, holder, _) = accepted_holder_state().await;
+        let (sender, pool) =
+            soland_test_support::app_state_with_pool(soland_test_support::app_config());
+        let fixture =
+            soland_test_support::historical_human::HumanFixture::new(&pool, sender.service_did())
+                .await;
+        fixture.admit(&pool).await;
+        let pcr = &fixture.pcr;
+        let template = production_invite_delivery_for(&state, &holder);
+        let previous = fixture.unit.transactions.last().unwrap();
+        let at = previous.commit.committed_at + Duration::seconds(1);
+        let event = soland_test_support::device_authorization_history::sign_event(
+            arkret_wire::test_support::raw_event_at(
+                arkret_wire::EventKind::InviteCreate.as_str(),
+                previous.event.scope_ref.clone(),
+                pcr.history.account.principal_id.clone(),
+                pcr.history.account.station_id.clone(),
+                serde_json::to_value(&template.invite_event.payload).unwrap(),
+                at,
+            )
+            .unwrap(),
+            pcr.history.device_verification_method.clone(),
+            pcr.history.founding_device_signing_seed,
+        );
+        let request =
+            soland_test_support::historical_human::request_for_event(&fixture, previous, event, at);
+        soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone())
+            .commit_event(request.clone())
+            .await
+            .unwrap();
+        let accepted = sender
+            .test_persistence()
+            .authority_commits()
+            .committed_event(&request.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let fact = sender
+            .test_persistence()
+            .authority_commits()
+            .human_signer_fact(&accepted.event, &accepted.commit)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            Some(fact.clone()),
+            request.authority_commit.producer_signer_fact
+        );
+        arkret_signatures::detached_object::verify_detached_object_signature(
+            &accepted.commit.signature,
+            &arkret_canonical::canonical::unsigned_value(&accepted.commit, &["signature"]).unwrap(),
+            arkret_wire::DetachedSignatureContext::RealmCommit,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: ed25519_dalek::SigningKey::from_bytes(
+                    &soland_test_support::device_authorization_history::STATION_AUTHORITY_SEED,
+                )
+                .verifying_key()
+                .to_bytes()
+                .to_vec(),
+            },
+        )
+        .unwrap();
+        let valid = InviteDeliveryRequestBody::new(
+            accepted.event,
+            accepted.commit,
+            Some(fact),
+            template.authority_locator_hints,
+            template.invite_address,
+            template.introduction_evidence,
+            "ak:idempotency:true-source-refusal",
+        )
+        .unwrap();
+        assert!(
+            state
+                .test_persistence()
+                .federation_outbox()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let mut missing = valid.clone();
+        missing.producer_signer_fact = None;
+        let mut wrong_digest = valid.clone();
+        wrong_digest.invite_commit.producer_signer_fact_digest =
+            Some(arkret_wire::Hash::new(arkret_canonical::sha256_digest(b"another fact")).unwrap());
+        let mut wrong_key = valid.clone();
+        wrong_key
+            .producer_signer_fact
+            .as_mut()
+            .unwrap()
+            .key
+            .public_key_b64u =
+            arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                ed25519_dalek::SigningKey::from_bytes(&[0x79; 32])
+                    .verifying_key()
+                    .as_bytes(),
+            ))
+            .unwrap();
+        wrong_key.invite_commit.producer_signer_fact_digest = Some(
+            wrong_key
+                .producer_signer_fact
+                .as_ref()
+                .unwrap()
+                .digest()
+                .unwrap(),
+        );
+        soland_test_support::historical_human::seal_commit(
+            &mut wrong_key.invite_commit,
+            &pcr.history.station_did,
+        );
+        let mut legacy = valid.clone();
+        legacy.producer_signer_fact = None;
+        legacy.invite_commit.producer_signer_fact_digest = None;
+        soland_test_support::historical_human::seal_commit(
+            &mut legacy.invite_commit,
+            &pcr.history.station_did,
+        );
+        let session = SessionRecord {
+            token_hash: "fixture-peer-invite".into(),
+            account_pk: None,
+            actor: pcr.history.account.principal_id.to_string(),
+            endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
+                device_id: pcr.history.founding_device_id.to_string(),
+            },
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            session_grant: None,
+            expires_at: now() + Duration::minutes(5),
+            created_at: now(),
+            revoked_at: None,
+        };
+        for (name, delivery, code) in [
+            ("missing", missing, "schema_violation"),
+            ("wrong_digest", wrong_digest, "schema_violation"),
+            ("wrong_real_key", wrong_key, "signature_invalid"),
+            ("legacy", legacy, "temporarily_unavailable"),
+        ] {
+            let body = serde_json::to_value(&delivery).unwrap();
+            let error = receive_private_invite_delivery(
+                &state,
+                &delivery,
+                &body,
+                state.service_id(),
+                "peer.invites.submit",
+                InvitePrivateProjection::FromDeliveredEvent { session: &session },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.wire_code(), code, "{name}");
+            let holder = arkret_wire::ActorId::account(delivery.invite_address.account_id.clone())
+                .to_string();
+            for key in [
+                AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
+                AccountDataKey::ACCOUNT_INVITE_DELIVERY,
+            ] {
+                assert!(
+                    state
+                        .account_data()
+                        .entry(&holder, key)
+                        .await
+                        .unwrap()
+                        .is_none(),
+                    "{name}: zero holder-private writes"
+                );
+            }
+            assert!(
+                state
+                    .test_persistence()
+                    .federation_outbox()
+                    .snapshot_all()
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{name}: zero receiver outbox writes"
+            );
+            assert!(
+                state
+                    .test_persistence()
+                    .authority_commits()
+                    .committed_event(&delivery.invite_event.event_id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{name}: receipt does not admit target Event/Commit"
+            );
+        }
     }
 
     #[test]

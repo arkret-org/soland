@@ -381,6 +381,7 @@ fn bootstrap(
                 expected_authority: authority.clone(),
                 event: event.clone(),
                 commit: arkret_wire::RealmCommit {
+                    producer_signer_fact_digest: None,
                     commit_id: commit_id.clone(),
                     realm_id: realm_id.clone(),
                     stream_ref: arkret_wire::CommitStreamRef::Realm {
@@ -394,6 +395,7 @@ fn bootstrap(
                     committed_at: at,
                     signature: commit_signature(station_did, at),
                 },
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,

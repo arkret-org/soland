@@ -811,6 +811,7 @@ async fn admit_in_connection(
             expected_authority: authority,
             event: event.clone(),
             commit: commit.clone(),
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: vec![],
             recipient_queue_capacity: 0,

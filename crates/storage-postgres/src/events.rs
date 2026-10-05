@@ -10,6 +10,14 @@ use super::{
 use crate::federation::{FederationOutboxRow, qualified_outbox_columns};
 use crate::{AsyncConnection, PgTransactionError};
 
+fn contact_durable_diagnostic(branch: &'static str) {
+    #[cfg(feature = "conformance-harness")]
+    tracing::warn!(target: "conformance_harness", stage = "contact_durable_read", diag_branch = branch,
+        "Contact durable binding fixed diagnostic");
+    #[cfg(not(feature = "conformance-harness"))]
+    let _ = branch;
+}
+
 /// Read model for producer-signed Events. Event admission and ordering are
 /// owned by `PgAuthorityCommitStore`; this store deliberately has no write API.
 pub struct PgEventStore {
@@ -321,7 +329,7 @@ impl EventStore for PgEventStore {
         pair_key: &str,
     ) -> PersistenceResult<Option<DirectConversationDurableState>> {
         let mut conn = pg_conn(&self.pool).await?;
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        let result = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
         sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *conn).await?;
         let row = sql_query(
@@ -357,7 +365,17 @@ impl EventStore for PgEventStore {
             ).await?;
         }
         Ok(facts)
-        }).await.map_err(PgTransactionError::into_persistence)
+        }).await.map_err(PgTransactionError::into_persistence);
+        // Log only after the snapshot transaction completed successfully.
+        match &result {
+            Ok(None) => contact_durable_diagnostic("slot_absent"),
+            Ok(Some(facts)) if facts.binding.is_none() => {
+                contact_durable_diagnostic("binding_absent")
+            }
+            Ok(Some(_)) => contact_durable_diagnostic("binding_present"),
+            Err(_) => contact_durable_diagnostic("lookup_failed"),
+        }
+        result
     }
 
     async fn direct_conversation_durable_state_for_realm(

@@ -2,14 +2,14 @@
 
 mod mls_roster;
 use arkret_models_collaboration::authority_commit::{
-    AuthorityForwardBranch, DirectConversationFoundingAcceptanceOutcome,
+    AuthorityForwardBranch, AuthorityHandoffRequest, DirectConversationFoundingAcceptanceOutcome,
     DirectConversationFoundingFederationSubmission, DirectConversationFoundingUnitSubmission,
-    MembershipCompensationAcceptanceOutcome, MembershipCompensationFederationSubmission,
-    MembershipCompensationUnitSubmission, OrdinaryRealmBootstrapAcceptanceOutcome,
-    OrdinaryRealmBootstrapUnitSubmission, PeerAuthorityForwardEventRequest,
-    PeerAuthorityForwardMlsRequest, PeerAuthorityForwardOutcome, PeerAuthoritySubmitOutcome,
-    PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome, PeerCommittedReplicationRequest,
-    PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
+    HumanHistoricalSignerFact, MembershipCompensationAcceptanceOutcome,
+    MembershipCompensationFederationSubmission, MembershipCompensationUnitSubmission,
+    OrdinaryRealmBootstrapAcceptanceOutcome, OrdinaryRealmBootstrapUnitSubmission,
+    PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest, PeerAuthorityForwardOutcome,
+    PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome,
+    PeerCommittedReplicationRequest, PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
     PeerRegisteredAtomicUnitOutcomeValue, SelfAuthoritySubmitOutcome, SelfAuthoritySubmitRequest,
 };
 use arkret_models_collaboration::exact_current_results::{
@@ -20,8 +20,8 @@ use arkret_models_collaboration::strand_watch_operations::{
     StrandWatchCurrentOutcome, StrandWatchCurrentRequestBody,
 };
 use arkret_wire::{
-    AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome, CommitStreamHead,
-    CommitStreamRef, DetachedSignatureContext, DidCoreId, DidUrl, Event, EventAdmissionSubmission,
+    AuthorityBundleRequest, AuthoritySubmitOutcome, CommitStreamHead, CommitStreamRef,
+    DetachedSignatureContext, DidCoreId, DidUrl, Event, EventAdmissionSubmission,
     MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityCurrentAssertion,
     RealmAuthorityHandoff, RealmAuthorityTransition, RealmCommit, RealmCommitId,
     RealmStateSnapshot, StreamScanDirection, StreamScanOutcome, StreamScanRequest,
@@ -59,6 +59,8 @@ struct RealmCommitIdentityBody<'a> {
     authority_ref: &'a arkret_wire::RealmCommitAuthorityRef,
     #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     committed_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    producer_signer_fact_digest: Option<&'a arkret_wire::Hash>,
 }
 
 #[derive(Serialize)]
@@ -73,6 +75,8 @@ struct RealmCommitUnsignedBody<'a> {
     authority_ref: &'a arkret_wire::RealmCommitAuthorityRef,
     #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     committed_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    producer_signer_fact_digest: Option<&'a arkret_wire::Hash>,
 }
 
 #[derive(Serialize)]
@@ -305,6 +309,7 @@ fn build_signed_event_commit(
     verification_method: DidUrl,
     signing_key: &SigningKey,
     committed_at: DateTime<Utc>,
+    producer_signer_fact: Option<&HumanHistoricalSignerFact>,
 ) -> ServiceResult<RealmCommit> {
     let stream_ref = CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
@@ -324,6 +329,13 @@ fn build_signed_event_commit(
     };
     let committed_at = arkret_canonical::normalize_timestamp_canonical(committed_at);
     ensure_commit_time_admits_event(event, committed_at)?;
+    let producer_signer_fact_digest = producer_signer_fact
+        .map(|fact| {
+            fact.validate_event_binding(event, event.realm_id.digest_suite_code().digest_suite())
+                .and_then(|_| fact.digest())
+        })
+        .transpose()
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
     let identity_body = RealmCommitIdentityBody {
         realm_id: &event.realm_id,
         stream_ref: &stream_ref,
@@ -333,6 +345,7 @@ fn build_signed_event_commit(
         governance_generation: authority.generation,
         authority_ref: &authority.authority_ref,
         committed_at,
+        producer_signer_fact_digest: producer_signer_fact_digest.as_ref(),
     };
     // `commit_id` is the typed content address of the closed commit body.
     // Like every self-identifying object, its identity preimage excludes the
@@ -350,6 +363,7 @@ fn build_signed_event_commit(
         governance_generation: authority.generation,
         authority_ref: &authority.authority_ref,
         committed_at,
+        producer_signer_fact_digest: producer_signer_fact_digest.as_ref(),
     };
     let signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned_body,
@@ -369,6 +383,7 @@ fn build_signed_event_commit(
         governance_generation: authority.generation,
         authority_ref: authority.authority_ref.clone(),
         committed_at,
+        producer_signer_fact_digest,
         signature,
     };
     commit
@@ -408,6 +423,7 @@ impl AuthorityCommitApplication {
             verification_method,
             signing_key,
             committed_at,
+            None,
         )
     }
 
@@ -416,6 +432,25 @@ impl AuthorityCommitApplication {
             persistence,
             recipient_queue_capacity,
         }
+    }
+
+    pub async fn human_signer_fact(
+        &self,
+        event: &Event,
+        commit: &RealmCommit,
+    ) -> ServiceResult<Option<HumanHistoricalSignerFact>> {
+        Ok(self.store().human_signer_fact(event, commit).await?)
+    }
+
+    pub async fn prepare_human_signer_fact(
+        &self,
+        event: &Event,
+        admitted_at: DateTime<Utc>,
+    ) -> ServiceResult<Option<HumanHistoricalSignerFact>> {
+        Ok(self
+            .store()
+            .prepare_human_signer_fact(event, admitted_at)
+            .await?)
     }
 
     fn store(&self) -> &dyn AuthorityCommitStore {
@@ -600,7 +635,7 @@ impl AuthorityCommitApplication {
     /// Sign the four consecutive genesis-stream Commits of a caller-authored
     /// Direct Conversation founding unit without publishing them. The caller
     /// has authenticated the founder's session and verified every producer.
-    pub fn prepare_direct_conversation_founding_unit(
+    pub async fn prepare_direct_conversation_founding_unit(
         &self,
         submission: DirectConversationFoundingUnitSubmission,
         authority: &CurrentRealmAuthority,
@@ -611,6 +646,10 @@ impl AuthorityCommitApplication {
         let mut previous_head: Option<CommitStreamHead> = None;
         let mut transactions = Vec::with_capacity(4);
         for submitted in &submission.events {
+            let producer_signer_fact = self
+                .store()
+                .prepare_human_signer_fact(&submitted.event, committed_at)
+                .await?;
             let commit = build_signed_event_commit(
                 &submitted.event,
                 authority,
@@ -618,6 +657,7 @@ impl AuthorityCommitApplication {
                 verification_method.clone(),
                 signing_key,
                 committed_at,
+                producer_signer_fact.as_ref(),
             )?;
             previous_head = Some(CommitStreamHead {
                 stream_ref: commit.stream_ref.clone(),
@@ -628,6 +668,7 @@ impl AuthorityCommitApplication {
                 expected_authority: authority.clone(),
                 event: submitted.event.clone(),
                 commit,
+                producer_signer_fact,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: self.recipient_queue_capacity,
@@ -761,6 +802,7 @@ impl AuthorityCommitApplication {
             verification_method.clone(),
             signing_key,
             committed_at,
+            None,
         )?;
         let first_head = CommitStreamHead {
             stream_ref: first.stream_ref.clone(),
@@ -774,12 +816,14 @@ impl AuthorityCommitApplication {
             verification_method,
             signing_key,
             committed_at,
+            None,
         )?;
         let transactions = [(events[0], first), (events[1], second)].map(|(event, commit)| {
             AuthorityCommitTransaction {
                 expected_authority: authority.clone(),
                 event: event.clone(),
                 commit,
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: self.recipient_queue_capacity,
@@ -799,7 +843,7 @@ impl AuthorityCommitApplication {
     /// anything. The HTTP authority adapter must first verify every producer
     /// proof and authorization at one authority cut, then pass this exact unit
     /// to `admit_ordinary_realm_bootstrap_unit` for atomic persistence.
-    pub fn prepare_ordinary_realm_bootstrap_unit(
+    pub async fn prepare_ordinary_realm_bootstrap_unit(
         &self,
         submission: OrdinaryRealmBootstrapUnitSubmission,
         exact_request_body: Vec<u8>,
@@ -840,6 +884,10 @@ impl AuthorityCommitApplication {
                     "ordinary Realm bootstrap Event must use the Realm stream".to_owned(),
                 ));
             }
+            let producer_signer_fact = self
+                .store()
+                .prepare_human_signer_fact(event, committed_at)
+                .await?;
             let commit = build_signed_event_commit(
                 event,
                 authority,
@@ -847,6 +895,7 @@ impl AuthorityCommitApplication {
                 verification_method.clone(),
                 signing_key,
                 committed_at,
+                producer_signer_fact.as_ref(),
             )?;
             previous_head = Some(CommitStreamHead {
                 stream_ref: commit.stream_ref.clone(),
@@ -857,6 +906,7 @@ impl AuthorityCommitApplication {
                 expected_authority: authority.clone(),
                 event: event.clone(),
                 commit,
+                producer_signer_fact,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: self.recipient_queue_capacity,
@@ -906,6 +956,7 @@ impl AuthorityCommitApplication {
             verification_method.clone(),
             signing_key,
             committed_at,
+            None,
         )?;
         let first_head = CommitStreamHead {
             stream_ref: expected_stream,
@@ -919,12 +970,14 @@ impl AuthorityCommitApplication {
             verification_method,
             signing_key,
             committed_at,
+            None,
         )?;
         Ok([
             AuthorityCommitTransaction {
                 expected_authority: authority.clone(),
                 event: events[0].clone(),
                 commit: first,
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: self.recipient_queue_capacity,
@@ -933,6 +986,7 @@ impl AuthorityCommitApplication {
                 expected_authority: authority.clone(),
                 event: events[1].clone(),
                 commit: second,
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: self.recipient_queue_capacity,
@@ -1001,6 +1055,26 @@ impl AuthorityCommitApplication {
         signing_key: &SigningKey,
         committed_at: DateTime<Utc>,
     ) -> ServiceResult<AuthorityCommitTransaction> {
+        self.prepare_self_event_transaction_with_signer_fact(
+            event,
+            local_service_id,
+            verification_method,
+            signing_key,
+            committed_at,
+            None,
+        )
+        .await
+    }
+
+    pub async fn prepare_self_event_transaction_with_signer_fact(
+        &self,
+        event: &Event,
+        local_service_id: &DidCoreId,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        committed_at: DateTime<Utc>,
+        candidate: Option<&HumanHistoricalSignerFact>,
+    ) -> ServiceResult<AuthorityCommitTransaction> {
         event.validate_for_submit_structural().map_err(|error| {
             ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
         })?;
@@ -1018,6 +1092,14 @@ impl AuthorityCommitApplication {
             CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
                 .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let head = self.store().stream_head(&stream_ref).await?;
+        let producer_signer_fact = match candidate {
+            Some(fact) => Some(fact.clone()),
+            None => {
+                self.store()
+                    .prepare_human_signer_fact(event, committed_at)
+                    .await?
+            }
+        };
         let commit = build_signed_event_commit(
             event,
             &authority,
@@ -1025,11 +1107,13 @@ impl AuthorityCommitApplication {
             verification_method,
             signing_key,
             committed_at,
+            producer_signer_fact.as_ref(),
         )?;
         let transaction = AuthorityCommitTransaction {
             expected_authority: authority,
             event: event.clone(),
             commit,
+            producer_signer_fact,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: self.recipient_queue_capacity,
@@ -1075,11 +1159,13 @@ impl AuthorityCommitApplication {
             verification_method,
             signing_key,
             committed_at,
+            None,
         )?;
         let transaction = AuthorityCommitTransaction {
             expected_authority: authority,
             event: event.clone(),
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: self.recipient_queue_capacity,
@@ -1104,6 +1190,30 @@ impl AuthorityCommitApplication {
         signing_key: &SigningKey,
         committed_at: DateTime<Utc>,
     ) -> ServiceResult<AuthorityCommitTransaction> {
+        self.prepare_self_mls_transaction_with_signer_fact(
+            event,
+            mls_state,
+            welcomes,
+            local_service_id,
+            verification_method,
+            signing_key,
+            committed_at,
+            None,
+        )
+        .await
+    }
+
+    pub async fn prepare_self_mls_transaction_with_signer_fact(
+        &self,
+        event: &Event,
+        mls_state: soland_storage::MlsStateInstallation,
+        welcomes: Vec<soland_storage::VerifiedMlsWelcome>,
+        local_service_id: &DidCoreId,
+        verification_method: DidUrl,
+        signing_key: &SigningKey,
+        committed_at: DateTime<Utc>,
+        candidate: Option<&HumanHistoricalSignerFact>,
+    ) -> ServiceResult<AuthorityCommitTransaction> {
         event.validate_for_submit_structural().map_err(|error| {
             ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
         })?;
@@ -1121,6 +1231,14 @@ impl AuthorityCommitApplication {
             CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
                 .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let head = self.store().stream_head(&stream_ref).await?;
+        let producer_signer_fact = match candidate {
+            Some(fact) => Some(fact.clone()),
+            None => {
+                self.store()
+                    .prepare_human_signer_fact(event, committed_at)
+                    .await?
+            }
+        };
         let commit = build_signed_event_commit(
             event,
             &authority,
@@ -1128,11 +1246,13 @@ impl AuthorityCommitApplication {
             verification_method,
             signing_key,
             committed_at,
+            producer_signer_fact.as_ref(),
         )?;
         let transaction = AuthorityCommitTransaction {
             expected_authority: authority,
             event: event.clone(),
             commit,
+            producer_signer_fact,
             mls_state: Some(mls_state),
             welcomes,
             recipient_queue_capacity: self.recipient_queue_capacity,
@@ -1205,6 +1325,23 @@ impl AuthorityCommitApplication {
         realm_id: &arkret_wire::RealmId,
     ) -> ServiceResult<Option<CurrentRealmAuthority>> {
         Ok(self.store().current_authority(realm_id).await?)
+    }
+
+    pub async fn sidecar_context_prepare_current(
+        &self,
+        realm: &arkret_wire::RealmId,
+        controller: &arkret_wire::AccountId,
+        context: &arkret_models_collaboration::sidecar_operations::SidecarContextRef,
+    ) -> ServiceResult<
+        Option<(
+            arkret_wire::EventId,
+            Option<soland_storage::AgentSidecarContextRecord>,
+        )>,
+    > {
+        Ok(self
+            .store()
+            .sidecar_context_prepare_current(realm, controller, context)
+            .await?)
     }
 
     pub async fn sidecar_participant_authority_cut(
@@ -1440,14 +1577,26 @@ impl AuthorityCommitApplication {
         Ok(self.store().committed_event(event_id).await?)
     }
 
-    pub async fn historical_agent_signer_key(
+    pub async fn historical_self_pcr_producer_signer_key(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        selector: &arkret_models_identity::SignerKeyQuerySelector,
+        recipient: &arkret_wire::AccountId,
+    ) -> ServiceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+        Ok(self
+            .store()
+            .historical_self_pcr_producer_signer_key(realm_id, selector, recipient)
+            .await?)
+    }
+
+    pub async fn historical_producer_signer_key(
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
     ) -> crate::ServiceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
         Ok(self
             .store()
-            .historical_agent_signer_key(realm_id, selector)
+            .historical_producer_signer_key(realm_id, selector)
             .await?)
     }
 
@@ -1830,7 +1979,7 @@ impl AuthorityCommitApplication {
         request: &StreamScanRequest,
         peer: &DidCoreId,
         issuer: &DidCoreId,
-    ) -> ServiceResult<soland_storage::AccountStreamScan> {
+    ) -> ServiceResult<soland_storage::PeerStreamScan> {
         request.validate().map_err(|error| {
             crate::ServiceError::SchemaViolation(format!("invalid stream scan request: {error}"))
         })?;
@@ -1838,7 +1987,7 @@ impl AuthorityCommitApplication {
             .store()
             .scan_stream_for_peer(request, peer, issuer)
             .await?;
-        if let soland_storage::AccountStreamScan::Page(outcome) = &scan {
+        if let soland_storage::PeerStreamScan::Page(outcome) = &scan {
             outcome.validate_for_request(request).map_err(|error| {
                 crate::ServiceError::Internal(format!("invalid stream scan outcome: {error}"))
             })?;
@@ -1976,6 +2125,49 @@ impl AuthorityCommitApplication {
         Ok(self
             .store()
             .media_service_anchor_for_account(realm_id, account, issuer)
+            .await?)
+    }
+
+    pub async fn stage_agent_control_source(
+        &self,
+        full: &arkret_wire::CommittedEventFullView,
+        dependency: &arkret_models_identity::AgentSignerDependency,
+        history: &arkret_models_identity::AuthenticatedServiceResolution,
+    ) -> ServiceResult<()> {
+        self.store()
+            .stage_agent_control_source(full, dependency, history)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn prepare_agent_origin_state(
+        &self,
+        event: &arkret_wire::Event,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<arkret_models_identity::AgentAuthorityState> {
+        Ok(self.store().prepare_agent_origin_state(event, at).await?)
+    }
+
+    pub async fn agent_origin_controller_gate_request(
+        &self,
+        event: &arkret_wire::Event,
+        evidence: &arkret_models_identity::AgentAuthorityState,
+    ) -> ServiceResult<arkret_wire::RequestId> {
+        Ok(self
+            .store()
+            .agent_origin_controller_gate_request(event, evidence)
+            .await?)
+    }
+
+    pub async fn retain_agent_forward_evidence_at_same_cut(
+        &self,
+        event: &arkret_wire::Event,
+        evidence: &arkret_models_identity::AgentProducerEvidence,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> ServiceResult<()> {
+        Ok(self
+            .store()
+            .retain_agent_forward_evidence_at_same_cut(event, evidence, at)
             .await?)
     }
 
@@ -2428,7 +2620,7 @@ pub trait AuthorityProtocolPort: Send + Sync {
         &self,
         peer: &AuthenticatedPeerContext,
         request: StreamScanRequest,
-    ) -> ServiceResult<soland_storage::AccountStreamScan>;
+    ) -> ServiceResult<soland_storage::PeerStreamScan>;
 
     async fn authority_bundle(
         &self,
@@ -2485,6 +2677,7 @@ mod tests {
             DidUrl::new("did:web:station.example#notary-key").unwrap(),
             &signing_key,
             committed_at,
+            None,
         )
         .unwrap();
 
@@ -2504,6 +2697,7 @@ mod tests {
             DidUrl::new("did:web:station.example#notary-key").unwrap(),
             &signing_key,
             committed_at,
+            None,
         )
         .unwrap();
         assert_eq!(commit, replay, "same closed input must produce one Commit");
@@ -2518,6 +2712,7 @@ mod tests {
             DidUrl::new("did:web:station.example#notary-key").unwrap(),
             &signing_key,
             whole_second,
+            None,
         )
         .unwrap();
         let unsigned = arkret_canonical::unsigned_value(&commit, &["signature"]).unwrap();

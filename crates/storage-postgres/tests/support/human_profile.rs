@@ -16,7 +16,45 @@ use ed25519_dalek::SigningKey;
 use soland_storage::{ActorProfileAdmissionWrite, ActorProfileStore, AuthorityCommitTransaction};
 use soland_storage_postgres::{PgActorProfileStore, PgPersistenceStore, PgPool};
 
-fn fixture(station: &DidCoreId, label: &str) -> pcr_genesis::PcrGenesisFixture {
+// Test signing material only. No authorization, source fact, revision or
+// acceptance result is cached here; each candidate reads its actual PG cut.
+fn fixture_signers()
+-> &'static std::sync::Mutex<std::collections::BTreeMap<String, (DidUrl, [u8; 32])>> {
+    static SIGNERS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<String, (DidUrl, [u8; 32])>>,
+    > = std::sync::OnceLock::new();
+    SIGNERS.get_or_init(Default::default)
+}
+fn retain_signing_material(fixture: &pcr_genesis::PcrGenesisFixture) {
+    fixture_signers().lock().unwrap().insert(
+        ActorId::account(fixture.history.account.clone()).to_string(),
+        (
+            fixture.history.device_verification_method.clone(),
+            fixture.history.founding_device_signing_seed,
+        ),
+    );
+}
+pub fn sign_fixture_event(event: arkret_wire::Event) -> Option<arkret_wire::Event> {
+    let (method, seed) = fixture_signers()
+        .lock()
+        .unwrap()
+        .get(&event.actor_id.to_string())
+        .cloned()?;
+    Some(device_authorization_history::sign_event(
+        event, method, seed,
+    ))
+}
+pub async fn admit_without_profile(pool: &PgPool, station: &DidCoreId, label: &str) -> AccountId {
+    let fixture = fixture(station, label);
+    fixture
+        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+        .await
+        .unwrap();
+    retain_signing_material(&fixture);
+    fixture.history.account
+}
+
+pub fn fixture(station: &DidCoreId, label: &str) -> pcr_genesis::PcrGenesisFixture {
     fixture_for_did(
         device_authorization_history::did_web_station(station),
         label,
@@ -84,6 +122,7 @@ async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -
     .unwrap()
     .present;
     if present {
+        retain_signing_material(&fixture);
         return account;
     }
     diesel::sql_query(
@@ -99,6 +138,7 @@ async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -
         .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
         .await
         .unwrap();
+    retain_signing_material(&fixture);
     let previous = &fixture.unit.transactions[1].commit;
     let at = previous.committed_at + chrono::TimeDelta::seconds(1);
     let event = device_authorization_history::sign_event(
@@ -121,6 +161,11 @@ async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -
     commit.previous_commit_ref = Some(previous.commit_id.clone());
     commit.event_ref = event.event_id.clone();
     commit.committed_at = at;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap(),
         DetachedSignatureContext::RealmCommit,
@@ -135,6 +180,7 @@ async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -
                 expected_authority: fixture.unit.transactions[1].expected_authority.clone(),
                 event,
                 commit,
+                producer_signer_fact: None,
                 mls_state: None,
                 welcomes: Vec::new(),
                 recipient_queue_capacity: 0,
@@ -144,4 +190,16 @@ async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -
         .await
         .unwrap();
     account
+}
+
+pub fn sign_original_device(
+    event: arkret_wire::Event,
+    method: arkret_wire::DidUrl,
+) -> arkret_wire::Event {
+    device_authorization_history::sign_event(
+        event,
+        method,
+        device_authorization_history::DeviceHistoryFixtureOptions::default()
+            .founding_device_signing_seed,
+    )
 }

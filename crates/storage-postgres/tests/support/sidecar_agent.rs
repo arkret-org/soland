@@ -16,6 +16,12 @@ pub(super) fn station_successor(
     commit.previous_commit_ref = Some(previous.commit_id.clone());
     commit.event_ref = event.event_id.clone();
     commit.committed_at = previous.committed_at + chrono::TimeDelta::seconds(offset_seconds);
+    commit.producer_signer_fact_digest = None;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned,
@@ -48,6 +54,12 @@ pub(super) fn station_genesis_commit(
     commit.authority_ref =
         arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(event.event_id.clone());
     commit.committed_at = committed_at;
+    commit.producer_signer_fact_digest = None;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned,

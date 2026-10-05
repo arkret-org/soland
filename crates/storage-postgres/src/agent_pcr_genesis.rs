@@ -192,7 +192,7 @@ pub(crate) async fn admit_agent_pcr_genesis_in_connection(
 
     // The genesis names no provision: the accepted forward declaration of
     // this exact realm id is the only binding (section 3.6.3).
-    let (controller_realm, provision) =
+    let (controller_realm, provision, provision_ref) =
         crate::agent_provisioning::declared_agent_provision_in_connection(conn, &realm_id)
             .await?
             .ok_or_else(|| {
@@ -241,7 +241,7 @@ pub(crate) async fn admit_agent_pcr_genesis_in_connection(
                 "the controller PCR authority is absent",
             )
         })?;
-    verify_device_signer_in_connection(
+    let (controller_status, _) = verify_device_signer_in_connection(
         conn,
         event,
         &controller,
@@ -266,6 +266,18 @@ pub(crate) async fn admit_agent_pcr_genesis_in_connection(
         ));
     }
 
+    let historical =
+        crate::agent_producer_signer_keys::prepare_agent_genesis_outcome_in_connection(
+            conn,
+            event,
+            commit,
+            &controller_status,
+            &controller,
+            &signer,
+            &provision_ref,
+            &provision.controller_authorization_ref,
+        )
+        .await?;
     let authority_inserted = sql_query(
         "INSERT INTO realm_authorities \
          (realm_id,generation,service_id,authority_ref,last_handoff_ref) \
@@ -353,5 +365,9 @@ pub(crate) async fn admit_agent_pcr_genesis_in_connection(
             "the Agent account already has a Principal Control Realm",
         ));
     }
+    crate::agent_producer_signer_keys::retain_self_outcome_in_connection(
+        conn, event, commit, historical,
+    )
+    .await?;
     Ok(AgentPcrGenesisAdmissionOutcome::Committed(commit.clone()))
 }

@@ -1073,6 +1073,7 @@ mod report_safety_tests {
         // not producer admission or RealmCommit cryptographic verification.
         let pair = soland_storage::CommittedEventRecord {
             commit: arkret_wire::RealmCommit {
+                producer_signer_fact_digest: None,
                 commit_id: arkret_wire::RealmCommitId::from_digest([0x33; 32]),
                 realm_id: realm.clone(),
                 stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id: realm },

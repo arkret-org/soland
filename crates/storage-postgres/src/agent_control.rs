@@ -267,7 +267,7 @@ pub(crate) async fn admit_agent_control_event_in_connection(
     if !lock_realm(conn, &controller_realm, "SHARE").await? {
         return Err(precondition("the controller PCR authority is absent"));
     }
-    verify_device_signer_in_connection(
+    let (controller_status, _) = verify_device_signer_in_connection(
         conn,
         event,
         &controller,
@@ -348,6 +348,16 @@ pub(crate) async fn admit_agent_control_event_in_connection(
         _ => {}
     }
 
+    let historical =
+        crate::agent_producer_signer_keys::prepare_agent_controller_outcome_in_connection(
+            conn,
+            event,
+            commit,
+            &controller_status,
+            &controller,
+            &signer,
+        )
+        .await?;
     crate::authority_commit::queue_event_in_connection(conn, event, write.queued_at).await?;
     match crate::authority_commit::commit_verified_agent_control_in_connection(conn, transaction)
         .await?
@@ -385,5 +395,9 @@ pub(crate) async fn admit_agent_control_event_in_connection(
         )
     })?;
     crate::sidecar_authority_change_guard::after_current_writes_in_connection(conn, event).await?;
+    crate::agent_producer_signer_keys::retain_self_outcome_in_connection(
+        conn, event, commit, historical,
+    )
+    .await?;
     Ok(AgentControlAdmissionOutcome::Committed(commit.clone()))
 }

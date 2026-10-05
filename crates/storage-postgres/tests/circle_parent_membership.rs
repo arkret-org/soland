@@ -658,7 +658,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 let mut snapshot_signature =
                     ordinary_realm::signature(&ordinary_realm::station(), signal_at);
                 snapshot_signature.context = arkret_wire::DetachedSignatureContext::RealmSnapshot;
-                let snapshot = arkret_wire::RealmStateSnapshot {
+                let mut snapshot = arkret_wire::RealmStateSnapshot {
                     snapshot_id: arkret_wire::RealmSnapshotId::from_digest([0x91; 32]),
                     realm_id: realm.clone(),
                     governance_generation: 0,
@@ -677,6 +677,17 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     created_at: signal_at,
                     signature: snapshot_signature,
                 };
+                // Storage-only structural signatures remain separate from the
+                // real canonical Snapshot content address checked by the store.
+                let snapshot_identity = arkret_canonical::canonical::unsigned_value(
+                    &snapshot,
+                    &["snapshot_id", "signature"],
+                )
+                .unwrap();
+                snapshot.snapshot_id =
+                    arkret_wire::RealmSnapshotId::from_digest(arkret_canonical::sha256_bytes(
+                        arkret_canonical::canonical_json_bytes(&snapshot_identity).unwrap(),
+                    ));
                 let mut old_signature =
                     ordinary_realm::signature(&ordinary_realm::station(), signal_at);
                 old_signature.context =
@@ -696,7 +707,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     )
                     .unwrap(),
                     snapshot_ref: snapshot.snapshot_id.clone(),
-                    snapshot_digest: snapshot.signature.signed_digest.clone(),
+                    historical_signer_facts_digest: None,
                     change_event_ref: change.authority_commit.event.event_id.clone(),
                     change_commit_id: change.authority_commit.commit.commit_id.clone(),
                     old_authority_signature: old_signature,

@@ -72,6 +72,17 @@ impl PersistenceHandle {
     ) -> PersistenceResult<Vec<soland_storage::ConsentCurrentRecord>> {
         self.persistence.consent_current().list(holder).await
     }
+    pub async fn retain_forward_current_signer_evidence(
+        &self,
+        event: &arkret_wire::Event,
+        evidence: &arkret_models_identity::ForwardAccountDeviceSignerEvidence,
+    ) -> PersistenceResult<arkret_wire::SignerEvidenceRef> {
+        self.persistence
+            .account_device_signer_evidence()
+            .retain_forward_current(event, evidence)
+            .await
+    }
+
     pub async fn retain_current_account_device_signer_evidence(
         &self,
         evidence: &arkret_models_identity::AccountDeviceSignerEvidence,

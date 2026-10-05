@@ -1606,6 +1606,7 @@ async fn accepted_admin_domain_event(fixture: &Fixture, event: Event) {
             .unwrap(),
         event: accepted.event,
         commit: accepted.commit,
+        producer_signer_fact: None,
         mls_state: None,
         welcomes: vec![],
         recipient_queue_capacity: 0,

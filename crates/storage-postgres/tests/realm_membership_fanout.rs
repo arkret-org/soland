@@ -13,6 +13,8 @@ mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
+#[path = "support/historical_human.rs"]
+mod historical_human;
 #[path = "support/hydration.rs"]
 mod hydration;
 #[path = "support/ordinary_realm.rs"]
@@ -976,6 +978,7 @@ fn replica(
         CommittedReplicaRole::HeldStream
     };
     CommittedReplica {
+        producer_signer_fact: request.authority_commit.producer_signer_fact.clone(),
         local_service_id: member_station(),
         authority: governance_authority(unit),
         event: event.clone(),
@@ -3219,14 +3222,16 @@ async fn peer_page(
     request: arkret_wire::StreamScanRequest,
     peer: &arkret_wire::DidCoreId,
 ) -> soland_storage::AccountStreamScan {
-    store
-        .scan_stream_for_peer(
-            &request,
-            peer,
-            &arkret_wire::DidCoreId::new(STATION).unwrap(),
-        )
-        .await
-        .unwrap()
+    peer_interval_decision(
+        store
+            .scan_stream_for_peer(
+                &request,
+                peer,
+                &arkret_wire::DidCoreId::new(STATION).unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
 }
 
 async fn summary_title(
@@ -3451,7 +3456,15 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         pool: member_pool.clone(),
     };
     let uow = PgEventCommitUnitOfWork::new(governance_pool.clone());
-    let unit = admit(&governance_pool, "member-anchor", "public").await;
+    let fixture = historical_human::HumanFixture::new(
+        &governance_pool,
+        arkret_wire::Did::new("did:web:ordinary-station.example").unwrap(),
+    )
+    .await;
+    fixture.admit(&governance_pool).await;
+    let unit = fixture.unit.clone();
+    let founder = || fixture.pcr.history.account.principal_id.clone();
+    let founder_actor = || arkret_wire::ActorId::account(fixture.pcr.history.account.clone());
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let last = unit.transactions.last().unwrap();
     let at = last.commit.committed_at;
@@ -3461,8 +3474,15 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
 
     let join = membership_request(last, alice.clone(), &alice, "join");
     uow.commit_event(join.clone()).await.unwrap();
+    let mut founder_previous = join.authority_commit.clone();
+    founder_previous.producer_signer_fact = unit
+        .transactions
+        .last()
+        .unwrap()
+        .producer_signer_fact
+        .clone();
     let strand = sourced(next_request(
-        &join.authority_commit,
+        &founder_previous,
         arkret_wire::EventKind::StrandCreate,
         &founder(),
         serde_json::json!({"object": {
@@ -3698,8 +3718,15 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
     );
     // A plaintext Message of a Realm that lists no plaintext service here is
     // refused by the recipient re-verification, although it is contiguous.
+    let mut founder_previous = bob_join.authority_commit.clone();
+    founder_previous.producer_signer_fact = unit
+        .transactions
+        .last()
+        .unwrap()
+        .producer_signer_fact
+        .clone();
     let forged = sourced(next_request(
-        &bob_join.authority_commit,
+        &founder_previous,
         arkret_wire::EventKind::MessageCreate,
         &founder(),
         message_payload(&strand_id, "never held by the member Station"),
@@ -3728,6 +3755,15 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         panic!("an anchored held stream serves its hosted member");
     };
     let join_position = join.authority_commit.commit.stream_position;
+    assert!(join_position > 0);
+    assert!(
+        member
+            .committed_event(&unit.transactions[0].event.event_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the ordinary foreign replica must actually hold a since-join suffix"
+    );
     let floor = own.readable_floor.clone().unwrap();
     assert_eq!(floor.oldest_position, join_position);
     assert_eq!(
@@ -3744,6 +3780,23 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
             (join_position + 4, true),
         ]
     );
+    let AccountStreamScan::Page(before_genesis) = member
+        .scan_stream_for_account(
+            &scan_request(
+                &realm_id,
+                arkret_wire::StreamScanDirection::Before(Some(1)),
+                1,
+            ),
+            &alice_account,
+            &member_station(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a missing replica Genesis must preserve the actual joined interval");
+    };
+    assert!(before_genesis.committed_events.is_empty());
+    assert_eq!(before_genesis.readable_floor, own.readable_floor);
 
     // A single read on the member Station follows the same held interval:
     // another actor's Event from the hosted member's join on, the chain node
@@ -5108,5 +5161,25 @@ async fn private_confirmation_and_policy_ref_sources_are_never_owed_to_ordinary_
             "{}",
             request.authority_commit.event.kind.as_str()
         );
+    }
+}
+
+fn peer_interval_decision(
+    scan: soland_storage::PeerStreamScan,
+) -> soland_storage::AccountStreamScan {
+    match scan {
+        soland_storage::PeerStreamScan::Page(page) => {
+            soland_storage::AccountStreamScan::Page(arkret_wire::StreamScanOutcome {
+                committed_events: page.committed_events,
+                readable_floor: page.readable_floor,
+                truncated: page.truncated,
+            })
+        }
+        soland_storage::PeerStreamScan::NotAuthorized => {
+            soland_storage::AccountStreamScan::NotAuthorized
+        }
+        soland_storage::PeerStreamScan::Unproved(reason) => {
+            soland_storage::AccountStreamScan::Unproved(reason)
+        }
     }
 }

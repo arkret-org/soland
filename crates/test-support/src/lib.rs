@@ -710,3 +710,7 @@ impl RuntimeHealthPort for MemoryRuntimeHealth {
         0
     }
 }
+
+/// Real PostgreSQL Human source/admission fixture shared by transport regressions.
+#[path = "../../storage-postgres/tests/support/historical_human.rs"]
+pub mod historical_human;

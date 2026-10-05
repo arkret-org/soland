@@ -8,15 +8,14 @@
 //! authorization at the authority transaction cut.
 
 use arkret_models_collaboration::authority_commit::{
-    AggregateAcceptanceStatus, DirectConversationFoundingAcceptanceOutcome,
-    DirectConversationFoundingUnitSubmission, OrdinaryRealmBootstrapAcceptanceOutcome,
-    OrdinaryRealmBootstrapUnitSubmission, PeerAuthorityForwardEventRequest,
-    PeerAuthorityForwardMlsRequest,
+    AggregateAcceptanceStatus, AuthorityHandoffRequest,
+    DirectConversationFoundingAcceptanceOutcome, DirectConversationFoundingUnitSubmission,
+    OrdinaryRealmBootstrapAcceptanceOutcome, OrdinaryRealmBootstrapUnitSubmission,
+    PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest,
 };
 use arkret_wire::{
-    AuthorityBundleRequest, AuthorityHandoffRequest, AuthoritySubmitOutcome,
-    EventAdmissionSubmission, MlsCommitSubmission, RealmAuthorityBundle, RealmAuthorityHandoff,
-    StreamScanRequest,
+    AuthorityBundleRequest, AuthoritySubmitOutcome, EventAdmissionSubmission, MlsCommitSubmission,
+    RealmAuthorityBundle, RealmAuthorityHandoff, StreamScanRequest,
 };
 use chrono::Utc;
 use soland_services::authority_commit::AuthorityProtocolPort;
@@ -266,7 +265,8 @@ impl AuthorityProtocolPort for AppState {
                 method,
                 self.notary_signing_key().as_ref(),
                 committed_at,
-            )?;
+            )
+            .await?;
         let result = self
             .authority_commits()
             .admit_self_ordinary_realm_bootstrap_unit(&unit, &producer_guards, committed_at)
@@ -403,9 +403,38 @@ impl AuthorityProtocolPort for AppState {
             super::authority_producer_validation::verify_self_event_producer_key(
                 self, session, event,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                #[cfg(feature = "conformance-harness")]
+                crate::routing::trace_submission_refusal(
+                    "producer_preflight",
+                    crate::routing::submission_kind_class(&event.kind),
+                    if session.agent_session().is_some() {
+                        "agent"
+                    } else {
+                        "human"
+                    },
+                    Some(&error),
+                );
+                error
+            })?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
-            return super::authority_forward::forward_self_event(self, &governance, request).await;
+            let outcome =
+                super::authority_forward::forward_self_event(self, &governance, request).await;
+            #[cfg(feature = "conformance-harness")]
+            if let Err(error) = &outcome {
+                crate::routing::trace_submission_refusal(
+                    "remote_forward",
+                    "ordinary_event",
+                    if session.agent_session().is_some() {
+                        "agent"
+                    } else {
+                        "human"
+                    },
+                    Some(error),
+                );
+            }
+            return outcome;
         }
         if let Some(outcome) = refuse_unrouted_event(self, event).await? {
             return Ok(outcome);
@@ -431,7 +460,21 @@ impl AuthorityProtocolPort for AppState {
                 return super::authority_key_backup_pointer::submit_self_key_backup_pointer(
                     self, &request,
                 )
-                .await;
+                .await
+                .map_err(|error| {
+                    #[cfg(feature = "conformance-harness")]
+                    crate::routing::trace_submission_refusal(
+                        "key_backup_pointer_unit",
+                        "key_backup_pointer",
+                        if session.agent_session().is_some() {
+                            "agent"
+                        } else {
+                            "human"
+                        },
+                        Some(&error),
+                    );
+                    error
+                });
             }
             SelfEventRoute::AccountabilityGrant => {
                 return super::authority_accountability_grant::submit_self_accountability_grant(
@@ -452,6 +495,20 @@ impl AuthorityProtocolPort for AppState {
             super::authority_self_event_unit::SelfEventUnitEffects::default(),
         )
         .await
+        .map_err(|error| {
+            #[cfg(feature = "conformance-harness")]
+            crate::routing::trace_submission_refusal(
+                "guarded_event_unit",
+                crate::routing::submission_kind_class(&event.kind),
+                if session.agent_session().is_some() {
+                    "agent"
+                } else {
+                    "human"
+                },
+                Some(&error),
+            );
+            error
+        })
     }
 
     async fn submit_self_mls(
@@ -533,7 +590,7 @@ impl AuthorityProtocolPort for AppState {
         &self,
         peer: &soland_services::authority_commit::AuthenticatedPeerContext,
         request: StreamScanRequest,
-    ) -> ServiceResult<soland_storage::AccountStreamScan> {
+    ) -> ServiceResult<soland_storage::PeerStreamScan> {
         self.authority_commits()
             .scan_stream_for_peer(&request, &peer.source_service_id, &self.service_core_id())
             .await

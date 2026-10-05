@@ -167,6 +167,12 @@ async fn admit_context_attach(
             "Circle-scoped Sidecar source needs its scope authorization cut",
         ));
     }
+    // Exact accepted retries must survive a missing HTTP receipt. They still
+    // pass through the authority writer's duplicate check and do not project
+    // current again; matching only the payload/version would admit stale writes.
+    if crate::authority_commit::is_exact_accepted_event_replay(conn, event, commit).await? {
+        return Ok(());
+    }
     let digest = context_digest(&payload.source_context_ref)?;
     let head = sql_query(
         "SELECT version,attach_event_id FROM sidecar_context_current_results \
@@ -192,6 +198,99 @@ async fn admit_context_attach(
             "Sidecar context predecessor or version is stale",
         )),
     }
+}
+
+#[derive(diesel::QueryableByName)]
+struct PreparedContextRow {
+    #[diesel(sql_type = Jsonb)]
+    value: Value,
+    #[diesel(sql_type = Jsonb)]
+    accepted_payload: Value,
+    #[diesel(sql_type = Text)]
+    attach_event_id: String,
+    #[diesel(sql_type = BigInt)]
+    version: i64,
+    #[diesel(sql_type = Timestamptz)]
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The draft records a read cut, never a reservation of the CAS head. The
+/// existing admission transaction rechecks it under its Realm/context locks.
+pub(crate) async fn prepare_context_current(
+    pool: &crate::PgPool,
+    realm: &arkret_wire::RealmId,
+    controller: &arkret_wire::AccountId,
+    context: &SidecarContextRef,
+) -> PersistenceResult<
+    Option<(
+        arkret_wire::EventId,
+        Option<soland_storage::AgentSidecarContextRecord>,
+    )>,
+> {
+    use diesel_async::AsyncConnection as _;
+    let mut conn = crate::pg_conn(pool).await?;
+    conn.transaction::<_, crate::PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *conn).await?;
+        let realm_stream = serde_json::to_value(CommitStreamRef::Realm { realm_id: realm.clone() })
+            .map_err(PersistenceError::database)?;
+        let actor = arkret_wire::ActorId::account(controller.clone());
+        let basis = sql_query("SELECT EXISTS(SELECT 1 FROM realm_authorities a \
+            JOIN member_state_current_results m ON m.realm_id=a.realm_id \
+            JOIN realm_commits c ON c.realm_id=m.realm_id AND c.commit_id=m.current_commit_id AND c.stream_position=m.current_stream_position \
+            JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
+            WHERE a.realm_id=$1 AND a.service_id=$2 AND m.member_id=$3 AND m.membership='join' AND m.value->>'membership'='join' AND c.stream_ref=$4) AS present")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(controller.station_id.as_str())
+            .bind::<Text,_>(actor.to_string()).bind::<Jsonb,_>(&realm_stream)
+            .get_result::<crate::query_rows::ExistsRow>(&mut *conn).await?.present;
+        if !basis { return Err(denied("authoritative Sidecar prepare membership or tenure is unavailable").into()) }
+        let controller_json = serde_json::to_value(controller).map_err(PersistenceError::database)?;
+        // Only genuine absence at the unique native singleton key opens new.
+        let exists = sql_query("SELECT EXISTS(SELECT 1 FROM sidecar_current_results WHERE realm_id=$1 AND controller_account_id=$2) AS present")
+            .bind::<Text,_>(realm.as_str()).bind::<Jsonb,_>(&controller_json)
+            .get_result::<crate::query_rows::ExistsRow>(&mut *conn).await?.present;
+        if !exists { return Ok(None) }
+        let owner = sql_query("SELECT s.controller_account_id,s.create_event_id,s.value FROM sidecar_current_results s \
+            JOIN realm_commits c ON c.realm_id=s.realm_id AND c.commit_id=s.current_commit_id AND c.stream_position=s.current_stream_position AND c.stream_ref=s.source_stream_ref \
+            JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' AND e.kind='ak.sidecar.create' \
+            WHERE s.realm_id=$1 AND s.controller_account_id=$2 AND s.value->>'state'='active' \
+            AND c.stream_ref=$3 AND c.commit_json->>'event_ref'=s.create_event_id AND e.envelope->>'event_id'=s.create_event_id \
+            AND e.envelope->'actor_id'=$4 AND s.sidecar_id='ak:sidecar:' || substring(s.create_event_id from 10)")
+            .bind::<Text,_>(realm.as_str()).bind::<Jsonb,_>(&controller_json).bind::<Jsonb,_>(&realm_stream)
+            .bind::<Jsonb,_>(serde_json::to_value(&actor).map_err(PersistenceError::database)?)
+            .get_result::<SidecarOwner>(&mut *conn).await.optional()?
+            .ok_or_else(|| denied("held Sidecar singleton is not an active accepted controller resource"))?;
+        let genesis = arkret_wire::EventId::new(owner.create_event_id).map_err(PersistenceError::database)?;
+        let sidecar = SidecarId::from_event_id(&genesis);
+        let sidecar_stream = serde_json::to_value(CommitStreamRef::Sidecar { realm_id: realm.clone(), sidecar_id: sidecar.clone() }).map_err(PersistenceError::database)?;
+        let digest = context_digest(context)?;
+        // A missing canonical join is unavailable evidence, not a new context.
+        let row = sql_query("SELECT r.value,e.envelope->'payload' AS accepted_payload,r.attach_event_id,r.version,(e.envelope->>'created_at')::timestamptz AS created_at \
+            FROM sidecar_context_current_results r \
+            JOIN realm_commits c ON c.realm_id=r.realm_id AND c.commit_id=r.current_commit_id AND c.stream_position=r.current_stream_position AND c.stream_ref=r.source_stream_ref AND c.commit_json->>'event_ref'=r.attach_event_id \
+            JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' AND e.kind='ak.sidecar.context.attach' AND e.envelope->>'event_id'=r.attach_event_id \
+            WHERE r.realm_id=$1 AND r.sidecar_id=$2 AND r.context_ref_digest=$3 AND c.stream_ref=$4 AND e.envelope->'scope_ref'=$4 AND e.envelope->'actor_id'=$5")
+            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(sidecar.as_str()).bind::<Text,_>(&digest)
+            .bind::<Jsonb,_>(&sidecar_stream).bind::<Jsonb,_>(serde_json::to_value(&actor).map_err(PersistenceError::database)?)
+            .get_result::<PreparedContextRow>(&mut *conn).await.optional()?;
+        let Some(row) = row else {
+            let exists = sql_query("SELECT EXISTS(SELECT 1 FROM sidecar_context_current_results WHERE realm_id=$1 AND sidecar_id=$2 AND context_ref_digest=$3) AS present")
+                .bind::<Text,_>(realm.as_str()).bind::<Text,_>(sidecar.as_str()).bind::<Text,_>(&digest)
+                .get_result::<crate::query_rows::ExistsRow>(&mut *conn).await?.present;
+            return if exists { Err(invalid("held Sidecar context lacks accepted provenance").into()) } else { Ok(Some((genesis, None))) };
+        };
+        let payload: SidecarContextAttachPayload = serde_json::from_value(row.value.clone()).map_err(PersistenceError::database)?;
+        payload.validate().map_err(PersistenceError::database)?;
+        if payload.sidecar_id != sidecar || payload.source_context_ref != *context
+            || i64::try_from(payload.version).ok() != Some(row.version) || row.value != row.accepted_payload {
+            return Err(invalid("Sidecar context current differs from its accepted source").into());
+        }
+        Ok(Some((genesis, Some(soland_storage::AgentSidecarContextRecord {
+            sidecar_id: sidecar.to_string(), normalized_context_ref_digest: digest,
+            normalized_context_ref: serde_json::to_value(context).map_err(PersistenceError::database)?,
+            version: row.version, predecessor_event_ref: payload.predecessor_event_ref.map(|id| id.to_string()),
+            attach_event_ref: row.attach_event_id, created_at: row.created_at,
+        }))))
+    }).await.map_err(crate::PgTransactionError::into_persistence)
 }
 
 pub(crate) async fn admit_in_connection(

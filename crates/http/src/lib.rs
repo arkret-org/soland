@@ -219,8 +219,22 @@ pub async fn test_active_device_revocation_gate_selector(
 pub async fn test_fresh_producer_device_evidence(
     state: &crate::state::AppState,
     event: &arkret_wire::Event,
-) -> soland_services::ServiceResult<Option<arkret_models_identity::AccountDeviceSignerEvidence>> {
-    crate::state::fresh_producer_device_evidence(state, event).await
+    destination: &arkret_wire::DidCoreId,
+) -> soland_services::ServiceResult<
+    Option<arkret_models_identity::ForwardAccountDeviceSignerEvidence>,
+> {
+    let request = arkret_models_collaboration::authority_commit::PeerAuthorityForwardEventRequest {
+        branch:
+            arkret_models_collaboration::authority_commit::AuthorityForwardBranch::AuthorityForward,
+        event_submission: arkret_wire::EventAdmissionSubmission::new(event.clone()),
+        mls_genesis_material: None,
+        producer_device_evidence: None,
+        producer_agent_evidence: None,
+    };
+    let digest =
+        arkret_models_collaboration::authority_commit::authority_forward_body_digest(&request)
+            .map_err(|e| soland_services::ServiceError::SchemaViolation(e.to_string()))?;
+    crate::state::fresh_producer_device_evidence(state, event, destination, &digest).await
 }
 
 /// Exercise the forwarding-Station preflight and queue boundary through the

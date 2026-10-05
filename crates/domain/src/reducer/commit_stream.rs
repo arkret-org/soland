@@ -179,6 +179,7 @@ mod tests {
         .unwrap();
         CommittedEventFullView {
             commit: RealmCommit {
+                producer_signer_fact_digest: None,
                 commit_id: RealmCommitId::from_digest(
                     [circle_seed.wrapping_add(position as u8); 32],
                 ),

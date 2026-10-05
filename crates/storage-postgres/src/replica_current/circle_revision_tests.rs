@@ -317,6 +317,7 @@ async fn circle_member_event_writer_rejects_stale_and_forked_current() {
         )
         .unwrap();
         let commit = arkret_wire::RealmCommit {
+            producer_signer_fact_digest: None,
             commit_id: RealmCommitId::from_digest([digest; 32]),
             realm_id: realm.clone(),
             stream_ref: CommitStreamRef::Circle {

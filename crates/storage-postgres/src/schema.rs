@@ -137,20 +137,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    agent_participation_ceiling (scope_key) {
-        scope_kind -> Text,
-        scope_key -> Text,
-        realm_id -> Text,
-        reply_message -> Bool,
-        reaction_add -> Bool,
-        reaction_remove -> Bool,
-        accept_third_party_mention -> Bool,
-        act_on_behalf -> Bool,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     agent_principals (id) {
         id -> Text,
         controller_principal_id -> Text,
@@ -1888,7 +1874,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     accounts,
     agent_membership_cleanup_intents,
     agent_participation,
-    agent_participation_ceiling,
     agent_principals,
     agent_sidecar_contexts,
     agent_sidecars,

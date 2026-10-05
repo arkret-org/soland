@@ -225,7 +225,8 @@ pub(super) async fn submit_self_direct_conversation_founding(
             method,
             state.notary_signing_key().as_ref(),
             committed_at,
-        )?;
+        )
+        .await?;
     let (status, commits) = match state
         .authority_commits()
         .admit_self_direct_conversation_founding_unit(&unit, &guards, committed_at)
@@ -287,6 +288,7 @@ pub(super) async fn submit_peer_direct_conversation_founding(
             expected_authority: authority.clone(),
             event: item.event_submission.event.clone(),
             commit: item.source_commit.clone(),
+            producer_signer_fact: item.producer_signer_fact.clone(),
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -382,7 +384,7 @@ pub(super) async fn submit_peer_direct_conversation_founding(
                 &request.committed_events[index - 1].source_commit,
             )
         };
-        soland_services::committed_receipt::verify_committed_event_receipt(
+        soland_services::committed_receipt::verify_committed_event_receipt_with_fact(
             state.persistence(),
             &item.event_submission.event,
             commit,
@@ -393,6 +395,7 @@ pub(super) async fn submit_peer_direct_conversation_founding(
             state
                 .projections()
                 .realm_digest_suite(facts.realm_id.as_str()),
+            item.producer_signer_fact.as_ref(),
         )
         .await?;
     }

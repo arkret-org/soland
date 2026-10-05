@@ -98,6 +98,7 @@ pub(crate) fn intact_chain(
                     if realm_id == realm && *authority_generation == generation)
             })
             && grant.issuer_authority_refs.iter().all(|reference| match reference {
+                IssuerAuthorityRef::OwnedAgent { .. } => false,
                 IssuerAuthorityRef::RealmRoot {
                     realm_id,
                     authority_event_ref,

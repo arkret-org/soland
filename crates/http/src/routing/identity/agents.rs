@@ -92,6 +92,7 @@ pub(crate) mod sidecar;
 use common::*;
 use lifecycle::*;
 use pairing::*;
+pub(crate) use participation::load_agent_participation_outcome;
 use participation::*;
 use sidecar::*;
 

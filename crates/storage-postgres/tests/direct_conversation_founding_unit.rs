@@ -93,10 +93,13 @@ struct Pair {
     station: DidCoreId,
     founder: AccountId,
     founder_method: DidUrl,
+    founder_signing_seed: [u8; 32],
     founder_guard: SelfProducerCommitGuard,
     founder_leaf_authority:
         arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority,
     peer: AccountId,
+    peer_method: DidUrl,
+    peer_signing_seed: [u8; 32],
     contact_round_id: Hash,
 }
 
@@ -145,6 +148,12 @@ fn station_successor(
     commit.previous_commit_ref = Some(previous.commit_id.clone());
     commit.event_ref = event.event_id.clone();
     commit.committed_at = previous.committed_at + chrono::TimeDelta::seconds(offset_seconds);
+    commit.producer_signer_fact_digest = None;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned,
@@ -177,6 +186,12 @@ fn station_genesis_commit(
     commit.authority_ref =
         arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(event.event_id.clone());
     commit.committed_at = committed_at;
+    commit.producer_signer_fact_digest = None;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned,
@@ -468,23 +483,35 @@ async fn pair(pool: &PgPool) -> Pair {
         .await
         .expect("accepted founder PCR genesis");
     let founder = pcr.history.account.clone();
-    let peer = AccountId::new(
-        DidCoreId::new(format!(
-            "ak:did_core:web:dc-peer-{}.example",
-            uuid::Uuid::now_v7().simple()
-        ))
-        .unwrap(),
-        station.clone(),
+    let peer_pcr = pcr_genesis::PcrGenesisFixture::new_with(
+        device_authorization_history::did_web_station(&station),
+        device_authorization_history::DeviceHistoryFixtureOptions {
+            local_id: format!("dc-peer-{}", uuid::Uuid::now_v7().simple()),
+            founding_device_id: arkret_wire::DeviceId::new(
+                "ak:device:01904100-0000-7000-8000-000000000082",
+            )
+            .unwrap(),
+            founding_device_signing_seed: [82; 32],
+            ..Default::default()
+        },
     );
+    peer_pcr
+        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+        .await
+        .expect("accepted independent peer PCR genesis");
+    let peer = peer_pcr.history.account.clone();
     let contact_round_id = accept_contact(pool, &peer, &founder, "accepted").await;
     Pair {
         pool: pool.clone(),
         station,
         founder,
         founder_method: pcr.history.device_verification_method.clone(),
+        founder_signing_seed: pcr.history.founding_device_signing_seed,
         founder_leaf_authority: founder_leaf_authority(&pcr, &selector),
         founder_guard: SelfProducerCommitGuard::HumanDevice(selector),
         peer,
+        peer_method: peer_pcr.history.device_verification_method.clone(),
+        peer_signing_seed: peer_pcr.history.founding_device_signing_seed,
         contact_round_id,
     }
 }
@@ -499,12 +526,13 @@ async fn contract_pool() -> PgPool {
         .unwrap()
 }
 
-/// One Event by `actor` whose structural producer proof names `method`.
+/// One Event genuinely signed by the accepted founding device.
 fn authored(
     kind: EventKind,
     scope_ref: arkret_wire::ScopeRef,
     actor: ActorId,
     method: &DidUrl,
+    signing_seed: [u8; 32],
     payload: serde_json::Value,
     semantic_refs: Vec<arkret_wire::SemanticRef>,
     at: chrono::DateTime<chrono::Utc>,
@@ -518,26 +546,7 @@ fn authored(
     )
     .unwrap();
     event.semantic_refs = semantic_refs;
-    event
-        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-        .unwrap();
-    let digest = Hash::new(
-        event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .unwrap(),
-    )
-    .unwrap();
-    event.producer_proof = Some(arkret_wire::ProducerEventProof {
-        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        verification_method: method.clone(),
-        event_digest: digest.clone(),
-        created_at: arkret_canonical::normalize_timestamp_canonical(at),
-        domain: None,
-        audience: None,
-        proof_purpose: None,
-        jws: arkret_wire::test_support::structural_only_detached_jws(&digest),
-    });
-    event
+    device_authorization_history::sign_event(event, method.clone(), signing_seed)
 }
 
 /// Knobs a refusal case turns on an otherwise exact founding unit.
@@ -573,7 +582,7 @@ fn salt() -> String {
     ))
 }
 
-fn founding_unit(
+async fn founding_unit(
     pair: &Pair,
     shape: &UnitShape,
     idempotency_key: arkret_wire::UuidV7,
@@ -584,6 +593,7 @@ fn founding_unit(
         arkret_wire::ScopeRef::RealmGenesis,
         shape.author.clone(),
         &pair.founder_method,
+        pair.founder_signing_seed,
         serde_json::json!({"object":{
             "schema":"ak.schema.realm_genesis.v1",
             "purpose":"direct_conversation",
@@ -622,6 +632,7 @@ fn founding_unit(
             scope.clone(),
             shape.author.clone(),
             &pair.founder_method,
+            pair.founder_signing_seed,
             payload,
             Vec::new(),
             at,
@@ -634,6 +645,7 @@ fn founding_unit(
         scope.clone(),
         shape.author.clone(),
         &pair.founder_method,
+        pair.founder_signing_seed,
         serde_json::json!({"object":{
             "schema":"ak.schema.strand.v1",
             "realm_id":realm_id,
@@ -656,35 +668,64 @@ fn founding_unit(
         ),
         last_handoff_ref: None,
     };
-    let mut previous: Option<arkret_wire::RealmCommitId> = None;
-    let transactions = std::array::from_fn(|index| {
-        let event = events[index].clone();
-        let commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-            format!("{}:{index}:{at}", event.event_id).as_bytes(),
-        ));
-        let commit = arkret_wire::RealmCommit {
-            commit_id: commit_id.clone(),
+    let mut previous = None;
+    let mut prepared = Vec::new();
+    for (index, event) in events.iter().cloned().enumerate() {
+        // Only the legal founder has an actual accepted source. Wrong-author
+        // negative vectors remain wrong and are refused by the founding gate.
+        let fact = if shape.author == pair.founder_actor() {
+            pair.store()
+                .prepare_human_signer_fact(&event, at)
+                .await
+                .unwrap()
+        } else {
+            None
+        };
+        let mut commit = arkret_wire::RealmCommit {
+            producer_signer_fact_digest: fact.as_ref().map(|fact| fact.digest().unwrap()),
+            commit_id: arkret_wire::RealmCommitId::from_digest([0; 32]),
             realm_id: realm_id.clone(),
             stream_ref: arkret_wire::CommitStreamRef::Realm {
                 realm_id: realm_id.clone(),
             },
             stream_position: index as u64,
-            previous_commit_ref: previous.replace(commit_id),
+            previous_commit_ref: previous.clone(),
             event_ref: event.event_id.clone(),
             governance_generation: 0,
             authority_ref: authority.authority_ref.clone(),
             committed_at: at,
             signature: ordinary_realm::signature(&pair.station, at),
         };
-        AuthorityCommitTransaction {
+        let identity =
+            arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"])
+                .unwrap();
+        commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+            arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+        ));
+        commit.signature = arkret_signatures::detached_object::sign_detached_object(
+            &arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap(),
+            arkret_wire::DetachedSignatureContext::RealmCommit,
+            DidUrl::new(format!(
+                "{}#authority",
+                device_authorization_history::did_web_station(&pair.station)
+            ))
+            .unwrap(),
+            at,
+            &ed25519_dalek::SigningKey::from_bytes(&[83; 32]),
+        )
+        .unwrap();
+        previous = Some(commit.commit_id.clone());
+        prepared.push(AuthorityCommitTransaction {
             expected_authority: authority.clone(),
             event,
             commit,
+            producer_signer_fact: fact,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
-        }
-    });
+        });
+    }
+    let transactions: [AuthorityCommitTransaction; 4] = prepared.try_into().unwrap();
     DirectConversationFoundingCommitUnit {
         submission: DirectConversationFoundingUnitSubmission {
             unit_kind: DirectConversationFoundingUnitKind::DirectConversationFounding,
@@ -761,6 +802,173 @@ fn realm_of(unit: &DirectConversationFoundingCommitUnit) -> RealmId {
     unit.transactions[0].event.realm_id.clone()
 }
 
+async fn exact_genesis_scan(
+    store: &PgAuthorityCommitStore,
+    realm: &RealmId,
+    account: &AccountId,
+    station: &DidCoreId,
+) -> arkret_wire::StreamScanOutcome {
+    use soland_storage::AccountStreamScan;
+    let scan = store
+        .scan_stream_for_account(
+            &arkret_wire::StreamScanRequest {
+                realm_id: realm.clone(),
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                direction: arkret_wire::StreamScanDirection::Before(Some(1)),
+                limit: 1,
+            },
+            account,
+            station,
+        )
+        .await
+        .unwrap();
+    let AccountStreamScan::Page(page) = scan else {
+        panic!("the actual founding member's held interval must be provable");
+    };
+    page
+}
+
+#[tokio::test]
+async fn direct_founding_members_read_exact_genesis_and_unmatched_slot_keeps_join_floor() {
+    let pool = contract_pool().await;
+    let pair = pair(&pool).await;
+    let store = pair.store();
+    let at = now();
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
+    let DirectConversationFoundingCommitOutcome::Committed(commits) = store
+        .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
+        .await
+        .unwrap()
+    else {
+        panic!("actual founding must commit");
+    };
+    let realm = realm_of(&unit);
+    for account in [&pair.founder, &pair.peer] {
+        let page = exact_genesis_scan(&store, &realm, account, &pair.station).await;
+        let floor = page.readable_floor.unwrap();
+        assert_eq!(floor.oldest_position, 0);
+        assert_eq!(floor.floor_commit_id, commits[0].commit_id);
+        assert_eq!(
+            floor.floor_reason,
+            arkret_wire::ReadableFloorReason::StreamStart
+        );
+        assert_eq!(
+            page.committed_events,
+            vec![arkret_wire::CommittedEventView::Full(
+                arkret_wire::CommittedEventFullView {
+                    event: unit.transactions[0].event.clone(),
+                    commit: commits[0].clone(),
+                }
+            )]
+        );
+    }
+    // A stored slot is not enough if its genesis differs from the real held
+    // stream start. It must not grant an unrelated join history before itself.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE direct_conversation_founding_slots \
+         SET commits_json=jsonb_set(commits_json,'{0,commit_id}',to_jsonb($2::text)) \
+         WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .bind::<Text, _>(commits[3].commit_id.as_str())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    for account in [&pair.founder, &pair.peer] {
+        let page = exact_genesis_scan(&store, &realm, account, &pair.station).await;
+        assert!(page.committed_events.is_empty());
+        let floor = page.readable_floor.unwrap();
+        let join = if account == &pair.founder {
+            &commits[1]
+        } else {
+            &commits[2]
+        };
+        assert_eq!(floor.oldest_position, join.stream_position);
+        assert_eq!(floor.floor_commit_id, join.commit_id);
+        assert_eq!(
+            floor.floor_reason,
+            arkret_wire::ReadableFloorReason::MembershipJoin
+        );
+    }
+    // Matching genesis/join coordinates are still insufficient when any one
+    // of the four slot Commits is not the actual held atomic prefix.
+    let mut incomplete = commits.clone();
+    incomplete[3].commit_id = arkret_wire::RealmCommitId::from_digest([99; 32]);
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query(
+        "UPDATE direct_conversation_founding_slots SET commits_json=$2 WHERE realm_id=$1",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .bind::<diesel::sql_types::Jsonb, _>(serde_json::to_value(incomplete).unwrap())
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let page = exact_genesis_scan(&store, &realm, &pair.founder, &pair.station).await;
+    assert!(page.committed_events.is_empty());
+    let floor = page.readable_floor.unwrap();
+    assert_eq!(floor.oldest_position, commits[1].stream_position);
+    assert_eq!(floor.floor_commit_id, commits[1].commit_id);
+    assert_eq!(
+        floor.floor_reason,
+        arkret_wire::ReadableFloorReason::MembershipJoin
+    );
+}
+
+#[tokio::test]
+async fn direct_participation_inherits_accepted_fixed_baseline_without_a_policy_event() {
+    use soland_storage::AgentParticipationStore;
+    use soland_storage_postgres::PgAgentParticipationStore;
+
+    let pool = contract_pool().await;
+    let pair = pair(&pool).await;
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), now()).await;
+    let realm = realm_of(&unit);
+    let strand = unit.facts().unwrap().main_strand_id;
+    assert!(matches!(
+        pair.store()
+            .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), now())
+            .await
+            .unwrap(),
+        DirectConversationFoundingCommitOutcome::Committed(_)
+    ));
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) AS count FROM realm_policy_bundle_current_results WHERE realm_id=$1",
+            &realm
+        )
+        .await,
+        0
+    );
+    let participation = PgAgentParticipationStore { pool: pool.clone() };
+    let scopes = vec![format!("realm:{realm}"), format!("strand:{realm}:{strand}")];
+    let rows = participation
+        .ceilings_for_scope_keys(&scopes)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    for (row, scope) in rows.iter().zip(&scopes) {
+        assert_eq!(row["scope_key"], *scope);
+        assert_eq!(row["reply_message"], true);
+    }
+    // A profile label or a slot cannot substitute for a covering current
+    // Commit. Corrupting that coordinate must make the same read unresolved.
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("UPDATE realm_bootstrap_current_results SET current_stream_position=current_stream_position+1 WHERE realm_id=$1 AND result_family='realm_genesis'")
+        .bind::<Text,_>(realm.as_str()).execute(&mut *conn).await.unwrap();
+    assert!(
+        participation
+            .ceilings_for_scope_keys(&scopes)
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_them() {
     let pool = contract_pool().await;
@@ -769,7 +977,7 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
     let idempotency_key = key();
     let shape = UnitShape::exact(&pair);
     let at = now();
-    let unit = founding_unit(&pair, &shape, idempotency_key, at);
+    let unit = founding_unit(&pair, &shape, idempotency_key, at).await;
     let facts = unit.facts().unwrap();
     let realm_id = realm_of(&unit);
 
@@ -780,6 +988,52 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
     else {
         panic!("the first founding unit commits");
     };
+    for transaction in &unit.transactions {
+        let SelfProducerCommitGuard::HumanDevice(guard) = &pair.founder_guard else {
+            unreachable!()
+        };
+        let selector = arkret_models_identity::SignerKeyQuerySelector::HistoricalEvent {
+            sender: arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice {
+                actor: pair.founder_actor(),
+                device_id: arkret_wire::DeviceId::new(guard.device_id.clone()).unwrap(),
+                verification_method: pair.founder_method.clone(),
+                committed_event_ref: arkret_wire::CommittedEventRef {
+                    event_id: transaction.event.event_id.clone(),
+                    commit_id: transaction.commit.commit_id.clone(),
+                    stream_ref: transaction.commit.stream_ref.clone(),
+                    stream_position: transaction.commit.stream_position,
+                },
+            },
+        };
+        let frozen = store
+            .historical_producer_signer_key(&realm_id, &selector)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(frozen.selector(), &selector);
+        assert_eq!(
+            frozen.key().unwrap().authorization_ref,
+            guard.authorization_ref
+        );
+        assert_ne!(
+            frozen
+                .key()
+                .unwrap()
+                .authorization_ref
+                .stream_ref
+                .realm_id(),
+            &realm_id
+        );
+        let authorization = store
+            .committed_event(&guard.authorization_ref.event_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            frozen.accepted_at(),
+            Some(authorization.commit.committed_at)
+        );
+    }
     for (position, commit) in commits.iter().enumerate() {
         assert_eq!(commit.stream_position, position as u64);
         assert_eq!(commit.event_ref, unit.transactions[position].event.event_id);
@@ -798,6 +1052,53 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
     }
     assert_eq!(footprint(&pool, &realm_id).await, [1, 4, 4, 1, 2]);
     assert_eq!(facts.realm_id, realm_id);
+    // Both joins belong to the same accepted unit as position zero. The
+    // caller scan and snapshot must agree on that original stream-start floor.
+    let request = arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 4,
+    };
+    for account in [&pair.founder, &pair.peer] {
+        let soland_storage::AccountStreamScan::Page(page) = store
+            .scan_stream_for_account(&request, account, &pair.station)
+            .await
+            .unwrap()
+        else {
+            panic!("founding member must read its accepted unit");
+        };
+        assert_eq!(
+            page.readable_floor,
+            Some(arkret_wire::ReadableFloor {
+                oldest_position: 0,
+                floor_commit_id: commits[0].commit_id.clone(),
+                floor_reason: arkret_wire::ReadableFloorReason::StreamStart,
+            })
+        );
+        assert_eq!(page.committed_events.len(), 4);
+        for (position, row) in page.committed_events.iter().enumerate() {
+            assert_eq!(row.commit(), &commits[position]);
+            assert_eq!(
+                row.reducer_input(),
+                Some(&unit.transactions[position].event)
+            );
+        }
+        let snapshot =
+            soland_storage_postgres::account_snapshot_material(&pool, &realm_id, account)
+                .await
+                .unwrap()
+                .expect("founding member snapshot");
+        assert_eq!(
+            snapshot.retention_and_history_floor.stream_floors,
+            vec![arkret_wire::StreamHistoryFloor {
+                stream_ref: request.stream_ref.clone(),
+                oldest_position: 0,
+            }]
+        );
+    }
     assert_eq!(
         count(
             &pool,
@@ -895,7 +1196,7 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
         salt: salt(),
         ..shape.clone()
     };
-    let conflicting = founding_unit(&pair, &other, idempotency_key, later);
+    let conflicting = founding_unit(&pair, &other, idempotency_key, later).await;
     assert_eq!(
         refusal_code(
             store
@@ -905,7 +1206,7 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
         ConflictCode::DuplicateConflict
     );
     assert_eq!(footprint(&pool, &realm_of(&conflicting)).await, [0; 5]);
-    let second = founding_unit(&pair, &other, key(), later);
+    let second = founding_unit(&pair, &other, key(), later).await;
     assert_eq!(
         refusal_code(
             store
@@ -923,7 +1224,7 @@ async fn committed_direct_conversation_founding_rebuilds_resolver_projection_aft
     let pool = contract_pool().await;
     let pair = pair(&pool).await;
     let at = now();
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
     let realm = realm_of(&unit);
     let live = soland_services::projection::ProjectionService::new("dm-live-test");
     let operations = unit
@@ -993,7 +1294,7 @@ async fn cross_station_founding_commits_one_exact_peer_delivery_atomically() {
     pair.peer = AccountId::new(pair.peer.principal_id.clone(), remote_station.clone());
     pair.contact_round_id = accept_contact(&pool, &pair.peer, &pair.founder, "accepted").await;
     let at = now();
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
     let commits = match pair
         .store()
         .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
@@ -1050,7 +1351,7 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     pair.contact_round_id =
         accept_contact(&source_pool, &pair.peer, &pair.founder, "accepted").await;
     let at = now();
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
     pair.store()
         .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
         .await
@@ -1131,6 +1432,25 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     );
     assert_eq!(footprint(&peer_pool, &realm_id).await, [1, 4, 4, 1, 2]);
 
+    let peer_genesis = exact_genesis_scan(&peer_store, &realm_id, &pair.peer, &peer_station).await;
+    assert_eq!(
+        peer_genesis
+            .readable_floor
+            .as_ref()
+            .unwrap()
+            .oldest_position,
+        0
+    );
+    assert_eq!(
+        peer_genesis.committed_events,
+        vec![arkret_wire::CommittedEventView::Full(
+            arkret_wire::CommittedEventFullView {
+                event: unit.transactions[0].event.clone(),
+                commit: unit.transactions[0].commit.clone(),
+            }
+        )]
+    );
+
     // A control call to the founder path with the same Realm proves that the
     // tripwire was active during peer materialization.
     let self_attempt = peer_store
@@ -1142,6 +1462,78 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     );
     assert_eq!(profile_spy.hits(), 1);
     assert_eq!(footprint(&peer_pool, &realm_id).await, [1, 4, 4, 1, 2]);
+    let request = arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 4,
+    };
+    let soland_storage::AccountStreamScan::Page(page) = peer_store
+        .scan_stream_for_account(&request, &pair.peer, &peer_station)
+        .await
+        .unwrap()
+    else {
+        panic!("hosted founding peer must read the held unit");
+    };
+    let floor = page.readable_floor.expect("peer founding floor");
+    assert_eq!(floor.oldest_position, 0);
+    assert_eq!(
+        floor.floor_reason,
+        arkret_wire::ReadableFloorReason::StreamStart
+    );
+    assert_eq!(floor.floor_commit_id, unit.transactions[0].commit.commit_id);
+    assert_eq!(page.committed_events.len(), 4);
+    for (row, transaction) in page.committed_events.iter().zip(&unit.transactions) {
+        assert_eq!(row.commit(), &transaction.commit);
+        assert_eq!(row.reducer_input(), Some(&transaction.event));
+    }
+    let snapshot =
+        soland_storage_postgres::account_snapshot_material(&peer_pool, &realm_id, &pair.peer)
+            .await
+            .unwrap()
+            .expect("hosted peer snapshot");
+    assert_eq!(
+        snapshot.retention_and_history_floor.stream_floors,
+        vec![arkret_wire::StreamHistoryFloor {
+            stream_ref: request.stream_ref,
+            oldest_position: 0
+        }]
+    );
+
+    // A retained founding slot cannot invent a missing physical Genesis.
+    // The anchored foreign reader keeps its exact held join interval instead.
+    let mut conn = peer_pool.get().await.unwrap();
+    // Fault injection removes the exact immutable dependent archive first;
+    // the production FK remains strict and no sibling source is touched.
+    diesel::sql_query("DELETE FROM agent_producer_signer_keys WHERE commit_id=$1")
+        .bind::<Text, _>(unit.transactions[0].commit.commit_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        diesel::sql_query("DELETE FROM realm_commits WHERE realm_id=$1 AND stream_position=0")
+            .bind::<Text, _>(realm_id.as_str())
+            .execute(&mut *conn)
+            .await
+            .unwrap(),
+        1
+    );
+    drop(conn);
+    let without_genesis =
+        exact_genesis_scan(&peer_store, &realm_id, &pair.peer, &peer_station).await;
+    assert!(without_genesis.committed_events.is_empty());
+    let floor = without_genesis.readable_floor.unwrap();
+    assert_eq!(
+        floor.oldest_position,
+        unit.transactions[2].commit.stream_position
+    );
+    assert_eq!(floor.floor_commit_id, unit.transactions[2].commit.commit_id);
+    assert_eq!(
+        floor.floor_reason,
+        arkret_wire::ReadableFloorReason::MembershipJoin
+    );
 }
 
 #[tokio::test]
@@ -1151,7 +1543,7 @@ async fn founding_refusals_decide_authority_at_the_slot_cut_with_zero_writes() {
     let store = pair.store();
     let at = now();
     let refuse = async |shape: UnitShape| {
-        let unit = founding_unit(&pair, &shape, key(), at);
+        let unit = founding_unit(&pair, &shape, key(), at).await;
         let code = refusal_code(
             store
                 .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
@@ -1236,7 +1628,7 @@ async fn founding_refusals_decide_authority_at_the_slot_cut_with_zero_writes() {
     );
 
     // The exact unit is still admissible afterwards: no refusal left a slot.
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
     assert!(matches!(
         store
             .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
@@ -1351,6 +1743,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
             expected_authority: authority,
             event,
             commit,
+            producer_signer_fact: None,
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -1395,9 +1788,14 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
         station: station.clone(),
         founder: controller.clone(),
         founder_method: controller_method.clone(),
+        founder_signing_seed: controller_seed,
         founder_leaf_authority: founder_leaf_authority(&controller_fixture, &selector),
         founder_guard: SelfProducerCommitGuard::HumanDevice(selector),
         peer: agent.clone(),
+        // Fixture signing configuration only: the no-key stage must still be
+        // refused until the real Agent key-authorize is accepted below.
+        peer_method: DidUrl::new(format!("{agent_did}#runtime-1")).unwrap(),
+        peer_signing_seed: [0x61; 32],
         contact_round_id: fixture_hash('a'),
     };
     let shape = UnitShape {
@@ -1413,7 +1811,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     // Provision and Agent PCR alone are insufficient: no current runtime key
     // means the controller binding is not live, and the whole unit writes zero.
     let no_key_at = genesis_commit.committed_at + chrono::TimeDelta::milliseconds(1);
-    let no_key = founding_unit(&pair, &shape, key(), no_key_at);
+    let no_key = founding_unit(&pair, &shape, key(), no_key_at).await;
     let no_key_result = store
         .admit_self_direct_conversation_founding_unit(&no_key, &pair.guards(), no_key_at)
         .await;
@@ -1462,7 +1860,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     ));
 
     let unit_at = key_commit.committed_at + chrono::TimeDelta::milliseconds(1);
-    let unit = founding_unit(&pair, &shape, key(), unit_at);
+    let unit = founding_unit(&pair, &shape, key(), unit_at).await;
     assert!(matches!(
         store
             .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), unit_at,)
@@ -1684,7 +2082,7 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     let pair = pair(&pool).await;
     let store = pair.store();
     let at = now();
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
     store
         .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
         .await
@@ -1875,7 +2273,20 @@ fn cited(
         at,
     );
     let (source, role, reference) = match cites {
-        Cites::Nothing => return ordinary_realm::request_for_event(previous, event, at),
+        Cites::Nothing => {
+            if let Some(fact) = previous
+                .producer_signer_fact
+                .as_ref()
+                .filter(|fact| fact.actor == event.actor_id)
+            {
+                event = device_authorization_history::sign_event(
+                    event,
+                    fact.verification_method.clone(),
+                    [81; 32],
+                );
+            }
+            return ordinary_realm::request_for_event(previous, event, at);
+        }
         Cites::Bootstrap(reference) => (
             BOOTSTRAP_SOURCE,
             "direct_conversation_founding_unit",
@@ -1889,7 +2300,79 @@ fn cited(
     event.authorization_ref = Some(arkret_wire::AuthorizationRef::new(source).unwrap());
     event.semantic_refs = vec![arkret_wire::SemanticRef::new(reference.to_string(), role)];
     ordinary_realm::reseal(&mut event);
+    if let Some(fact) = previous
+        .producer_signer_fact
+        .as_ref()
+        .filter(|fact| fact.actor == event.actor_id)
+    {
+        event = device_authorization_history::sign_event(
+            event,
+            fact.verification_method.clone(),
+            [81; 32],
+        );
+    }
     ordinary_realm::request_for_event(previous, event, at)
+}
+
+async fn sourced_cited(
+    pair: &Pair,
+    previous: &AuthorityCommitTransaction,
+    kind: EventKind,
+    actor: ActorId,
+    payload: serde_json::Value,
+    cites: Cites<'_>,
+) -> soland_storage::EventCommitRequest {
+    let request = cited(previous, kind, actor.clone(), payload, cites);
+    let (method, seed) = if actor == pair.founder_actor() {
+        (pair.founder_method.clone(), pair.founder_signing_seed)
+    } else {
+        assert_eq!(actor, pair.peer_actor());
+        (pair.peer_method.clone(), pair.peer_signing_seed)
+    };
+    let event =
+        device_authorization_history::sign_event(request.authority_commit.event, method, seed);
+    let mut request =
+        ordinary_realm::request_for_event(previous, event, previous.commit.committed_at);
+    request.authority_commit.producer_signer_fact = pair
+        .store()
+        .prepare_human_signer_fact(
+            &request.authority_commit.event,
+            request.authority_commit.commit.committed_at,
+        )
+        .await
+        .unwrap();
+    if request
+        .authority_commit
+        .event
+        .human_device_producer()
+        .unwrap()
+        .is_some()
+    {
+        assert!(request.authority_commit.producer_signer_fact.is_some());
+    } else {
+        assert!(request.authority_commit.producer_signer_fact.is_none());
+    }
+    request.authority_commit.commit.producer_signer_fact_digest = request
+        .authority_commit
+        .producer_signer_fact
+        .as_ref()
+        .map(|fact| fact.digest().unwrap());
+    let commit = &mut request.authority_commit.commit;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &arkret_canonical::canonical::unsigned_value(commit, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        commit.signature.verification_method.clone(),
+        commit.committed_at,
+        &ed25519_dalek::SigningKey::from_bytes(&[83; 32]),
+    )
+    .unwrap();
+    commit.verify_commit_id_matches_content().unwrap();
+    request
 }
 
 /// Attach the verified public MLS transition whose roster holds `principals`.
@@ -2207,7 +2690,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     let pair = pair(&pool).await;
     let store = pair.store();
     let at = now();
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
     store
         .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
         .await
@@ -2238,67 +2721,140 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     );
 
     // A bootstrap Message before the group Genesis has no provisional phase.
-    let early = cited(
+    let early = sourced_cited(
+        &pair,
         &unit.transactions[3],
         EventKind::MessageCreate,
         founder.clone(),
         ciphertext(&facts.main_strand_id, 0, &create_ref),
         Cites::Bootstrap(&create_ref),
-    );
+    )
+    .await;
     assert_eq!(
         refused(&early).await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
 
+    let SelfProducerCommitGuard::HumanDevice(device) = &pair.founder_guard else {
+        unreachable!()
+    };
+    let scope = arkret_wire::ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let identity = arkret_mls::ArkretMlsIdentity::new_human_device(
+        founder.clone(),
+        arkret_wire::DeviceId::new(device.device_id.clone()).unwrap(),
+        arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+            ed25519_dalek::SigningKey::from_bytes(&pair.founder_signing_seed),
+        ),
+    )
+    .unwrap();
+    let binding = |base, previous, next| {
+        arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+            realm_id.clone(),
+            base,
+            previous,
+            next,
+            0,
+        )
+        .unwrap()
+    };
+    let mut encryption_group = identity
+        .create_group_with_governance_binding(&scope, &binding(None, 0, 0))
+        .unwrap();
+    let (group_info, ratchet_tree) = encryption_group.public_group_state_bytes().unwrap();
+    let mut tracker = arkret_mls::MlsPublicGroupTracker::from_external(
+        &group_info,
+        &ratchet_tree,
+        encryption_group.group_id().as_str(),
+        0,
+    )
+    .unwrap();
+    let blob_ref = |bytes: &[u8]| {
+        arkret_wire::BlobRef::new(format!(
+            "ak:blob:{}",
+            arkret_canonical::sha256_digest(bytes)
+        ))
+        .unwrap()
+    };
+    let public_blob = |bytes: &[u8]| {
+        let sha256 = arkret_canonical::sha256_digest(bytes)
+            .strip_prefix("sha256:")
+            .unwrap()
+            .to_owned();
+        soland_storage::MlsPublicBlob {
+            blob_ref: blob_ref(bytes),
+            sha256: sha256.clone(),
+            size_bytes: i64::try_from(bytes.len()).unwrap(),
+            storage_backend: "local".to_owned(),
+            storage_key: format!("sha256/{sha256}"),
+        }
+    };
+    let mut genesis_payload = mls_genesis_payload(&pair, &realm_id, at);
+    genesis_payload["group_info_ref"] = serde_json::to_value(blob_ref(&group_info)).unwrap();
+    genesis_payload["ratchet_tree_ref"] = serde_json::to_value(blob_ref(&ratchet_tree)).unwrap();
     // The root's materialization mask admits the scope's one Genesis.
-    let genesis = with_group(
-        cited(
+    let mut genesis = with_group(
+        sourced_cited(
+            &pair,
             &unit.transactions[3],
             EventKind::MlsGenesis,
             founder.clone(),
-            mls_genesis_payload(&pair, &realm_id, at),
+            genesis_payload,
             Cites::Nothing,
-        ),
+        )
+        .await,
         None,
         0,
         &[&founder],
     );
+    let material = genesis.authority_commit.mls_state.as_mut().unwrap();
+    material.public_state = tracker.export_state().unwrap();
+    material.public_blobs = vec![public_blob(&group_info), public_blob(&ratchet_tree)];
     uow.commit_event(genesis.clone()).await.unwrap();
     let genesis_ref = genesis.authority_commit.event.event_id.clone();
     assert_eq!(group_state(&pool, &realm_id).await, (false, None));
 
     // Provisional: the founder alone sends under the bootstrap source.
-    let provisional = cited(
+    let provisional = sourced_cited(
+        &pair,
         &genesis.authority_commit,
         EventKind::MessageCreate,
         founder.clone(),
         ciphertext(&facts.main_strand_id, 0, &genesis_ref),
         Cites::Bootstrap(&create_ref),
-    );
+    )
+    .await;
     uow.commit_event(provisional.clone()).await.unwrap();
     let head = provisional.authority_commit.clone();
     for denied in [
-        cited(
+        sourced_cited(
+            &pair,
             &head,
             EventKind::MessageCreate,
             founder.clone(),
             ciphertext(&facts.main_strand_id, 0, &genesis_ref),
             Cites::Nothing,
-        ),
-        cited(
+        )
+        .await,
+        sourced_cited(
+            &pair,
             &head,
             EventKind::MessageCreate,
             founder.clone(),
             ciphertext(&facts.main_strand_id, 0, &genesis_ref),
             Cites::Bootstrap(&genesis_ref),
-        ),
-        cited(
+        )
+        .await,
+        sourced_cited(
+            &pair,
             &head,
             EventKind::MessageCreate,
             peer.clone(),
             ciphertext(&facts.main_strand_id, 0, &genesis_ref),
             Cites::Bootstrap(&create_ref),
-        ),
+        )
+        .await,
     ] {
         assert_eq!(
             refused(&denied).await,
@@ -2308,19 +2864,71 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
 
     // The founder's Add makes the roster exactly the pair: the first such
     // Commit is the binding's initial group state.
-    let add = with_group(
-        cited(
+    let peer_device =
+        arkret_wire::DeviceId::new(pair.peer_method.as_str().split_once('#').unwrap().1).unwrap();
+    let peer_identity = arkret_mls::ArkretMlsIdentity::new_human_device(
+        peer.clone(),
+        peer_device,
+        arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+            ed25519_dalek::SigningKey::from_bytes(&pair.peer_signing_seed),
+        ),
+    )
+    .unwrap();
+    let add_binding = binding(Some(genesis_ref.clone()), 0, 1);
+    let real_add = encryption_group
+        .add_member_with_governance_binding(
+            &peer_identity.key_package_record().unwrap(),
+            &add_binding,
+        )
+        .unwrap();
+    tracker
+        .process_public_handshake(
+            &arkret_canonical::base64url_decode(&real_add.commit.commit).unwrap(),
+        )
+        .unwrap();
+    let groups = soland_storage_postgres::PgMlsGroupCurrentStore { pool: pool.clone() };
+    let accepted_base = soland_storage::MlsGroupCurrentStore::current(&groups, &scope)
+        .await
+        .unwrap()
+        .unwrap()
+        .value;
+    let mut add = with_group(
+        sourced_cited(
+            &pair,
             &head,
             EventKind::MlsCommit,
             founder.clone(),
-            mls_commit_payload(&realm_id, &genesis_ref, 0, b"add-peer"),
+            serde_json::to_value(
+                arkret_models_crypto::MlsCommitPayload::new(
+                    genesis_ref.clone(),
+                    accepted_base.current_key_access_revision,
+                    &real_add.commit,
+                    add_binding,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
             Cites::Bootstrap(&create_ref),
-        ),
+        )
+        .await,
         Some((&genesis_ref, 0)),
         1,
         &[&founder, &peer],
     );
+    let material = add.authority_commit.mls_state.as_mut().unwrap();
+    material.public_state = tracker.export_state().unwrap();
+    material.public_blobs = vec![public_blob(&tracker.ratchet_tree_bytes().unwrap())];
     uow.commit_event(add.clone()).await.unwrap();
+    encryption_group
+        .install_accepted_commit(
+            &arkret_wire::CommittedEventFullView {
+                event: add.authority_commit.event.clone(),
+                commit: add.authority_commit.commit.clone(),
+            },
+            &accepted_base,
+        )
+        .unwrap();
+    assert_eq!(encryption_group.epoch(), 1);
     let add_ref = add.authority_commit.event.event_id.clone();
     assert_eq!(
         group_state(&pool, &realm_id).await,
@@ -2364,30 +2972,69 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     record_peer_welcome(&pool, &pair.station, &add, &peer, "claimed", 0).await;
     // Until the peer's Welcome is durable the Realm stays provisional: no
     // endorsement, while the founder still sends at the new epoch.
-    let early_binding = cited(
+    let early_binding = sourced_cited(
+        &pair,
         &add.authority_commit,
         EventKind::DirectConversationBound,
         peer.clone(),
         endorsement(&add_ref, 1),
         Cites::Bootstrap(&create_ref),
-    );
+    )
+    .await;
     assert_eq!(
         refused(&early_binding).await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
-    let stale_provisional = cited(
-        &add.authority_commit,
-        EventKind::MessageCreate,
-        founder.clone(),
-        ciphertext(&facts.main_strand_id, 1, &add_ref),
-        Cites::Bootstrap(&create_ref),
+    // Distinct real RFC 9420 messages use the actual accepted pair Add above,
+    // rather than merging a staged transition or manufacturing a receipt.
+    let mut encrypted_payload = |plaintext: &[u8]| {
+        let header = arkret_models_crypto::EventContentPreEncryptionHeader::reconstruct(
+            "1.0",
+            "application/vnd.arkret.message+json",
+            arkret_wire::EncryptedPayloadScheme::MlsRfc9420,
+            scope.clone(),
+            EventKind::MessageCreate.as_str(),
+            encryption_group.epoch(),
+            add_ref.clone(),
+            encryption_group.local_content_sender_domain().unwrap(),
+            arkret_models_crypto::EventContentRoutingContext::None,
+        )
+        .unwrap();
+        let envelope = encryption_group
+            .encrypt_payload(header, plaintext)
+            .unwrap()
+            .to_envelope()
+            .unwrap();
+        serde_json::json!({ "strand_id": facts.main_strand_id,
+            "track_name": "discussion", "encrypted_content": envelope })
+    };
+    let stale_payload = encrypted_payload(b"{\"content\":\"older provisional\"}");
+    let later_payload = encrypted_payload(b"{\"content\":\"later provisional\"}");
+    assert_ne!(
+        stale_payload["encrypted_content"]["ciphertext"],
+        later_payload["encrypted_content"]["ciphertext"]
     );
-    let later_provisional = cited(
+    let stale_provisional = sourced_cited(
+        &pair,
         &add.authority_commit,
         EventKind::MessageCreate,
         founder.clone(),
-        ciphertext(&facts.main_strand_id, 1, &add_ref),
+        stale_payload,
         Cites::Bootstrap(&create_ref),
+    )
+    .await;
+    let later_provisional = sourced_cited(
+        &pair,
+        &add.authority_commit,
+        EventKind::MessageCreate,
+        founder.clone(),
+        later_payload,
+        Cites::Bootstrap(&create_ref),
+    )
+    .await;
+    assert_ne!(
+        stale_provisional.authority_commit.event.event_id,
+        later_provisional.authority_commit.event.event_id
     );
     uow.commit_event(later_provisional.clone()).await.unwrap();
 
@@ -2428,34 +3075,40 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
             ConflictCode::DirectConversationBindingInvalid,
         ),
     ] {
-        let request = cited(
+        let request = sourced_cited(
+            &pair,
             &head,
             EventKind::DirectConversationBound,
             peer.clone(),
             mutated,
             Cites::Bootstrap(&create_ref),
-        );
+        )
+        .await;
         assert_eq!(refused(&request).await, code);
     }
-    let peer_endorsement = cited(
+    let peer_endorsement = sourced_cited(
+        &pair,
         &head,
         EventKind::DirectConversationBound,
         peer.clone(),
         endorsement(&add_ref, 1),
         Cites::Bootstrap(&create_ref),
-    );
+    )
+    .await;
     uow.commit_event(peer_endorsement.clone()).await.unwrap();
     let binding_ref = peer_endorsement.authority_commit.event.event_id.clone();
 
     // Found: a compatible endorsement by the other participant accumulates;
     // the bootstrap source no longer carries a Message.
-    let founder_endorsement = cited(
+    let founder_endorsement = sourced_cited(
+        &pair,
         &peer_endorsement.authority_commit,
         EventKind::DirectConversationBound,
         founder.clone(),
         endorsement(&add_ref, 2),
         Cites::Bootstrap(&create_ref),
-    );
+    )
+    .await;
     uow.commit_event(founder_endorsement.clone()).await.unwrap();
     let head = founder_endorsement.authority_commit.clone();
     assert_eq!(dc_footprint(&pool, &realm_id).await[6], 2);
@@ -2549,37 +3202,47 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     );
     assert_eq!(durable.binding.unwrap().endorsements.len(), 2);
     assert_eq!(
-        refused(&cited(
-            &head,
-            EventKind::MessageCreate,
-            founder.clone(),
-            ciphertext(&facts.main_strand_id, 1, &add_ref),
-            Cites::Bootstrap(&create_ref),
-        ))
+        refused(
+            &sourced_cited(
+                &pair,
+                &head,
+                EventKind::MessageCreate,
+                founder.clone(),
+                ciphertext(&facts.main_strand_id, 1, &add_ref),
+                Cites::Bootstrap(&create_ref),
+            )
+            .await
+        )
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
     // The participant source needs an accepted endorsement as its ref.
     assert_eq!(
-        refused(&cited(
-            &head,
-            EventKind::MessageCreate,
-            peer.clone(),
-            ciphertext(&facts.main_strand_id, 1, &add_ref),
-            Cites::Participant(&add_ref),
-        ))
+        refused(
+            &sourced_cited(
+                &pair,
+                &head,
+                EventKind::MessageCreate,
+                peer.clone(),
+                ciphertext(&facts.main_strand_id, 1, &add_ref),
+                Cites::Participant(&add_ref),
+            )
+            .await
+        )
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
     // The technical root carries no masked action once found.
     let second_genesis = with_group(
-        cited(
+        sourced_cited(
+            &pair,
             &head,
             EventKind::MlsGenesis,
             founder.clone(),
             mls_genesis_payload(&pair, &realm_id, at),
             Cites::Nothing,
-        ),
+        )
+        .await,
         None,
         0,
         &[&founder],
@@ -2590,6 +3253,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     );
 
     let head = Box::pin(exercise_flat_topics(
+        &pair,
         &pool,
         &uow,
         head,
@@ -2625,13 +3289,17 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
             (actor, Cites::Bootstrap(&create_ref)),
         ] {
             assert_eq!(
-                refused(&cited(
-                    &head,
-                    EventKind::StrandWatchSet,
-                    actor.clone(),
-                    payload(watcher),
-                    source
-                ))
+                refused(
+                    &sourced_cited(
+                        &pair,
+                        &head,
+                        EventKind::StrandWatchSet,
+                        actor.clone(),
+                        payload(watcher),
+                        source
+                    )
+                    .await
+                )
                 .await,
                 ConflictCode::DirectConversationParticipantAuthorityDenied
             );
@@ -2645,26 +3313,32 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
                 rows_before
             );
         }
-        let write = cited(
+        let write = sourced_cited(
+            &pair,
             &head,
             EventKind::StrandWatchSet,
             actor.clone(),
             payload(actor),
             Cites::Participant(&binding_ref),
-        );
+        )
+        .await;
         uow.commit_event(write.clone()).await.unwrap();
         head = write.authority_commit;
         assert_eq!(count(&pool, "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1 AND value->>'level'='all'", &realm_id).await, rows_before + 1);
         let mut stale = payload(actor);
         stale["level"] = serde_json::json!("muted");
         assert_eq!(
-            refused(&cited(
-                &head,
-                EventKind::StrandWatchSet,
-                actor.clone(),
-                stale,
-                Cites::Participant(&binding_ref)
-            ))
+            refused(
+                &sourced_cited(
+                    &pair,
+                    &head,
+                    EventKind::StrandWatchSet,
+                    actor.clone(),
+                    stale,
+                    Cites::Participant(&binding_ref)
+                )
+                .await
+            )
             .await,
             ConflictCode::FailedPrecondition
         );
@@ -2672,21 +3346,25 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     }
 
     // Both participants send under the binding, citing either endorsement.
-    let peer_message = cited(
+    let peer_message = sourced_cited(
+        &pair,
         &head,
         EventKind::MessageCreate,
         peer.clone(),
         ciphertext(&facts.main_strand_id, 1, &add_ref),
         Cites::Participant(&binding_ref),
-    );
+    )
+    .await;
     uow.commit_event(peer_message.clone()).await.unwrap();
-    let founder_message = cited(
+    let founder_message = sourced_cited(
+        &pair,
         &peer_message.authority_commit,
         EventKind::MessageCreate,
         founder.clone(),
         ciphertext(&facts.main_strand_id, 1, &add_ref),
         Cites::Participant(&founder_endorsement.authority_commit.event.event_id),
-    );
+    )
+    .await;
     uow.commit_event(founder_message.clone()).await.unwrap();
     let head = founder_message.authority_commit.clone();
 
@@ -2694,34 +3372,51 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     // participant may leave only through the participant source; while left,
     // participant authority is inactive and only the repair source can carry
     // that same participant's `leave -> join` edge.
-    let leave = cited(
+    let leave = sourced_cited(
+        &pair,
         &head,
         EventKind::MemberState,
         peer.clone(),
         serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"leave"}),
         Cites::Participant(&binding_ref),
-    );
+    )
+    .await;
     uow.commit_event(leave.clone()).await.unwrap();
     assert_eq!(
-        refused(&cited(
-            &leave.authority_commit,
-            EventKind::MemberState,
-            peer.clone(),
-            serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
-            Cites::Participant(&binding_ref),
-        ))
+        refused(
+            &sourced_cited(
+                &pair,
+                &leave.authority_commit,
+                EventKind::MemberState,
+                peer.clone(),
+                serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
+                Cites::Participant(&binding_ref),
+            )
+            .await
+        )
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
-    let rejoin = cited(
+    let rejoin = sourced_cited(
+        &pair,
         &leave.authority_commit,
         EventKind::MemberState,
         peer.clone(),
         serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
         Cites::Repair(&binding_ref),
-    );
+    )
+    .await;
     uow.commit_event(rejoin.clone()).await.unwrap();
     let head = rejoin.authority_commit.clone();
+    let rejoin_history = exact_genesis_scan(&store, &realm_id, &pair.peer, &pair.station).await;
+    assert!(rejoin_history.committed_events.is_empty());
+    let rejoin_floor = rejoin_history.readable_floor.unwrap();
+    assert_eq!(rejoin_floor.oldest_position, head.commit.stream_position);
+    assert_eq!(rejoin_floor.floor_commit_id, head.commit.commit_id);
+    assert_eq!(
+        rejoin_floor.floor_reason,
+        arkret_wire::ReadableFloorReason::MembershipJoin
+    );
 
     // A withdrawn directional Contact stops sends and personal watch writes.
     let mut conn = pool.get().await.unwrap();
@@ -2736,13 +3431,17 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     .unwrap();
     drop(conn);
     assert_eq!(
-        refused(&cited(
-            &head,
-            EventKind::MessageCreate,
-            peer.clone(),
-            ciphertext(&facts.main_strand_id, 1, &add_ref),
-            Cites::Participant(&binding_ref),
-        ))
+        refused(
+            &sourced_cited(
+                &pair,
+                &head,
+                EventKind::MessageCreate,
+                peer.clone(),
+                ciphertext(&facts.main_strand_id, 1, &add_ref),
+                Cites::Participant(&binding_ref),
+            )
+            .await
+        )
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
@@ -2759,13 +3458,17 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         None,
     );
     assert_eq!(
-        refused(&cited(
-            &head,
-            EventKind::StrandWatchSet,
-            peer.clone(),
-            serde_json::to_value(watch).unwrap(),
-            Cites::Participant(&binding_ref),
-        ))
+        refused(
+            &sourced_cited(
+                &pair,
+                &head,
+                EventKind::StrandWatchSet,
+                peer.clone(),
+                serde_json::to_value(watch).unwrap(),
+                Cites::Participant(&binding_ref),
+            )
+            .await
+        )
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
@@ -2848,7 +3551,7 @@ async fn terminal_founding_claim_repairs_the_same_group_and_keeps_the_first_bind
     let pair = pair(&pool).await;
     let store = pair.store();
     let at = now();
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at);
+    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
     store
         .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
         .await
@@ -3014,6 +3717,7 @@ async fn seed_peer_remove(
 }
 
 async fn exercise_flat_topics(
+    pair: &Pair,
     pool: &PgPool,
     uow: &PgEventCommitUnitOfWork,
     mut head: AuthorityCommitTransaction,
@@ -3065,13 +3769,15 @@ async fn exercise_flat_topics(
     for kind in ["list", "board"] {
         let mut other = space.clone();
         other.kind = kind.into();
-        let request = cited(
+        let request = sourced_cited(
+            pair,
             &head,
             EventKind::SpaceCreate,
             founder.clone(),
             serde_json::to_value(SpaceCreatePayload::new(other)).unwrap(),
             Cites::Participant(binding),
-        );
+        )
+        .await;
         let before = dc_footprint(pool, &realm).await;
         let before_structure = structure(pool, &realm).await;
         assert_eq!(
@@ -3081,26 +3787,30 @@ async fn exercise_flat_topics(
         assert_eq!(dc_footprint(pool, &realm).await, before);
         assert_eq!(structure(pool, &realm).await, before_structure);
     }
-    let create = cited(
+    let create = sourced_cited(
+        pair,
         &head,
         EventKind::SpaceCreate,
         founder.clone(),
         serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     let first = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
     uow.commit_event(create.clone()).await.unwrap();
     head = create.authority_commit;
     space.created_by = peer.clone();
     space.created_at = head.commit.committed_at;
     space.rank = Some("a1".into());
-    let create = cited(
+    let create = sourced_cited(
+        pair,
         &head,
         EventKind::SpaceCreate,
         peer.clone(),
         serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     let second = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
     uow.commit_event(create.clone()).await.unwrap();
     head = create.authority_commit;
@@ -3113,13 +3823,15 @@ async fn exercise_flat_topics(
         arkret_models_collaboration::objects::profiles::StrandTrack::discussion_primary(),
     );
     chat.created_at = head.commit.committed_at;
-    let create = cited(
+    let create = sourced_cited(
+        pair,
         &head,
         EventKind::StrandCreate,
         founder.clone(),
         serde_json::to_value(StrandCreatePayload { object: chat }).unwrap(),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     let chat_id = arkret_wire::StrandId::from_event_id(&create.authority_commit.event.event_id);
     uow.commit_event(create.clone()).await.unwrap();
     head = create.authority_commit;
@@ -3142,13 +3854,15 @@ async fn exercise_flat_topics(
             digest(&current(pool, &chat_id).await),
         )
         .unwrap();
-        let request = cited(
+        let request = sourced_cited(
+            pair,
             &head,
             EventKind::StrandUpdate,
             actor.clone(),
             serde_json::to_value(payload).unwrap(),
             Cites::Participant(binding),
-        );
+        )
+        .await;
         uow.commit_event(request.clone()).await.unwrap();
         head = request.authority_commit;
         assert_eq!(
@@ -3157,13 +3871,15 @@ async fn exercise_flat_topics(
         );
     }
     let bad = StrandPatchPayload::for_topic(chat_id.clone(), None, stale).unwrap();
-    let request = cited(
+    let request = sourced_cited(
+        pair,
         &head,
         EventKind::StrandUpdate,
         peer.clone(),
         serde_json::to_value(bad).unwrap(),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     let footprint_before = dc_footprint(pool, &realm).await;
     let structure_before = structure(pool, &realm).await;
     assert!(uow.commit_event(request).await.is_err());
@@ -3195,55 +3911,65 @@ async fn exercise_flat_topics(
         ),
     ];
     for (kind, payload) in invalid {
-        let request = cited(
+        let request = sourced_cited(
+            pair,
             &head,
             kind.clone(),
             founder.clone(),
             payload,
             Cites::Participant(binding),
-        );
+        )
+        .await;
         let before = dc_footprint(pool, &realm).await;
         let state = structure(pool, &realm).await;
         assert!(uow.commit_event(request).await.is_err(), "{kind}");
         assert_eq!(dc_footprint(pool, &realm).await, before);
         assert_eq!(structure(pool, &realm).await, state);
     }
-    let archive = cited(
+    let archive = sourced_cited(
+        pair,
         &head,
         EventKind::StrandArchive,
         peer.clone(),
         serde_json::json!({"target_ref":chat_id}),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     uow.commit_event(archive.clone()).await.unwrap();
     head = archive.authority_commit;
-    let delete = cited(
+    let delete = sourced_cited(
+        pair,
         &head,
         EventKind::SpaceTombstone,
         founder.clone(),
         serde_json::json!({"space_id":second}),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     assert_eq!(
         refusal_code(uow.commit_event(delete).await),
         ConflictCode::SpaceHasLiveDependents
     );
-    let restore = cited(
+    let restore = sourced_cited(
+        pair,
         &head,
         EventKind::StrandRestore,
         founder.clone(),
         serde_json::json!({"target_ref":chat_id}),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     uow.commit_event(restore.clone()).await.unwrap();
     head = restore.authority_commit;
-    let archive = cited(
+    let archive = sourced_cited(
+        pair,
         &head,
         EventKind::SpaceArchive,
         peer.clone(),
         serde_json::json!({"space_id":second}),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     uow.commit_event(archive.clone()).await.unwrap();
     head = archive.authority_commit;
     assert_eq!(current(pool, &chat_id).await["state"], "active");
@@ -3253,23 +3979,27 @@ async fn exercise_flat_topics(
         digest(&current(pool, &chat_id).await),
     )
     .unwrap();
-    let clear = cited(
+    let clear = sourced_cited(
+        pair,
         &head,
         EventKind::StrandUpdate,
         peer.clone(),
         serde_json::to_value(unset).unwrap(),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     uow.commit_event(clear.clone()).await.unwrap();
     head = clear.authority_commit;
     assert!(current(pool, &chat_id).await.get("topic").is_none());
-    let delete = cited(
+    let delete = sourced_cited(
+        pair,
         &head,
         EventKind::SpaceTombstone,
         founder.clone(),
         serde_json::json!({"space_id":second}),
         Cites::Participant(binding),
-    );
+    )
+    .await;
     uow.commit_event(delete.clone()).await.unwrap();
     head = delete.authority_commit;
     assert_eq!(current(pool, main).await["state"], "active");

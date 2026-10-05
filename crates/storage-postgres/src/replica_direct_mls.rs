@@ -24,6 +24,10 @@ struct Cut {
     generation: u64,
     head: CommitStreamHead,
     current: TypedCurrentResult,
+    // Include Binding and roster evidence in the cache publication fence.
+    // Legacy local cache entries must be rebound to this stronger native cut.
+    #[serde(default)]
+    current_state_entries: Vec<TypedCurrentResult>,
     participants: std::collections::BTreeSet<ActorId>,
 }
 #[derive(QueryableByName)]
@@ -108,21 +112,6 @@ async fn cut_in_connection(
             return Ok(None);
         }
     }
-    let entries = crate::replica_authorization::snapshot_current_evidence(
-        conn,
-        realm,
-        std::slice::from_ref(&head),
-    )
-    .await?;
-    if let Some(caller) = caller {
-        if !entries
-            .iter()
-            .any(|row| row.parent_membership_revision(realm, caller).is_some())
-        {
-            return Ok(None);
-        }
-    }
-    let Some(current) = entries.iter().find(|entry| matches!(entry, TypedCurrentResult::Value { selector: CurrentSelector::MlsGroup { scope_ref }, source_stream_ref, .. } if scope_ref == &arkret_wire::ScopeRef::Realm { realm_id: realm.clone() } && source_stream_ref == &stream)).cloned() else { return Ok(None) };
     let Some(binding) =
         crate::direct_conversation_admission::binding_current_snapshot_in_connection(conn, realm)
             .await?
@@ -139,11 +128,41 @@ async fn cut_in_connection(
     if participants.len() != 2 || caller.is_some_and(|actor| !participants.contains(actor)) {
         return Ok(None);
     }
+    let pair: [ActorId; 2] = participants
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| invalid("participant cardinality"))?;
+    let pair_key = &binding.endorsements[0].value.pair_key;
+    let Some((verified_head, entries)) =
+        crate::replica_authorization::direct_current_evidence(conn, realm, pair_key, &pair).await?
+    else {
+        return Ok(None);
+    };
+    if verified_head != head || !entries.iter().any(|entry| {
+        let TypedCurrentResult::Value { selector, source_stream_ref, value, .. } = entry;
+        matches!(selector, CurrentSelector::DirectConversationBinding { pair_key: found } if found == pair_key)
+            && source_stream_ref == &stream
+            && serde_json::to_value(&binding).is_ok_and(|expected| expected == *value)
+    }) {
+        return Ok(None);
+    }
+    if let Some(caller) = caller {
+        if !entries
+            .iter()
+            .any(|row| row.parent_membership_revision(realm, caller).is_some())
+        {
+            return Ok(None);
+        }
+    }
+    let Some(current) = entries.iter().find(|entry| matches!(entry, TypedCurrentResult::Value { selector: CurrentSelector::MlsGroup { scope_ref }, source_stream_ref, .. } if scope_ref == &arkret_wire::ScopeRef::Realm { realm_id: realm.clone() } && source_stream_ref == &stream)).cloned() else { return Ok(None) };
     Ok(Some(Cut {
         service_id,
         generation: u64::try_from(authority.generation).map_err(invalid)?,
         head,
         current,
+        current_state_entries: entries,
         participants,
     }))
 }
@@ -205,6 +224,7 @@ pub(crate) async fn input_in_connection(
                     generation: cut.generation,
                     head: cut.head,
                     current: cut.current,
+                    current_state_entries: cut.current_state_entries,
                     participants: cut.participants,
                     history: vec![],
                     base: Some(candidate),
@@ -302,6 +322,7 @@ pub(crate) async fn input_in_connection(
         generation: cut.generation,
         head: cut.head,
         current: cut.current,
+        current_state_entries: cut.current_state_entries,
         participants: cut.participants,
         history,
         base,
@@ -317,6 +338,7 @@ fn input_cut(input: &ForeignDirectMlsInput) -> Cut {
         generation: input.generation,
         head: input.head.clone(),
         current: input.current.clone(),
+        current_state_entries: input.current_state_entries.clone(),
         participants: input.participants.clone(),
     }
 }

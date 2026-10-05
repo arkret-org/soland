@@ -28,6 +28,99 @@ pub struct PgAccountDeviceSignerEvidenceArchive {
 
 #[async_trait::async_trait]
 impl AccountDeviceSignerEvidenceStore for PgAccountDeviceSignerEvidenceArchive {
+    async fn get_forward(
+        &self,
+        account: &AccountId,
+        device: &DeviceId,
+        reference: &SignerEvidenceRef,
+    ) -> PersistenceResult<Option<arkret_models_identity::ForwardAccountDeviceSignerEvidence>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query("SELECT evidence_json,authorization_commit_id FROM account_device_signer_evidence WHERE evidence_ref=$1 AND principal_id=$2 AND station_id=$3 AND device_id=$4")
+            .bind::<Text,_>(reference.as_ref()).bind::<Text,_>(account.principal_id.as_str())
+            .bind::<Text,_>(account.station_id.as_str()).bind::<Text,_>(device.as_str())
+            .get_result::<ArchiveRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+        row.map(|row| {
+            let evidence: arkret_models_identity::ForwardAccountDeviceSignerEvidence =
+                serde_json::from_value(row.evidence_json).map_err(PersistenceError::database)?;
+            evidence
+                .validate_binding(account, device)
+                .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+            if soland_storage::forwarded_producer_device_evidence_ref(&evidence)? != *reference
+                || evidence
+                    .device_projection_attestation
+                    .attestation
+                    .event_authorization
+                    .authorization_ref
+                    .commit_id
+                    .as_str()
+                    != row.authorization_commit_id
+            {
+                return Err(PersistenceError::Conflict(
+                    "forward immutable archive differs from exact source reference".into(),
+                ));
+            }
+            Ok(evidence)
+        })
+        .transpose()
+    }
+
+    async fn retain_forward_current(
+        &self,
+        event: &arkret_wire::Event,
+        evidence: &arkret_models_identity::ForwardAccountDeviceSignerEvidence,
+    ) -> PersistenceResult<SignerEvidenceRef> {
+        let core = &evidence.device_projection_attestation.attestation;
+        let source = &core.event_authorization;
+        let suite = event.realm_id.digest_suite_code().digest_suite();
+        let verified =
+            arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
+                evidence,
+                event,
+                &core.account_id.station_id,
+                &source.destination_service_id,
+                &source.forward_body_digest,
+                suite,
+                core.attested_at,
+            )
+            .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
+        let fact = verified.into_fact();
+        let reference = soland_storage::forwarded_producer_device_evidence_ref(evidence)?;
+        let body = serde_json::to_value(evidence).map_err(PersistenceError::database)?;
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let prepared = crate::agent_producer_signer_keys::prepare_local_human_source_in_connection(conn, event, core.attested_at).await?;
+            if prepared.as_ref() != Some(&fact) {
+                return Err(PersistenceError::Conflict("forward origin source changed before issuance".into()).into());
+            }
+            let cut = confirmed_pcr_device_status_cut_in_connection(conn, &core.account_id, &core.device_id, core.attested_at).await?
+                .ok_or_else(|| PersistenceError::Conflict("forward origin locked PCR cut missing".into()))?;
+            let authorization = cut.authority.authorization.as_ref()
+                .ok_or_else(|| PersistenceError::Conflict("forward origin authorization missing".into()))?;
+            let payload = &authorization.payload;
+            if cut.admission().error_code().is_some()
+                || cut.authority.current_generation != Some(core.authorized_generation_ref)
+                || payload.authorized_generation_ref != core.authorized_generation_ref
+                || payload.device_public_key_did.as_str() != core.device_signing_key_did.as_str()
+                || payload.hpke_key != core.hpke_key
+                || payload.not_before != core.authorization_window.not_before
+                || payload.expires_at.flatten() != core.authorization_window.expires_at {
+                return Err(PersistenceError::Conflict("forward origin projection differs from locked authorization".into()).into());
+            }
+            sql_query("INSERT INTO account_device_signer_evidence(evidence_ref,principal_id,station_id,device_id,authorization_event_id,authorization_commit_id,attested_at,evidence_json) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(evidence_ref) DO NOTHING")
+                .bind::<Text,_>(reference.as_ref()).bind::<Text,_>(core.account_id.principal_id.as_str())
+                .bind::<Text,_>(core.account_id.station_id.as_str()).bind::<Text,_>(core.device_id.as_str())
+                .bind::<Text,_>(fact.key.authorization_ref.event_id.as_str()).bind::<Text,_>(fact.key.authorization_ref.commit_id.as_str())
+                .bind::<Timestamptz,_>(core.attested_at).bind::<Jsonb,_>(&body).execute(&mut *conn).await?;
+            let stored = sql_query("SELECT evidence_json,authorization_commit_id FROM account_device_signer_evidence WHERE evidence_ref=$1 FOR SHARE")
+                .bind::<Text,_>(reference.as_ref()).get_result::<ArchiveRow>(&mut *conn).await?;
+            if stored.evidence_json != body || stored.authorization_commit_id != fact.key.authorization_ref.commit_id.as_str() {
+                return Err(PersistenceError::Conflict("forward origin immutable root collision".into()).into());
+            }
+            Ok(())
+        }).await.map_err(PgTransactionError::into_persistence)?;
+        soland_storage::forwarded_producer_device_evidence_ref(evidence)
+    }
+
     async fn retain_current(
         &self,
         evidence: &AccountDeviceSignerEvidence,
@@ -315,10 +408,8 @@ pub(crate) async fn retain_forwarded_producer_evidence_in_connection(
         ));
     }
     if commit.event_ref != event.event_id
-        || !retained
-            .evidence
-            .matches_ref(&retained.evidence_ref)
-            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+        || soland_storage::forwarded_producer_device_evidence_ref(&retained.evidence)?
+            != retained.evidence_ref
     {
         return Err(invalid(
             "forwarded producer evidence does not bind its Commit or ref",
