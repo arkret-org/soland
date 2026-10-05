@@ -235,6 +235,34 @@ fn payload<T: serde::de::DeserializeOwned>(event: &Event) -> PersistenceResult<T
     serde_json::from_value(serde_json::to_value(&event.payload).map_err(schema)?).map_err(schema)
 }
 
+/// Shared Realm Agent policy values may be carried by verified snapshots.
+/// This does not recreate their private admission Event or enable writes.
+pub(crate) fn validate_disclosed_agent_policy(
+    realm: &arkret_wire::RealmId,
+    policy_id: &arkret_wire::PolicyId,
+    source: &CommitStreamRef,
+    value: &Value,
+) -> PersistenceResult<()> {
+    let document: PolicySetValue = serde_json::from_value(value.clone()).map_err(schema)?;
+    document.validate().map_err(schema)?;
+    match document {
+        PolicySetValue::Governance(policy)
+            if policy.id == *policy_id
+                && policy.realm_id.as_ref() == Some(realm)
+                && policy.policy_kind == PolicyKind::Agent
+                && source
+                    == &(CommitStreamRef::Realm {
+                        realm_id: realm.clone(),
+                    }) =>
+        {
+            Ok(())
+        }
+        _ => Err(schema(
+            "Policy current has no proved shared Agent Realm binding",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod pg_tests;
 

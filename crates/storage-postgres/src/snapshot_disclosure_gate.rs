@@ -32,6 +32,7 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::RealmCreate,
     EventKind::RealmProfile,
     EventKind::RealmPolicyBundle,
+    EventKind::PolicySet,
     EventKind::RealmJoinRule,
     EventKind::RealmHistoryAccess,
     EventKind::RealmReadReceiptPolicy,
@@ -115,7 +116,7 @@ const AUDITED_FAMILIES: &[&str] = &[
     "capability_grant_current_results",
     "realm_policy_bundle_current_results",
     "schema_definition_current_results",
-    // PCR-private Policy documents have no ordinary Realm disclosure rule.
+    // Only exact Realm-bound generic Agent Policy has shared disclosure.
     "policy_current_results",
     "policy_action_current_results",
     // Controller-PCR confirmation state has no ordinary Realm disclosure carrier.
@@ -484,7 +485,10 @@ async fn disclosure_facts_in_connection(
     let undisclosed_family_row = sql_query(
         "SELECT (EXISTS(SELECT 1 FROM realm_link_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM mimi_room_binding_current_results WHERE realm_id=$1) \
-            OR EXISTS(SELECT 1 FROM policy_current_results WHERE realm_id=$1) \
+            OR EXISTS(SELECT 1 FROM policy_current_results WHERE realm_id=$1 \
+                AND (value->>'schema' IS DISTINCT FROM 'ak.schema.policy.v1' \
+                    OR value->>'policy_kind' IS DISTINCT FROM 'agent' \
+                    OR value->>'realm_id' IS DISTINCT FROM realm_id)) \
             OR EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM agent_key_current_results WHERE realm_id=$1) \
             OR EXISTS(SELECT 1 FROM key_backup_active_series_current_results WHERE realm_id=$1) \
@@ -1572,6 +1576,14 @@ pub(crate) fn disclose_to_account(
             | CurrentSelector::InviteLiveTarget { .. }
             | CurrentSelector::InviteDirectedInvitee { .. }
             | CurrentSelector::CapabilityGrant { .. } => {}
+            CurrentSelector::Policy { policy_id } => {
+                crate::policy_current_results::validate_disclosed_agent_policy(
+                    &material.realm_id,
+                    policy_id,
+                    source_stream_ref,
+                    value,
+                )?;
+            }
             CurrentSelector::PolicyAction {
                 subject: arkret_wire::PolicyActionSelector::RealmAction { .. },
             } => {
@@ -2434,6 +2446,70 @@ mod tests {
         let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[7];
         *value = json!({"membership":"leave"});
         assert!(disclose_to_account(material, &founder, &facts).is_err());
+    }
+
+    #[test]
+    fn realm_agent_policy_current_is_disclosed_without_changing_signed_bytes() {
+        let (caller, mut material, facts) = joined_fixture();
+        let policy_id =
+            arkret_wire::PolicyId::new("ak:policy:0198ff00-0000-7000-8000-000000000001").unwrap();
+        let value = json!({"schema":"ak.schema.policy.v1","id":policy_id,"realm_id":realm_id(),
+            "policy_kind":"agent","rules":[{"rule_id":"ban","kind":"agent","effect":"deny",
+                "agent_target":{"kind":"all"},"agent_operations":["authorize","execute"]}],
+            "default_effect":"allow","created_by":ActorId::account(account("alice")),
+            "created_at":"2026-10-05T12:00:00.000Z"});
+        let policy = row(CurrentSelector::Policy { policy_id }, 1, value);
+        material.current_state_entries.push(policy.clone());
+        let disclosed = disclose_to_account(material, &caller, &facts).unwrap();
+        assert!(disclosed.current_state_entries.contains(&policy));
+        // Governance current remains available below the caller's content floor.
+        let TypedCurrentResult::Value { revision, .. } = &policy;
+        assert!(revision.stream_position < facts.caller_floor.as_ref().unwrap().oldest_position);
+    }
+
+    #[test]
+    fn agent_policy_disclosure_refuses_unbound_private_and_mismatched_values() {
+        let (caller, base, facts) = fixture();
+        let id =
+            arkret_wire::PolicyId::new("ak:policy:0198ff00-0000-7000-8000-000000000001").unwrap();
+        let value = json!({"schema":"ak.schema.policy.v1","id":id,"realm_id":realm_id(),
+            "policy_kind":"agent","rules":[{"rule_id":"allow","kind":"agent","effect":"allow",
+                "agent_target":{"kind":"all"},"agent_operations":["join"]}],
+            "default_effect":"allow","created_by":ActorId::account(caller.clone()),
+            "created_at":"2026-10-05T12:00:00.000Z"});
+        let mut invalid = vec![json!({"schema":"ak.schema.recovery_policy.v1"})];
+        for field in ["id", "realm_id", "policy_kind", "rules"] {
+            let mut changed = value.clone();
+            changed[field] = match field {
+                "id" => json!("ak:policy:0198ff00-0000-7000-8000-000000000002"),
+                "realm_id" => json!(null),
+                "policy_kind" => json!("access"),
+                _ => json!([]),
+            };
+            invalid.push(changed);
+        }
+        for value in invalid {
+            let mut material = base.clone();
+            material.current_state_entries.push(row(
+                CurrentSelector::Policy {
+                    policy_id: id.clone(),
+                },
+                1,
+                value,
+            ));
+            assert!(disclose_to_account(material, &caller, &facts).is_err());
+        }
+        let mut material = base;
+        let mut policy = row(CurrentSelector::Policy { policy_id: id }, 1, value);
+        let TypedCurrentResult::Value {
+            source_stream_ref, ..
+        } = &mut policy;
+        *source_stream_ref = CommitStreamRef::Circle {
+            realm_id: realm_id(),
+            circle_id: CircleId::from_event_id(&event_id(0x55)),
+        };
+        material.current_state_entries.push(policy);
+        assert!(disclose_to_account(material, &caller, &facts).is_err());
     }
 
     #[test]

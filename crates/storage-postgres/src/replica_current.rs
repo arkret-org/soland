@@ -210,6 +210,28 @@ async fn guard_snapshot_revisions(
         let source = serde_json::to_value(source_stream_ref).map_err(malformed)?;
         let incoming_position = position(revision.stream_position)?;
         match selector {
+            S::Policy { policy_id } => {
+                crate::policy_current_results::validate_disclosed_agent_policy(
+                    realm_id,
+                    policy_id,
+                    source_stream_ref,
+                    value,
+                )?;
+                let old = diesel::sql_query("SELECT current_commit_id,current_stream_position,source_stream_ref,value FROM replica_authorization_rows WHERE realm_id=$1 AND selector=$2 FOR UPDATE")
+                    .bind::<Text,_>(realm_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(selector).map_err(malformed)?)
+                    .get_result::<ExistingFrankingProofCurrent>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+                if old.is_some_and(|old| {
+                    old.source_stream_ref != source
+                        || old.current_stream_position > incoming_position
+                        || (old.current_stream_position == incoming_position
+                            && (old.current_commit_id != revision.commit_id.as_str()
+                                || old.value != *value))
+                }) {
+                    return Err(malformed(
+                        "Agent Policy snapshot revision, source or value conflicts",
+                    ));
+                }
+            }
             S::AgentInteraction { agent_account_id } => {
                 let key = arkret_wire::derive_agent_interaction_current_key(agent_account_id)
                     .map_err(malformed)?;
@@ -647,6 +669,21 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
                 realm_id: realm_id.clone(),
             })
     });
+    if replaces_realm {
+        #[derive(diesel::QueryableByName)]
+        struct Present {
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            present: bool,
+        }
+        let omitted = diesel::sql_query("SELECT EXISTS(SELECT 1 FROM replica_authorization_rows r WHERE r.realm_id=$1 AND r.selector->>'kind'='policy' AND r.value->>'schema'='ak.schema.policy.v1' AND r.value->>'policy_kind'='agent' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements($2) incoming WHERE incoming->'selector'=r.selector)) AS present")
+            .bind::<Text,_>(realm_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(entries).map_err(malformed)?)
+            .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+        if omitted {
+            return Err(malformed(
+                "snapshot cannot erase an accepted shared Agent Policy",
+            ));
+        }
+    }
     if replaces_realm
         && crate::direct_conversation_admission::binding_current_in_connection(conn, realm_id)
             .await?
@@ -713,6 +750,14 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
             updated_at: installed_at,
         };
         use arkret_wire::CurrentSelector as S;
+        if let S::Policy { policy_id } = selector {
+            crate::policy_current_results::validate_disclosed_agent_policy(
+                realm_id,
+                policy_id,
+                source_stream_ref,
+                value,
+            )?;
+        }
         let singleton = match selector {
             S::RealmGenesis => Some("realm_genesis"),
             S::RealmProfile => Some("realm_profile"),
@@ -1029,6 +1074,9 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
             }
             // Governing admission inputs a member Station never keeps.
             S::RealmAuthorityRoot
+            // The snapshot has no accepting EventId; keep the exact signed
+            // Policy row only in replica_authorization_rows, not a fake current.
+            | S::Policy { .. }
             | S::CapabilityGrant { .. }
             | S::InviteLifecycle { .. }
             | S::InviteLiveTarget { .. }
@@ -1173,7 +1221,71 @@ pub(crate) async fn advance_in_connection(
             // result without rerunning the source Station's admission policy.
             crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
         }
-        arkret_wire::EventKind::PolicySet | arkret_wire::EventKind::PolicyAction => {
+        arkret_wire::EventKind::PolicySet => {
+            use arkret_models_collaboration::governance::operation_wire::{
+                PolicySetStatePayload, PolicySetValue,
+            };
+            let body: PolicySetStatePayload =
+                serde_json::from_value(payload()?).map_err(malformed)?;
+            body.validate().map_err(malformed)?;
+            let selector = arkret_wire::CurrentSelector::Policy {
+                policy_id: body.policy_id.clone(),
+            };
+            let value = serde_json::to_value(&body.value).map_err(malformed)?;
+            let agent = matches!(&body.value, PolicySetValue::Governance(p) if p.policy_kind == arkret_wire::PolicyKind::Agent);
+            #[derive(diesel::QueryableByName)]
+            struct Present {
+                #[diesel(sql_type = diesel::sql_types::Bool)]
+                present: bool,
+            }
+            let previous_agent = diesel::sql_query("SELECT EXISTS(SELECT 1 FROM replica_authorization_rows WHERE realm_id=$1 AND selector=$2 AND value->>'schema'='ak.schema.policy.v1' AND value->>'policy_kind'='agent') AS present")
+                .bind::<Text,_>(event.realm_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(&selector).map_err(malformed)?)
+                .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+            if previous_agent && !agent {
+                return Err(malformed(
+                    "replica Agent Policy cannot change family or kind",
+                ));
+            }
+            let entry = arkret_wire::TypedCurrentResult::Value {
+                selector,
+                source_stream_ref: commit.stream_ref.clone(),
+                revision: arkret_wire::CurrentRevision {
+                    commit_id: commit.commit_id.clone(),
+                    stream_position: commit.stream_position,
+                },
+                value,
+            };
+            if agent {
+                if event.realm_id != commit.realm_id
+                    || event.event_id != commit.event_ref
+                    || arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, None)
+                        .map_err(malformed)?
+                        != commit.stream_ref
+                {
+                    return Err(malformed("Policy replica Event and covering Commit differ"));
+                }
+                let arkret_wire::TypedCurrentResult::Value { value, .. } = &entry;
+                crate::policy_current_results::validate_disclosed_agent_policy(
+                    &event.realm_id,
+                    &body.policy_id,
+                    &commit.stream_ref,
+                    value,
+                )?;
+                guard_snapshot_revisions(conn, &event.realm_id, std::slice::from_ref(&entry))
+                    .await?;
+            }
+            crate::policy_current_results::commit_in_connection(conn, event, commit).await?;
+            if agent {
+                crate::replica_authorization::save_row(
+                    conn,
+                    &event.realm_id,
+                    &entry,
+                    commit.committed_at,
+                )
+                .await?;
+            }
+        }
+        arkret_wire::EventKind::PolicyAction => {
             crate::policy_current_results::commit_in_connection(conn, event, commit).await?;
         }
         arkret_wire::EventKind::SelfModerationReport => {
@@ -1459,6 +1571,221 @@ mod circle_revision_tests;
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn agent_policy_snapshot_and_tail_keep_exact_current_without_fabricating_admission() {
+        let database = TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+        let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x61; 32],
+        ));
+        let id =
+            arkret_wire::PolicyId::new("ak:policy:0198ff00-0000-7000-8000-000000000001").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:policy-author.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:policy-station.example").unwrap(),
+        ));
+        let value = json!({"schema":"ak.schema.policy.v1","id":id,"realm_id":realm,
+            "policy_kind":"agent","rules":[{"rule_id":"ban","kind":"agent","effect":"deny",
+                "agent_target":{"kind":"all"},"agent_operations":["execute"]}],
+            "default_effect":"allow","created_by":actor,"created_at":at});
+        let head = arkret_wire::CommitStreamHead {
+            stream_ref: arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm.clone(),
+            },
+            stream_position: 7,
+            commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
+        };
+        let entry = arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::Policy {
+                policy_id: id.clone(),
+            },
+            source_stream_ref: head.stream_ref.clone(),
+            revision: arkret_wire::CurrentRevision {
+                commit_id: head.commit_id.clone(),
+                stream_position: 7,
+            },
+            value: value.clone(),
+        };
+        for _ in 0..2 {
+            install_snapshot_in_connection(
+                &mut conn,
+                &realm,
+                &head,
+                std::slice::from_ref(&entry),
+                at,
+            )
+            .await
+            .unwrap();
+        }
+        let read = "SELECT jsonb_build_object('rows',(SELECT jsonb_agg(to_jsonb(r)) FROM replica_authorization_rows r WHERE realm_id=$1),'heads',(SELECT jsonb_agg(to_jsonb(h)) FROM replica_authorization_cuts h WHERE realm_id=$1),'private_count',(SELECT COUNT(*) FROM policy_current_results WHERE realm_id=$1)) AS value";
+        let original: ValueRow = diesel::sql_query(read)
+            .bind::<Text, _>(realm.as_str())
+            .get_result(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(original.value["rows"][0]["value"], value);
+        assert_eq!(original.value["private_count"], 0);
+        let mut invalid = vec![];
+        for field in ["id", "realm_id", "policy_kind", "schema"] {
+            let mut changed = entry.clone();
+            let arkret_wire::TypedCurrentResult::Value {
+                value, revision, ..
+            } = &mut changed;
+            revision.stream_position = 8;
+            revision.commit_id = arkret_wire::RealmCommitId::from_digest([8; 32]);
+            value[field] = match field {
+                "id" => json!("ak:policy:0198ff00-0000-7000-8000-000000000002"),
+                "realm_id" => json!(null),
+                "policy_kind" => json!("access"),
+                _ => json!("ak.schema.recovery_policy.v1"),
+            };
+            invalid.push(changed);
+        }
+        let mut fork = entry.clone();
+        let arkret_wire::TypedCurrentResult::Value {
+            value: fork_value, ..
+        } = &mut fork;
+        fork_value["default_effect"] = json!("deny");
+        invalid.push(fork);
+        let mut stale = entry.clone();
+        let arkret_wire::TypedCurrentResult::Value { revision, .. } = &mut stale;
+        revision.stream_position = 6;
+        revision.commit_id = arkret_wire::RealmCommitId::from_digest([6; 32]);
+        invalid.push(stale);
+        let mut foreign = entry.clone();
+        let arkret_wire::TypedCurrentResult::Value {
+            source_stream_ref, ..
+        } = &mut foreign;
+        *source_stream_ref = arkret_wire::CommitStreamRef::Circle {
+            realm_id: realm.clone(),
+            circle_id: arkret_wire::CircleId::from_event_id(&arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [0x62; 32],
+            )),
+        };
+        invalid.push(foreign);
+        let next_head = arkret_wire::CommitStreamHead {
+            stream_position: 8,
+            commit_id: arkret_wire::RealmCommitId::from_digest([8; 32]),
+            ..head.clone()
+        };
+        for rows in invalid
+            .into_iter()
+            .map(|row| vec![row])
+            .chain(std::iter::once(vec![]))
+        {
+            diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+            assert!(
+                install_snapshot_in_connection(&mut conn, &realm, &next_head, &rows, at)
+                    .await
+                    .is_err()
+            );
+            diesel::sql_query("ROLLBACK")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            let after: ValueRow = diesel::sql_query(read)
+                .bind::<Text, _>(realm.as_str())
+                .get_result(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(after.value, original.value);
+        }
+        // Imported projection fixture starts after source Event/Commit verification.
+        // It does not exercise production signing or Agent management admission.
+        let mut next_value = value.clone();
+        next_value["rules"][0]["effect"] = json!("allow");
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.policy.set",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            actor,
+            json!({"policy_id":id,"expected_revision":{"commit_id":head.commit_id,"stream_position":7},"value":next_value}),
+            at,
+        )
+        .unwrap();
+        let commit = arkret_wire::RealmCommit {
+            commit_id: next_head.commit_id.clone(),
+            realm_id: realm.clone(),
+            stream_ref: head.stream_ref.clone(),
+            stream_position: 8,
+            previous_commit_ref: Some(head.commit_id.clone()),
+            event_ref: event.event_id.clone(),
+            governance_generation: 0,
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                event.event_id.clone(),
+            ),
+            committed_at: at,
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:policy-station.example#authority",
+                )
+                .unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "aa".repeat(32)))
+                    .unwrap(),
+                created_at: at,
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl").unwrap(),
+            },
+        };
+        advance_in_connection(&mut conn, &event, &commit)
+            .await
+            .unwrap();
+        let after: ValueRow = diesel::sql_query(read)
+            .bind::<Text, _>(realm.as_str())
+            .get_result(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(after.value["rows"][0]["value"], next_value);
+        assert_eq!(
+            after.value["rows"][0]["current_commit_id"],
+            json!(commit.commit_id)
+        );
+        assert_eq!(after.value["private_count"], 1);
+        // The historical reducer never re-applies the producer's old CAS.
+        let mut rebound = next_value;
+        rebound["policy_kind"] = json!("access");
+        rebound["rules"] = json!([{"rule_id":"allow","kind":"action","effect":"allow","actions":["ak.message.create"]}]);
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.policy.set",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            event.actor_id.clone(),
+            json!({"policy_id":id,"value":rebound}),
+            at,
+        )
+        .unwrap();
+        let commit = arkret_wire::RealmCommit {
+            commit_id: arkret_wire::RealmCommitId::from_digest([9; 32]),
+            stream_position: 9,
+            previous_commit_ref: Some(commit.commit_id.clone()),
+            event_ref: event.event_id.clone(),
+            ..commit
+        };
+        diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
+        assert!(
+            advance_in_connection(&mut conn, &event, &commit)
+                .await
+                .is_err()
+        );
+        diesel::sql_query("ROLLBACK")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let unchanged: ValueRow = diesel::sql_query(read)
+            .bind::<Text, _>(realm.as_str())
+            .get_result(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(unchanged.value, after.value);
+    }
+
     #[tokio::test]
     async fn binding_snapshot_and_successor_fold_keep_native_current_and_reject_forks() {
         use arkret_models_collaboration::events_payloads::direct_conversation::{
