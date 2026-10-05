@@ -77,6 +77,68 @@ async fn read(
 }
 
 #[tokio::test]
+async fn realm_watch_current_remains_provable_after_private_sidecar_history() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let discussion = ordinary_realm::open_human_discussion(&pool, "watch-with-sidecar").await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let previous = &discussion.head.authority_commit;
+    let create = ordinary_realm::next_request(
+        previous,
+        arkret_wire::EventKind::SidecarCreate,
+        previous.event.actor_id.signing_principal_id(),
+        json!({}),
+        discussion.committed_at(),
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let sidecar = arkret_wire::SidecarId::from_event_id(&create.authority_commit.event.event_id);
+    let scope = arkret_wire::ScopeRef::Sidecar {
+        realm_id: discussion.realm_id(),
+        sidecar_id: sidecar.clone(),
+    };
+    let mut event = ordinary_realm::event_for_actor(
+        arkret_wire::EventKind::SidecarContextAttach,
+        scope.clone(),
+        previous.event.actor_id.clone(),
+        json!({"sidecar_id":sidecar,"source_context_ref":{"kind":"strand","strand_id":discussion.strand_id},"version":1}),
+        discussion.committed_at(),
+    );
+    event.semantic_refs = vec![arkret_wire::SemanticRef::new(
+        create.authority_commit.event.event_id.to_string(),
+        "after",
+    )];
+    ordinary_realm::reseal(&mut event);
+    let mut attach = ordinary_realm::request_for_event(
+        &create.authority_commit,
+        event,
+        discussion.committed_at(),
+    );
+    attach.authority_commit.commit.stream_ref = arkret_wire::CommitStreamRef::Sidecar {
+        realm_id: discussion.realm_id(),
+        sidecar_id: sidecar,
+    };
+    attach.authority_commit.commit.stream_position = 0;
+    attach.authority_commit.commit.previous_commit_ref = None;
+    uow.commit_event(attach).await.unwrap();
+    assert!(matches!(
+        read(&pool, &discussion).await,
+        SelfExactCurrentRead::Answer(StrandWatchCurrentOutcome::NeverWritten { .. })
+    ));
+    let watch = ordinary_realm::next_request(
+        &create.authority_commit,
+        arkret_wire::EventKind::StrandWatchSet,
+        previous.event.actor_id.signing_principal_id(),
+        json!({"strand_id":discussion.strand_id,"watcher_actor_id":previous.event.actor_id,"level":"all"}),
+        discussion.committed_at() + chrono::Duration::seconds(30),
+    );
+    uow.commit_event(watch).await.unwrap();
+    assert!(matches!(
+        read(&pool, &discussion).await,
+        SelfExactCurrentRead::Answer(StrandWatchCurrentOutcome::Current { .. })
+    ));
+}
+
+#[tokio::test]
 async fn current_read_distinguishes_never_written_cleared_and_complete_cas() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();

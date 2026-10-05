@@ -9,12 +9,9 @@
 //! Original issuers can also read their exact owned Agent grant revisions
 //! after membership ends; this exception grants no content visibility.
 //! An unknown Realm and a caller that is not a currently joined member share
-//! the universal `not_found`. The only disclosure shape this Station proves is
-//! a Realm whose sole established stream is the Realm stream: every object of
-//! such a Realm lives in the Realm-wide scope that each joined member may
-//! read. A Realm with any Circle or Sidecar stream fails closed as unresolved
-//! until scope visibility is provable, and no `never_written` answer is ever
-//! inferred from a missing row.
+//! the universal `not_found`. Each selector must prove its own effective scope;
+//! unrelated Circle or Sidecar streams do not invalidate a confirmed Realm-scope
+//! Strand. No `never_written` answer is inferred from a missing row alone.
 
 use arkret_models_collaboration::exact_current_results::{
     ExactCurrentResultEntry, ExactCurrentResultSelector, ExactCurrentResultsReadOutcome,
@@ -705,14 +702,6 @@ pub(crate) async fn strand_watch_current_for_account(
             MemberCut::ForeignTenure => {
                 return Ok(SelfExactCurrentRead::Unresolved(
                     "this Station does not hold the Realm's governing tenure",
-                ));
-            }
-            MemberCut::Member {
-                scoped_streams: true,
-                ..
-            } => {
-                return Ok(SelfExactCurrentRead::Unresolved(
-                    "Circle and Sidecar scope visibility is not proved at this cut",
                 ));
             }
             MemberCut::Member { generation, realm_head: Some(head), .. } => (generation,head),
