@@ -23,6 +23,51 @@ fn schema(e: impl std::fmt::Display) -> PersistenceError {
 fn refused(e: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {e}"))
 }
+fn require_supported_policy_kind(kind: arkret_wire::PolicyKind) -> PersistenceResult<()> {
+    if kind == arkret_wire::PolicyKind::Agent {
+        return Err(refused(
+            "Agent management execution and delivery gates are not established",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn agent_policy_is_refused_even_without_an_agent_rule() {
+        let payload: PolicySetStatePayload = serde_json::from_value(serde_json::json!({
+            "policy_id": "ak:policy:0198ff00-0000-7000-8000-000000000001",
+            "expected_revision": null,
+            "value": {
+                "schema": "ak.schema.policy.v1",
+                "id": "ak:policy:0198ff00-0000-7000-8000-000000000001",
+                "realm_id": "ak:realm:AT47eNekH0_aKZyIMsXq_s1FAWdYXC71_CUxQ5O478t-",
+                "policy_kind": "agent",
+                "rules": [{"rule_id": "ordinary", "kind": "action", "effect": "allow", "actions": ["ak.message.create"]}],
+                "default_effect": "deny",
+                "created_by": {"kind": "account", "account_id": {
+                    "principal_id": "ak:did_core:webvh:z6mkfixturecontroller",
+                    "station_id": "ak:did_core:webvh:z6mkfixturestation"
+                }},
+                "created_at": "2026-10-05T11:15:00.000Z"
+            }
+        })).unwrap();
+        payload.validate().unwrap();
+        let PolicySetValue::Governance(document) = payload.value else {
+            panic!("expected governance policy");
+        };
+        assert!(require_supported_policy_kind(document.policy_kind).is_err());
+    }
+
+    #[test]
+    fn ordinary_policy_kinds_keep_their_existing_admission() {
+        assert!(require_supported_policy_kind(arkret_wire::PolicyKind::Access).is_ok());
+        assert!(require_supported_policy_kind(arkret_wire::PolicyKind::Join).is_ok());
+    }
+}
 fn payload<T: serde::de::DeserializeOwned>(event: &Event) -> PersistenceResult<T> {
     serde_json::from_value(serde_json::to_value(&event.payload).map_err(schema)?).map_err(schema)
 }
@@ -115,9 +160,7 @@ pub(crate) async fn admit_in_connection(
             if let PolicySetValue::Governance(document) = value.value {
                 // Do not acknowledge a restriction that the current read and
                 // delivery paths cannot yet enforce at their actual cut.
-                if document.rules.iter().any(|rule| rule.kind == arkret_models_collaboration::governance::operation_wire::PolicyRuleKind::Agent) {
-                    return Err(refused("Agent management execution and delivery gates are not established"));
-                }
+                require_supported_policy_kind(document.policy_kind)?;
                 if document
                     .realm_id
                     .as_ref()
