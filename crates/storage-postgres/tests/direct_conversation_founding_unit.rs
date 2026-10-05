@@ -798,6 +798,53 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
     }
     assert_eq!(footprint(&pool, &realm_id).await, [1, 4, 4, 1, 2]);
     assert_eq!(facts.realm_id, realm_id);
+    // Both joins belong to the same accepted unit as position zero. The
+    // caller scan and snapshot must agree on that original stream-start floor.
+    let request = arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 4,
+    };
+    for account in [&pair.founder, &pair.peer] {
+        let soland_storage::AccountStreamScan::Page(page) = store
+            .scan_stream_for_account(&request, account, &pair.station)
+            .await
+            .unwrap()
+        else {
+            panic!("founding member must read its accepted unit");
+        };
+        assert_eq!(
+            page.readable_floor,
+            Some(arkret_wire::ReadableFloor {
+                oldest_position: 0,
+                floor_commit_id: commits[0].commit_id.clone(),
+                floor_reason: arkret_wire::ReadableFloorReason::StreamStart,
+            })
+        );
+        assert_eq!(page.committed_events.len(), 4);
+        for (position, row) in page.committed_events.iter().enumerate() {
+            assert_eq!(row.commit(), &commits[position]);
+            assert_eq!(
+                row.reducer_input(),
+                Some(&unit.transactions[position].event)
+            );
+        }
+        let snapshot =
+            soland_storage_postgres::account_snapshot_material(&pool, &realm_id, account)
+                .await
+                .unwrap()
+                .expect("founding member snapshot");
+        assert_eq!(
+            snapshot.retention_and_history_floor.stream_floors,
+            vec![arkret_wire::StreamHistoryFloor {
+                stream_ref: request.stream_ref.clone(),
+                oldest_position: 0,
+            }]
+        );
+    }
     assert_eq!(
         count(
             &pool,
@@ -1142,6 +1189,45 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     );
     assert_eq!(profile_spy.hits(), 1);
     assert_eq!(footprint(&peer_pool, &realm_id).await, [1, 4, 4, 1, 2]);
+    let request = arkret_wire::StreamScanRequest {
+        realm_id: realm_id.clone(),
+        stream_ref: arkret_wire::CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        direction: arkret_wire::StreamScanDirection::After(None),
+        limit: 4,
+    };
+    let soland_storage::AccountStreamScan::Page(page) = peer_store
+        .scan_stream_for_account(&request, &pair.peer, &peer_station)
+        .await
+        .unwrap()
+    else {
+        panic!("hosted founding peer must read the held unit");
+    };
+    let floor = page.readable_floor.expect("peer founding floor");
+    assert_eq!(floor.oldest_position, 0);
+    assert_eq!(
+        floor.floor_reason,
+        arkret_wire::ReadableFloorReason::StreamStart
+    );
+    assert_eq!(floor.floor_commit_id, unit.transactions[0].commit.commit_id);
+    assert_eq!(page.committed_events.len(), 4);
+    for (row, transaction) in page.committed_events.iter().zip(&unit.transactions) {
+        assert_eq!(row.commit(), &transaction.commit);
+        assert_eq!(row.reducer_input(), Some(&transaction.event));
+    }
+    let snapshot =
+        soland_storage_postgres::account_snapshot_material(&peer_pool, &realm_id, &pair.peer)
+            .await
+            .unwrap()
+            .expect("hosted peer snapshot");
+    assert_eq!(
+        snapshot.retention_and_history_floor.stream_floors,
+        vec![arkret_wire::StreamHistoryFloor {
+            stream_ref: request.stream_ref,
+            oldest_position: 0
+        }]
+    );
 }
 
 #[tokio::test]

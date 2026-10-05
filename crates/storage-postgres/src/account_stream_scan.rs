@@ -290,7 +290,7 @@ async fn genesis_floor_in_connection(
 /// Under `all_history_for_current_members` a joined member reads from the
 /// genesis Commit. Under `since_join` the floor is the join Commit itself
 /// (`membership_join`), unless that join was accepted in the same atomic
-/// bootstrap unit as position 0 -- the founding creator -- whose floor is
+/// bootstrap unit as position 0 -- including Direct founding members -- whose floor is
 /// the genesis Commit (`stream_start`).
 async fn join_floor_in_connection(
     conn: &mut AsyncPgConnection,
@@ -306,6 +306,9 @@ async fn join_floor_in_connection(
     }
     let founding = sql_query(
         "SELECT EXISTS (SELECT 1 FROM ordinary_realm_bootstrap_units u \
+         CROSS JOIN LATERAL jsonb_array_elements(u.commits_json) c \
+         WHERE u.realm_id=$1 AND c->>'commit_id'=$2 \
+         UNION ALL SELECT 1 FROM direct_conversation_founding_slots u \
          CROSS JOIN LATERAL jsonb_array_elements(u.commits_json) c \
          WHERE u.realm_id=$1 AND c->>'commit_id'=$2) AS present",
     )
@@ -637,8 +640,9 @@ pub(crate) async fn replica_circle_floor_in_connection(
 
 /// The caller's readable floor on a Realm stream this member Station holds
 /// as an anchored replica: under `since_join` its own held join Commit, at
-/// or after the join that opened the held stream. Earlier history is not
-/// held here, so any other interval is unproved.
+/// or after the join that opened the held stream. An atomic founding replica
+/// also holds position zero, so its founding members use the same unit floor
+/// as the governing Station. An absent earlier prefix remains unproved.
 pub(crate) async fn replica_realm_floor_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
@@ -679,6 +683,32 @@ pub(crate) async fn replica_realm_floor_in_connection(
         return Ok(Err(
             "the caller's join precedes the Realm stream this Station holds",
         ));
+    }
+    let held_genesis = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM realm_commits \
+         WHERE stream_key=$1 AND stream_position=0) AS present",
+    )
+    .bind::<Text, _>(crate::authority_commit::stream_key(
+        &CommitStreamRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+    )?)
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if held_genesis.present {
+        let Some(genesis) = genesis_floor_in_connection(conn, realm_id).await? else {
+            return Ok(Err("the held genesis floor is not proved"));
+        };
+        return Ok(join_floor_in_connection(
+            conn,
+            realm_id,
+            &genesis,
+            &join.current_commit_id,
+            join.current_stream_position,
+        )
+        .await?
+        .ok_or("the caller's held unit floor is not proved"));
     }
     Ok(held_join_floor(
         conn,
