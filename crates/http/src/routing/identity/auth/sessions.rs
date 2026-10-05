@@ -459,6 +459,9 @@ fn agent_recipient_operation(method: &str, path: &str) -> Option<&'static str> {
         ("POST", "/_arkret/self/streams/scan") => {
             Some(ServiceOperationId::SELF_COMMITTED_EVENT_READ_SCAN_V1)
         }
+        ("POST", "/_arkret/self/current-results/exact") => {
+            Some(ServiceOperationId::SELF_CURRENT_RESULTS_READ_EXACT_V1)
+        }
         ("POST", "/_arkret/self/events") => Some(ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1),
         ("POST", "/_arkret/self/signal") => Some(ServiceOperationId::SELF_SIGNAL_COMMAND_SEND_V1),
         ("GET", "/_arkret/self/device_messages") => {
@@ -951,6 +954,11 @@ mod tests {
             ),
             (
                 "POST",
+                "/_arkret/self/current-results/exact",
+                ServiceOperationId::SELF_CURRENT_RESULTS_READ_EXACT_V1,
+            ),
+            (
+                "POST",
                 "/_arkret/self/mls/group-state-material/query",
                 ServiceOperationId::SELF_MLS_READ_GROUP_STATE_MATERIAL_V1,
             ),
@@ -1016,6 +1024,9 @@ mod tests {
             ("GET", "/_arkret/self/account/stream"),
             ("GET", "/_arkret/self/account/subscribe"),
             ("GET", "/_arkret/self/keys/backups"),
+            ("GET", "/_arkret/self/current-results/exact"),
+            ("POST", "/_arkret/self/current-results"),
+            ("POST", "/_arkret/self/current-results/exact/extra"),
         ] {
             assert!(agent_recipient_operation(method, path).is_none());
         }
