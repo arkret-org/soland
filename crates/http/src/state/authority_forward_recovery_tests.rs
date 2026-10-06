@@ -191,6 +191,80 @@ async fn authenticated_context(
     }
 }
 
+/// Exercise real producer preflight and atomic bootstrap admission on the same
+/// default worker stack used by the server. Authentication is represented by
+/// the already-authenticated state-port context, not a dev-login credential.
+#[test]
+fn ordinary_realm_bootstrap_and_event_admission_fit_default_worker_stack() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (state, pool, _lease) = station("https://bootstrap-default-stack.internal/".into());
+    let (human, session) = runtime.block_on(async {
+        let human = historical_human::HumanFixture::new(&pool, state.service_did()).await;
+        let session = authenticated_context(&pool, &human).await;
+        (human, session)
+    });
+    let http = crate::service(state.clone());
+    runtime.block_on(async {
+        tokio::spawn(async move {
+            let request =
+                SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(human.unit.submission.clone());
+            let response = salvo::test::TestClient::post("http://server/_arkret/self/events")
+                .add_header(
+                    "Arkret-Operation",
+                    arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+                    true,
+                )
+                .json(&serde_json::to_value(&request).unwrap())
+                .send(&http)
+                .await;
+            assert_eq!(
+                response.status_code,
+                Some(salvo::http::StatusCode::UNAUTHORIZED)
+            );
+            let outcome = state
+                .authority()
+                .submit_self(&session, request.clone(), &human.unit.exact_request_body)
+                .await
+                .unwrap();
+            outcome.validate_for_request(&request).unwrap();
+            let committed = state
+                .authority_commits()
+                .committed_event(&human.unit.transactions.last().unwrap().event.event_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let mut previous = human.unit.transactions.last().unwrap().clone();
+            previous.commit = committed.commit;
+            previous.event = committed.event;
+            let next = human.next(&previous, human.pcr.history.founding_device_signing_seed);
+            let submission = SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(
+                next.authority_commit.event,
+            ));
+            let body = serde_json::to_vec(&submission).unwrap();
+            let outcome = state
+                .authority()
+                .submit_self(&session, submission, &body)
+                .await
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                arkret_models_collaboration::authority_commit::SelfAuthoritySubmitOutcome::Ordinary(
+                    arkret_wire::AuthoritySubmitOutcome::Accepted {
+                        status: arkret_wire::AuthorityCommitStatus::Committed,
+                        ..
+                    }
+                )
+            ));
+        })
+        .await
+        .unwrap();
+    });
+}
+
 /// The same real CA/leaf fixture used by federation_outbox. Production egress
 /// loads this explicit trust store and keeps certificate/hostname validation.
 /// The driver must supply SSL_CERT_FILE; missing trust is a failure, not a skip.
