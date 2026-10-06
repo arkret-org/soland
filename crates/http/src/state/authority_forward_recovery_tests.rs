@@ -252,7 +252,7 @@ fn ordinary_realm_bootstrap_and_event_admission_fit_default_worker_stack() {
                 .unwrap();
             assert!(matches!(
                 outcome,
-                soland_services::authority_commit::SelfAuthoritySubmitOutcome::Ordinary(
+                arkret_models_collaboration::authority_commit::SelfAuthoritySubmitOutcome::Ordinary(
                     arkret_wire::AuthoritySubmitOutcome::Accepted {
                         status: arkret_wire::AuthorityCommitStatus::Committed,
                         ..
