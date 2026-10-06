@@ -3317,12 +3317,14 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             let accepted: arkret_wire::RealmCommit = decode_json(row.accepted_json, "bound leave accepted witness")?;
             let submission: SelfAuthoritySubmitRequest = decode_json(row.submission_json, "bound leave original intent")?;
             let fact: HumanHistoricalSignerFact = decode_json(row.fact_json, "bound leave original fact")?;
-            let member: MembershipPayload = decode_json(row.member_value, "bound leave effective membership")?;
+            let member: arkret_wire::MemberStateCurrent = decode_json(row.member_value, "bound leave effective membership")?;
             let join_event: arkret_wire::Event = decode_json(row.join_envelope, "bound leave opening Event")?;
             let join_commit: arkret_wire::RealmCommit = decode_json(row.join_commit_json, "bound leave opening Commit")?;
             let SelfAuthoritySubmitRequest::Event(submitted) = submission else { return Ok(false); };
             if held_event != *event || held_commit != *commit || accepted != *commit || submitted.event != *event
-                || member != payload
+                || member != (arkret_wire::MemberStateCurrent {
+                    membership: arkret_wire::MembershipState::Leave, joined_at: None,
+                })
                 || join_event.actor_id != actor || join_event.realm_id != event.realm_id
                 || join_event.scope_ref != event.scope_ref || join_commit.event_ref != join_event.event_id
             { return Ok(false); }

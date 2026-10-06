@@ -1018,7 +1018,7 @@ fn strand_create_request(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommit
             "metadata":{"title":"Restart test"},
             "state":"active",
             "created_by":actor,
-            "created_at":at,
+            "created_at":arkret_canonical::format_timestamp_canonical(at),
         }}),
         at,
     );
