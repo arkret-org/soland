@@ -569,6 +569,14 @@ async fn check_agent_controller_join(
             "Agent accountability grant is not active",
         ));
     }
+    crate::agent_management_admission::require_join_in_connection(
+        conn,
+        &event.realm_id,
+        controller,
+        agent,
+        commit.committed_at,
+    )
+    .await?;
     // Joining changes the key-access revision. It does not install an MLS
     // leaf; the later Add must cover the new revision with its own claim.
     let mls_active = sql_query(

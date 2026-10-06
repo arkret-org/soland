@@ -335,3 +335,134 @@ fn broad_authorization_cannot_hide_a_narrow_management_restriction() {
     assert!(authorize(&[], &[]).is_err());
     assert!(authorize(&[], &["not-a-registered-action"]).is_err());
 }
+
+#[test]
+fn join_default_requires_distinct_accounts_and_join_ban_does_not_stop_execute() {
+    let at = chrono::Utc::now();
+    assert!(require_join(&[], &realm(), &account("controller"), &account("agent"), at).is_ok());
+    assert!(require_join(&[], &realm(), &account("agent"), &account("agent"), at).is_err());
+    let policies = [policy(None, vec!["join"], "deny")];
+    assert!(
+        require_join(
+            &policies,
+            &realm(),
+            &account("controller"),
+            &account("agent"),
+            at
+        )
+        .is_err()
+    );
+    assert_eq!(
+        check(
+            &policies,
+            &["ak.message.create"],
+            &OperationFacts::default()
+        )
+        .unwrap(),
+        ["ak.message.create"]
+    );
+    assert!(
+        require_join(
+            &[policy(None, vec!["execute", "authorize"], "deny")],
+            &realm(),
+            &account("controller"),
+            &account("agent"),
+            at
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn controller_join_ban_matches_future_agents_and_exact_station_not_sibling_owners() {
+    let policies = [policy(None, vec!["join"], "deny")];
+    let at = chrono::Utc::now();
+    for agent in [account("agent"), account("future-agent")] {
+        assert!(require_join(&policies, &realm(), &account("controller"), &agent, at).is_err());
+    }
+    assert!(
+        require_join(
+            &policies,
+            &realm(),
+            &account("other-controller"),
+            &account("agent"),
+            at
+        )
+        .is_ok()
+    );
+    let mut foreign = account("controller");
+    foreign.station_id = "ak:did_core:web:other-station.example".parse().unwrap();
+    assert!(require_join(&policies, &realm(), &foreign, &account("agent"), at).is_ok());
+    let mut specific = policy(None, vec!["join"], "deny");
+    specific.rules[0].agent_target = Some(
+        serde_json::from_value(json!({"kind":"agent","agent_account_id":account("agent")}))
+            .unwrap(),
+    );
+    assert!(
+        require_join(
+            &[specific.clone()],
+            &realm(),
+            &account("controller"),
+            &account("agent"),
+            at
+        )
+        .is_err()
+    );
+    assert!(
+        require_join(
+            &[specific],
+            &realm(),
+            &account("controller"),
+            &account("sibling"),
+            at
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn join_refuses_unmapped_content_scopes_and_unresolved_approval() {
+    let at = chrono::Utc::now();
+    for effect in ["quarantine", "require_review"] {
+        assert!(
+            require_join(
+                &[policy(None, vec!["join"], effect)],
+                &realm(),
+                &account("controller"),
+                &account("agent"),
+                at
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        require_join(
+            &[policy(
+                Some(vec!["ak.message.create"]),
+                vec!["join"],
+                "deny"
+            )],
+            &realm(),
+            &account("controller"),
+            &account("agent"),
+            at
+        )
+        .is_err()
+    );
+    let mut scoped = policy(None, vec!["join"], "deny");
+    scoped.rules[0].resources = Some(vec![PolicyResourceSelector {
+        kind: PolicyResourceKind::Strand,
+        realm_id: Some(realm()),
+        resource_ref: Some("ak:strand:AT47eNekH0_aKZyIMsXq_s1FAWdYXC71_CUxQ5O478t-".to_owned()),
+    }]);
+    assert!(
+        require_join(
+            &[scoped],
+            &realm(),
+            &account("controller"),
+            &account("agent"),
+            at
+        )
+        .is_err()
+    );
+}
