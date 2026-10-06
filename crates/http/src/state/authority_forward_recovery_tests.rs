@@ -31,7 +31,7 @@ use soland_storage::{
 use soland_storage_postgres::{
     PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::io::{Read, Write};
 
 use super::*;
 
@@ -191,18 +191,67 @@ async fn authenticated_context(
     }
 }
 
+/// The same real CA/leaf fixture used by federation_outbox. Production egress
+/// loads this explicit trust store and keeps certificate/hostname validation.
+/// The driver must supply SSL_CERT_FILE; missing trust is a failure, not a skip.
+struct RegisteredTlsPeer {
+    listener: std::net::TcpListener,
+    tls: Arc<rustls::ServerConfig>,
+}
+
+fn registered_tls_peer() -> Arc<RegisteredTlsPeer> {
+    let expected = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../server/tests/fixtures/outbox-test-ca.pem")
+        .canonicalize()
+        .unwrap();
+    let configured = std::env::var_os("SSL_CERT_FILE")
+        .and_then(|path| std::path::Path::new(&path).canonicalize().ok());
+    assert_eq!(
+        configured.as_deref(),
+        Some(expected.as_path()),
+        "recovery executor requires the checked-in federation outbox test CA"
+    );
+    let certificate = rustls::pki_types::CertificateDer::from(
+        include_bytes!("../../../server/tests/fixtures/outbox-test-cert.der").to_vec(),
+    );
+    let private_key =
+        rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+            include_bytes!("../../../server/tests/fixtures/outbox-test-key.der").to_vec(),
+        ));
+    let tls = Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![certificate], private_key)
+        .unwrap(),
+    );
+    Arc::new(RegisteredTlsPeer {
+        listener: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+        tls,
+    })
+}
+
 async fn tcp_scan(
-    listener: Arc<tokio::net::TcpListener>,
+    listener: Arc<RegisteredTlsPeer>,
     page: PeerStreamScanOutcome,
     expected: StreamScanRequest,
     from: AccountId,
     to: DidCoreId,
 ) -> usize {
-    let (mut stream, _) = listener.accept().await.unwrap();
+    tokio::task::spawn_blocking(move || {
+    let (stream, _) = listener.listener.accept().unwrap();
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    let mut stream = rustls::StreamOwned::new(
+        rustls::ServerConnection::new(listener.tls.clone()).unwrap(), stream,
+    );
     let mut bytes = Vec::new();
     let mut buf = [0u8; 2048];
     let end = loop {
-        let n = stream.read(&mut buf).await.unwrap();
+        let n = stream.read(&mut buf).unwrap();
         assert!(n > 0);
         bytes.extend_from_slice(&buf[..n]);
         assert!(bytes.len() < 1024 * 1024);
@@ -232,7 +281,7 @@ async fn tcp_scan(
     let length = fields["content-length"].parse::<usize>().unwrap();
     assert!(length < 1024 * 1024);
     while bytes.len() < end + length {
-        let n = stream.read(&mut buf).await.unwrap();
+        let n = stream.read(&mut buf).unwrap();
         assert!(n > 0);
         bytes.extend_from_slice(&buf[..n]);
     }
@@ -243,15 +292,18 @@ async fn tcp_scan(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(response.as_bytes()).await.unwrap();
-    stream.write_all(&body).await.unwrap();
+    stream.write_all(response.as_bytes()).unwrap();
+    stream.write_all(&body).unwrap();
+    stream.flush().unwrap();
+    assert!(!stream.conn.is_handshaking());
     1
+    }).await.unwrap()
 }
 
 #[tokio::test]
 async fn accepted_forward_witness_reopens_then_executes_registered_prefix_without_new_submission() {
-    let listener = Arc::new(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
-    let base = format!("http://{}/", listener.local_addr().unwrap());
+    let listener = registered_tls_peer();
+    let base = format!("https://{}/", listener.listener.local_addr().unwrap());
     let (governor_state, governor_pool, _governor_lease) = station(base.clone());
     let (origin, origin_pool, _origin_lease) =
         station("https://forward-recovery-origin.internal/".into());
