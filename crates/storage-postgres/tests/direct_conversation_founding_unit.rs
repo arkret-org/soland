@@ -2982,6 +2982,20 @@ async fn group_state(pool: &PgPool, realm_id: &RealmId) -> (bool, Option<String>
 #[tokio::test]
 async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_binding_at_the_cut()
 {
+    boxed_participant_authority_scenario().await;
+}
+
+// Keep signed-source Future construction out of the scenario poll frame.
+fn boxed_source<F: std::future::Future>(source: impl FnOnce() -> F) -> std::pin::Pin<Box<F>> {
+    Box::pin(source())
+}
+
+fn boxed_participant_authority_scenario()
+-> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(participant_authority_scenario())
+}
+
+async fn participant_authority_scenario() {
     let pool = contract_pool().await;
     let pair = pair(&pool).await;
     let store = pair.store();
@@ -3004,246 +3018,267 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         code
     };
 
-    // realm-and-space.md §2.5 row 5: the founding create fixed history.
-    assert_eq!(
-        count(
-            &pool,
-            "SELECT COUNT(*) AS count FROM realm_bootstrap_current_results \
-             WHERE realm_id=$1 AND result_family='realm_history_access' AND value='\"since_join\"'",
-            &realm_id,
-        )
-        .await,
-        1
-    );
-
-    // A bootstrap Message before the group Genesis has no provisional phase.
-    let early = sourced_cited(
-        &pair,
-        &unit.transactions[3],
-        EventKind::MessageCreate,
-        founder.clone(),
-        ciphertext(&facts.main_strand_id, 0, &create_ref),
-        Cites::Bootstrap(&create_ref),
-    )
-    .await;
-    assert_eq!(
-        refused(&early).await,
-        ConflictCode::DirectConversationParticipantAuthorityDenied
-    );
-
-    let SelfProducerCommitGuard::HumanDevice(device) = &pair.founder_guard else {
-        unreachable!()
-    };
-    let scope = arkret_wire::ScopeRef::Realm {
-        realm_id: realm_id.clone(),
-    };
-    let identity = arkret_mls::ArkretMlsIdentity::new_human_device(
-        founder.clone(),
-        arkret_wire::DeviceId::new(device.device_id.clone()).unwrap(),
-        arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
-            ed25519_dalek::SigningKey::from_bytes(&pair.founder_signing_seed),
-        ),
-    )
-    .unwrap();
-    let binding = |base, previous, next| {
-        arkret_models_crypto::MlsGovernanceBindingPayload::realm(
-            realm_id.clone(),
-            base,
-            previous,
-            next,
-            0,
-        )
-        .unwrap()
-    };
-    let mut encryption_group = identity
-        .create_group_with_governance_binding(&scope, &binding(None, 0, 0))
-        .unwrap();
-    let (group_info, ratchet_tree) = encryption_group.public_group_state_bytes().unwrap();
-    let mut tracker = arkret_mls::MlsPublicGroupTracker::from_external(
-        &group_info,
-        &ratchet_tree,
-        encryption_group.group_id().as_str(),
-        0,
-    )
-    .unwrap();
-    let blob_ref = |bytes: &[u8]| {
-        arkret_wire::BlobRef::new(format!(
-            "ak:blob:{}",
-            arkret_canonical::sha256_digest(bytes)
-        ))
-        .unwrap()
-    };
-    let public_blob = |bytes: &[u8]| {
-        let sha256 = arkret_canonical::sha256_digest(bytes)
-            .strip_prefix("sha256:")
-            .unwrap()
-            .to_owned();
-        soland_storage::MlsPublicBlob {
-            blob_ref: blob_ref(bytes),
-            sha256: sha256.clone(),
-            size_bytes: i64::try_from(bytes.len()).unwrap(),
-            storage_backend: "local".to_owned(),
-            storage_key: format!("sha256/{sha256}"),
-        }
-    };
-    let mut genesis_payload = mls_genesis_payload(&pair, &realm_id, at);
-    genesis_payload["group_info_ref"] = serde_json::to_value(blob_ref(&group_info)).unwrap();
-    genesis_payload["ratchet_tree_ref"] = serde_json::to_value(blob_ref(&ratchet_tree)).unwrap();
-    // The root's materialization mask admits the scope's one Genesis.
-    let mut genesis = with_group(
-        sourced_cited(
-            &pair,
-            &unit.transactions[3],
-            EventKind::MlsGenesis,
-            founder.clone(),
-            genesis_payload,
-            Cites::Nothing,
-        )
-        .await,
-        None,
-        0,
-        &[&founder],
-    );
-    let material = genesis.authority_commit.mls_state.as_mut().unwrap();
-    material.public_state = tracker.export_state().unwrap();
-    material.public_blobs = vec![public_blob(&group_info), public_blob(&ratchet_tree)];
-    uow.commit_event(genesis.clone()).await.unwrap();
-    let genesis_ref = genesis.authority_commit.event.event_id.clone();
-    assert_eq!(group_state(&pool, &realm_id).await, (false, None));
-
-    // Provisional: the founder alone sends under the bootstrap source.
-    let provisional = sourced_cited(
-        &pair,
-        &genesis.authority_commit,
-        EventKind::MessageCreate,
-        founder.clone(),
-        ciphertext(&facts.main_strand_id, 0, &genesis_ref),
-        Cites::Bootstrap(&create_ref),
-    )
-    .await;
-    uow.commit_event(provisional.clone()).await.unwrap();
-    let head = provisional.authority_commit.clone();
-    for denied in [
-        sourced_cited(
-            &pair,
-            &head,
-            EventKind::MessageCreate,
-            founder.clone(),
-            ciphertext(&facts.main_strand_id, 0, &genesis_ref),
-            Cites::Nothing,
-        )
-        .await,
-        sourced_cited(
-            &pair,
-            &head,
-            EventKind::MessageCreate,
-            founder.clone(),
-            ciphertext(&facts.main_strand_id, 0, &genesis_ref),
-            Cites::Bootstrap(&genesis_ref),
-        )
-        .await,
-        sourced_cited(
-            &pair,
-            &head,
-            EventKind::MessageCreate,
-            peer.clone(),
-            ciphertext(&facts.main_strand_id, 0, &genesis_ref),
-            Cites::Bootstrap(&create_ref),
-        )
-        .await,
-    ] {
+    let (genesis_ref, add, add_ref, mut encryption_group, scope) = boxed_source(|| async {
+        // realm-and-space.md §2.5 row 5: the founding create fixed history.
         assert_eq!(
-            refused(&denied).await,
+            count(
+                &pool,
+                "SELECT COUNT(*) AS count FROM realm_bootstrap_current_results \
+             WHERE realm_id=$1 AND result_family='realm_history_access' AND value='\"since_join\"'",
+                &realm_id,
+            )
+            .await,
+            1
+        );
+
+        // A bootstrap Message before the group Genesis has no provisional phase.
+        let early = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &unit.transactions[3],
+                EventKind::MessageCreate,
+                founder.clone(),
+                ciphertext(&facts.main_strand_id, 0, &create_ref),
+                Cites::Bootstrap(&create_ref),
+            )
+        })
+        .await;
+        assert_eq!(
+            refused(&early).await,
             ConflictCode::DirectConversationParticipantAuthorityDenied
         );
-    }
 
-    // The founder's Add makes the roster exactly the pair: the first such
-    // Commit is the binding's initial group state.
-    let peer_device =
-        arkret_wire::DeviceId::new(pair.peer_method.as_str().split_once('#').unwrap().1).unwrap();
-    let peer_identity = arkret_mls::ArkretMlsIdentity::new_human_device(
-        peer.clone(),
-        peer_device,
-        arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
-            ed25519_dalek::SigningKey::from_bytes(&pair.peer_signing_seed),
-        ),
-    )
-    .unwrap();
-    let peer_package = claim_human_peer_package(
-        &pair,
-        &scope,
-        &facts.pair_key,
-        &facts.main_strand_id,
-        peer_identity.key_package_record().unwrap(),
-    )
-    .await;
-    let add_binding = binding(Some(genesis_ref.clone()), 0, 1);
-    let real_add = encryption_group
-        .add_member_with_governance_binding(&peer_package, &add_binding)
-        .unwrap();
-    tracker
-        .process_public_handshake(
-            &arkret_canonical::base64url_decode(&real_add.commit.commit).unwrap(),
-        )
-        .unwrap();
-    let groups = soland_storage_postgres::PgMlsGroupCurrentStore { pool: pool.clone() };
-    let accepted_base = soland_storage::MlsGroupCurrentStore::current(&groups, &scope)
-        .await
-        .unwrap()
-        .unwrap()
-        .value;
-    let mut add = with_group(
-        sourced_cited(
-            &pair,
-            &head,
-            EventKind::MlsCommit,
+        let SelfProducerCommitGuard::HumanDevice(device) = &pair.founder_guard else {
+            unreachable!()
+        };
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let identity = arkret_mls::ArkretMlsIdentity::new_human_device(
             founder.clone(),
-            serde_json::to_value(
-                arkret_models_crypto::MlsCommitPayload::new(
-                    genesis_ref.clone(),
-                    accepted_base.current_key_access_revision,
-                    &real_add.commit,
-                    add_binding,
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-            Cites::Bootstrap(&create_ref),
-        )
-        .await,
-        Some((&genesis_ref, 0)),
-        1,
-        &[&founder, &peer],
-    );
-    let material = add.authority_commit.mls_state.as_mut().unwrap();
-    material.public_state = tracker.export_state().unwrap();
-    material.public_blobs = vec![public_blob(&tracker.ratchet_tree_bytes().unwrap())];
-    uow.commit_event(add.clone()).await.unwrap();
-    encryption_group
-        .install_accepted_commit(
-            &arkret_wire::CommittedEventFullView {
-                event: add.authority_commit.event.clone(),
-                commit: add.authority_commit.commit.clone(),
-            },
-            &accepted_base,
+            arkret_wire::DeviceId::new(device.device_id.clone()).unwrap(),
+            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+                ed25519_dalek::SigningKey::from_bytes(&pair.founder_signing_seed),
+            ),
         )
         .unwrap();
-    assert_eq!(encryption_group.epoch(), 1);
-    let add_ref = add.authority_commit.event.event_id.clone();
-    assert_eq!(
-        group_state(&pool, &realm_id).await,
-        (true, Some(add_ref.to_string()))
-    );
+        let binding = |base, previous, next| {
+            arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+                realm_id.clone(),
+                base,
+                previous,
+                next,
+                0,
+            )
+            .unwrap()
+        };
+        let mut encryption_group = identity
+            .create_group_with_governance_binding(&scope, &binding(None, 0, 0))
+            .unwrap();
+        let (group_info, ratchet_tree) = encryption_group.public_group_state_bytes().unwrap();
+        let mut tracker = arkret_mls::MlsPublicGroupTracker::from_external(
+            &group_info,
+            &ratchet_tree,
+            encryption_group.group_id().as_str(),
+            0,
+        )
+        .unwrap();
+        let blob_ref = |bytes: &[u8]| {
+            arkret_wire::BlobRef::new(format!(
+                "ak:blob:{}",
+                arkret_canonical::sha256_digest(bytes)
+            ))
+            .unwrap()
+        };
+        let public_blob = |bytes: &[u8]| {
+            let sha256 = arkret_canonical::sha256_digest(bytes)
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_owned();
+            soland_storage::MlsPublicBlob {
+                blob_ref: blob_ref(bytes),
+                sha256: sha256.clone(),
+                size_bytes: i64::try_from(bytes.len()).unwrap(),
+                storage_backend: "local".to_owned(),
+                storage_key: format!("sha256/{sha256}"),
+            }
+        };
+        let mut genesis_payload = mls_genesis_payload(&pair, &realm_id, at);
+        genesis_payload["group_info_ref"] = serde_json::to_value(blob_ref(&group_info)).unwrap();
+        genesis_payload["ratchet_tree_ref"] =
+            serde_json::to_value(blob_ref(&ratchet_tree)).unwrap();
+        // The root's materialization mask admits the scope's one Genesis.
+        let mut genesis = with_group(
+            boxed_source(|| {
+                sourced_cited(
+                    &pair,
+                    &unit.transactions[3],
+                    EventKind::MlsGenesis,
+                    founder.clone(),
+                    genesis_payload,
+                    Cites::Nothing,
+                )
+            })
+            .await,
+            None,
+            0,
+            &[&founder],
+        );
+        let material = genesis.authority_commit.mls_state.as_mut().unwrap();
+        material.public_state = tracker.export_state().unwrap();
+        material.public_blobs = vec![public_blob(&group_info), public_blob(&ratchet_tree)];
+        uow.commit_event(genesis.clone()).await.unwrap();
+        let genesis_ref = genesis.authority_commit.event.event_id.clone();
+        assert_eq!(group_state(&pool, &realm_id).await, (false, None));
 
-    let basis = {
-        #[derive(diesel::QueryableByName)]
-        struct BasisRow {
-            #[diesel(sql_type = diesel::sql_types::Jsonb)]
-            authorization_basis: serde_json::Value,
+        // Provisional: the founder alone sends under the bootstrap source.
+        let provisional = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &genesis.authority_commit,
+                EventKind::MessageCreate,
+                founder.clone(),
+                ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+                Cites::Bootstrap(&create_ref),
+            )
+        })
+        .await;
+        uow.commit_event(provisional.clone()).await.unwrap();
+        let head = provisional.authority_commit.clone();
+        for denied in [
+            boxed_source(|| {
+                sourced_cited(
+                    &pair,
+                    &head,
+                    EventKind::MessageCreate,
+                    founder.clone(),
+                    ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+                    Cites::Nothing,
+                )
+            })
+            .await,
+            boxed_source(|| {
+                sourced_cited(
+                    &pair,
+                    &head,
+                    EventKind::MessageCreate,
+                    founder.clone(),
+                    ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+                    Cites::Bootstrap(&genesis_ref),
+                )
+            })
+            .await,
+            boxed_source(|| {
+                sourced_cited(
+                    &pair,
+                    &head,
+                    EventKind::MessageCreate,
+                    peer.clone(),
+                    ciphertext(&facts.main_strand_id, 0, &genesis_ref),
+                    Cites::Bootstrap(&create_ref),
+                )
+            })
+            .await,
+        ] {
+            assert_eq!(
+                refused(&denied).await,
+                ConflictCode::DirectConversationParticipantAuthorityDenied
+            );
         }
-        let mut conn = pool.get().await.unwrap();
-        diesel::sql_query(
+
+        // The founder's Add makes the roster exactly the pair: the first such
+        // Commit is the binding's initial group state.
+        let peer_device =
+            arkret_wire::DeviceId::new(pair.peer_method.as_str().split_once('#').unwrap().1)
+                .unwrap();
+        let peer_identity = arkret_mls::ArkretMlsIdentity::new_human_device(
+            peer.clone(),
+            peer_device,
+            arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+                ed25519_dalek::SigningKey::from_bytes(&pair.peer_signing_seed),
+            ),
+        )
+        .unwrap();
+        let peer_package = claim_human_peer_package(
+            &pair,
+            &scope,
+            &facts.pair_key,
+            &facts.main_strand_id,
+            peer_identity.key_package_record().unwrap(),
+        )
+        .await;
+        let add_binding = binding(Some(genesis_ref.clone()), 0, 1);
+        let real_add = encryption_group
+            .add_member_with_governance_binding(&peer_package, &add_binding)
+            .unwrap();
+        tracker
+            .process_public_handshake(
+                &arkret_canonical::base64url_decode(&real_add.commit.commit).unwrap(),
+            )
+            .unwrap();
+        let groups = soland_storage_postgres::PgMlsGroupCurrentStore { pool: pool.clone() };
+        let accepted_base = soland_storage::MlsGroupCurrentStore::current(&groups, &scope)
+            .await
+            .unwrap()
+            .unwrap()
+            .value;
+        let mut add = with_group(
+            boxed_source(|| {
+                sourced_cited(
+                    &pair,
+                    &head,
+                    EventKind::MlsCommit,
+                    founder.clone(),
+                    serde_json::to_value(
+                        arkret_models_crypto::MlsCommitPayload::new(
+                            genesis_ref.clone(),
+                            accepted_base.current_key_access_revision,
+                            &real_add.commit,
+                            add_binding,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                    Cites::Bootstrap(&create_ref),
+                )
+            })
+            .await,
+            Some((&genesis_ref, 0)),
+            1,
+            &[&founder, &peer],
+        );
+        let material = add.authority_commit.mls_state.as_mut().unwrap();
+        material.public_state = tracker.export_state().unwrap();
+        material.public_blobs = vec![public_blob(&tracker.ratchet_tree_bytes().unwrap())];
+        uow.commit_event(add.clone()).await.unwrap();
+        encryption_group
+            .install_accepted_commit(
+                &arkret_wire::CommittedEventFullView {
+                    event: add.authority_commit.event.clone(),
+                    commit: add.authority_commit.commit.clone(),
+                },
+                &accepted_base,
+            )
+            .unwrap();
+        assert_eq!(encryption_group.epoch(), 1);
+        let add_ref = add.authority_commit.event.event_id.clone();
+        assert_eq!(
+            group_state(&pool, &realm_id).await,
+            (true, Some(add_ref.to_string()))
+        );
+
+        (genesis_ref, add, add_ref, encryption_group, scope)
+    })
+    .await;
+    let basis = boxed_source(|| async {
+        let basis = {
+            #[derive(diesel::QueryableByName)]
+            struct BasisRow {
+                #[diesel(sql_type = diesel::sql_types::Jsonb)]
+                authorization_basis: serde_json::Value,
+            }
+            let mut conn = pool.get().await.unwrap();
+            diesel::sql_query(
             "SELECT authorization_basis FROM direct_conversation_founding_slots WHERE realm_id=$1",
         )
         .bind::<Text, _>(realm_id.as_str())
@@ -3251,7 +3286,10 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         .await
         .unwrap()
         .authorization_basis
-    };
+        };
+        basis
+    })
+    .await;
     // The canonical basis is the round's accepted request and accept heads.
     assert_eq!(basis["kind"], "accepted_contact");
     assert_eq!(basis["event_refs"].as_array().unwrap().len(), 2);
@@ -3269,150 +3307,170 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
             ),
         })
     };
-
-    record_peer_welcome(&pool, &pair.station, &add, &peer, "claimed", 0).await;
-    // Until the peer's Welcome is durable the Realm stays provisional: no
-    // endorsement, while the founder still sends at the new epoch.
-    let early_binding = sourced_cited(
-        &pair,
-        &add.authority_commit,
-        EventKind::DirectConversationBound,
-        peer.clone(),
-        endorsement(&add_ref, 1),
-        Cites::Bootstrap(&create_ref),
-    )
-    .await;
-    assert_eq!(
-        refused(&early_binding).await,
-        ConflictCode::DirectConversationParticipantAuthorityDenied
-    );
-    // Distinct real RFC 9420 messages use the actual accepted pair Add above,
-    // rather than merging a staged transition or manufacturing a receipt.
-    let mut encrypted_payload = |plaintext: &[u8]| {
-        let header = arkret_models_crypto::EventContentPreEncryptionHeader::reconstruct(
-            "1.0",
-            "application/vnd.arkret.message+json",
-            arkret_wire::EncryptedPayloadScheme::MlsRfc9420,
-            scope.clone(),
-            EventKind::MessageCreate.as_str(),
-            encryption_group.epoch(),
-            add_ref.clone(),
-            encryption_group.local_content_sender_domain().unwrap(),
-            arkret_models_crypto::EventContentRoutingContext::None,
-        )
-        .unwrap();
-        let envelope = encryption_group
-            .encrypt_payload(header, plaintext)
-            .unwrap()
-            .to_envelope()
-            .unwrap();
-        serde_json::json!({ "strand_id": facts.main_strand_id,
-            "track_name": "discussion", "encrypted_content": envelope })
-    };
-    let stale_payload = encrypted_payload(b"{\"content\":\"older provisional\"}");
-    let later_payload = encrypted_payload(b"{\"content\":\"later provisional\"}");
-    assert_ne!(
-        stale_payload["encrypted_content"]["ciphertext"],
-        later_payload["encrypted_content"]["ciphertext"]
-    );
-    let stale_provisional = sourced_cited(
-        &pair,
-        &add.authority_commit,
-        EventKind::MessageCreate,
-        founder.clone(),
-        stale_payload,
-        Cites::Bootstrap(&create_ref),
-    )
-    .await;
-    let later_provisional = sourced_cited(
-        &pair,
-        &add.authority_commit,
-        EventKind::MessageCreate,
-        founder.clone(),
-        later_payload,
-        Cites::Bootstrap(&create_ref),
-    )
-    .await;
-    assert_ne!(
-        stale_provisional.authority_commit.event.event_id,
-        later_provisional.authority_commit.event.event_id
-    );
-    uow.commit_event(later_provisional.clone()).await.unwrap();
-
-    // Completion: once the peer consumed its Welcome, only an endorsement is
-    // admitted. The provisional Message authored at the older cut is re-decided
-    // at this one and refused.
-    consume_peer_welcome(&pool, &pair.station, &add, &peer).await;
-    let head = later_provisional.authority_commit.clone();
-    let replayed = ordinary_realm::request_for_event(
-        &head,
-        stale_provisional.authority_commit.event.clone(),
-        head.commit.committed_at,
-    );
-    assert_eq!(
-        refused(&replayed).await,
-        ConflictCode::DirectConversationParticipantAuthorityDenied
-    );
-    for (mutated, code) in [
-        (
-            endorsement(&genesis_ref, 1),
-            ConflictCode::DirectConversationBindingInvalid,
-        ),
-        (
-            {
-                let mut payload = endorsement(&add_ref, 1);
-                payload["pair_key"] = serde_json::json!(fixture_hash('9'));
-                payload
-            },
-            ConflictCode::DirectConversationBindingInvalid,
-        ),
-        (
-            {
-                let mut payload = endorsement(&add_ref, 1);
-                payload["authorization_basis"]["event_refs"][0] =
-                    serde_json::json!(unique_event_id("other-head"));
-                payload
-            },
-            ConflictCode::DirectConversationBindingInvalid,
-        ),
-    ] {
-        let request = sourced_cited(
-            &pair,
-            &head,
-            EventKind::DirectConversationBound,
-            peer.clone(),
-            mutated,
-            Cites::Bootstrap(&create_ref),
-        )
+    let (stale_provisional, later_provisional) = boxed_source(|| async {
+        record_peer_welcome(&pool, &pair.station, &add, &peer, "claimed", 0).await;
+        // Until the peer's Welcome is durable the Realm stays provisional: no
+        // endorsement, while the founder still sends at the new epoch.
+        let early_binding = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &add.authority_commit,
+                EventKind::DirectConversationBound,
+                peer.clone(),
+                endorsement(&add_ref, 1),
+                Cites::Bootstrap(&create_ref),
+            )
+        })
         .await;
-        assert_eq!(refused(&request).await, code);
-    }
-    let peer_endorsement = sourced_cited(
-        &pair,
-        &head,
-        EventKind::DirectConversationBound,
-        peer.clone(),
-        endorsement(&add_ref, 1),
-        Cites::Bootstrap(&create_ref),
-    )
-    .await;
-    uow.commit_event(peer_endorsement.clone()).await.unwrap();
-    let binding_ref = peer_endorsement.authority_commit.event.event_id.clone();
+        assert_eq!(
+            refused(&early_binding).await,
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        );
+        // Distinct real RFC 9420 messages use the actual accepted pair Add above,
+        // rather than merging a staged transition or manufacturing a receipt.
+        let mut encrypted_payload = |plaintext: &[u8]| {
+            let header = arkret_models_crypto::EventContentPreEncryptionHeader::reconstruct(
+                "1.0",
+                "application/vnd.arkret.message+json",
+                arkret_wire::EncryptedPayloadScheme::MlsRfc9420,
+                scope.clone(),
+                EventKind::MessageCreate.as_str(),
+                encryption_group.epoch(),
+                add_ref.clone(),
+                encryption_group.local_content_sender_domain().unwrap(),
+                arkret_models_crypto::EventContentRoutingContext::None,
+            )
+            .unwrap();
+            let envelope = encryption_group
+                .encrypt_payload(header, plaintext)
+                .unwrap()
+                .to_envelope()
+                .unwrap();
+            serde_json::json!({ "strand_id": facts.main_strand_id,
+            "track_name": "discussion", "encrypted_content": envelope })
+        };
+        let stale_payload = encrypted_payload(b"{\"content\":\"older provisional\"}");
+        let later_payload = encrypted_payload(b"{\"content\":\"later provisional\"}");
+        assert_ne!(
+            stale_payload["encrypted_content"]["ciphertext"],
+            later_payload["encrypted_content"]["ciphertext"]
+        );
+        let stale_provisional = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &add.authority_commit,
+                EventKind::MessageCreate,
+                founder.clone(),
+                stale_payload,
+                Cites::Bootstrap(&create_ref),
+            )
+        })
+        .await;
+        let later_provisional = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &add.authority_commit,
+                EventKind::MessageCreate,
+                founder.clone(),
+                later_payload,
+                Cites::Bootstrap(&create_ref),
+            )
+        })
+        .await;
+        assert_ne!(
+            stale_provisional.authority_commit.event.event_id,
+            later_provisional.authority_commit.event.event_id
+        );
+        uow.commit_event(later_provisional.clone()).await.unwrap();
 
-    // Found: a compatible endorsement by the other participant accumulates;
-    // the bootstrap source no longer carries a Message.
-    let founder_endorsement = sourced_cited(
-        &pair,
-        &peer_endorsement.authority_commit,
-        EventKind::DirectConversationBound,
-        founder.clone(),
-        endorsement(&add_ref, 2),
-        Cites::Bootstrap(&create_ref),
-    )
+        (stale_provisional, later_provisional)
+    })
     .await;
-    uow.commit_event(founder_endorsement.clone()).await.unwrap();
-    let head = founder_endorsement.authority_commit.clone();
-    assert_eq!(dc_footprint(&pool, &realm_id).await[6], 2);
+    let (head, binding_ref, founder_endorsement) = boxed_source(|| async {
+        // Completion: once the peer consumed its Welcome, only an endorsement is
+        // admitted. The provisional Message authored at the older cut is re-decided
+        // at this one and refused.
+        consume_peer_welcome(&pool, &pair.station, &add, &peer).await;
+        let head = later_provisional.authority_commit.clone();
+        let replayed = ordinary_realm::request_for_event(
+            &head,
+            stale_provisional.authority_commit.event.clone(),
+            head.commit.committed_at,
+        );
+        assert_eq!(
+            refused(&replayed).await,
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        );
+        for (mutated, code) in [
+            (
+                endorsement(&genesis_ref, 1),
+                ConflictCode::DirectConversationBindingInvalid,
+            ),
+            (
+                {
+                    let mut payload = endorsement(&add_ref, 1);
+                    payload["pair_key"] = serde_json::json!(fixture_hash('9'));
+                    payload
+                },
+                ConflictCode::DirectConversationBindingInvalid,
+            ),
+            (
+                {
+                    let mut payload = endorsement(&add_ref, 1);
+                    payload["authorization_basis"]["event_refs"][0] =
+                        serde_json::json!(unique_event_id("other-head"));
+                    payload
+                },
+                ConflictCode::DirectConversationBindingInvalid,
+            ),
+        ] {
+            let request = boxed_source(|| {
+                sourced_cited(
+                    &pair,
+                    &head,
+                    EventKind::DirectConversationBound,
+                    peer.clone(),
+                    mutated,
+                    Cites::Bootstrap(&create_ref),
+                )
+            })
+            .await;
+            assert_eq!(refused(&request).await, code);
+        }
+        let peer_endorsement = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &head,
+                EventKind::DirectConversationBound,
+                peer.clone(),
+                endorsement(&add_ref, 1),
+                Cites::Bootstrap(&create_ref),
+            )
+        })
+        .await;
+        uow.commit_event(peer_endorsement.clone()).await.unwrap();
+        let binding_ref = peer_endorsement.authority_commit.event.event_id.clone();
+
+        // Found: a compatible endorsement by the other participant accumulates;
+        // the bootstrap source no longer carries a Message.
+        let founder_endorsement = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &peer_endorsement.authority_commit,
+                EventKind::DirectConversationBound,
+                founder.clone(),
+                endorsement(&add_ref, 2),
+                Cites::Bootstrap(&create_ref),
+            )
+        })
+        .await;
+        uow.commit_event(founder_endorsement.clone()).await.unwrap();
+        let head = founder_endorsement.authority_commit.clone();
+        assert_eq!(dc_footprint(&pool, &realm_id).await[6], 2);
+        (head, binding_ref, founder_endorsement)
+    })
+    .await;
+    boxed_source(|| async {
     for participant in [&pair.founder, &pair.peer] {
         let snapshot =
             soland_storage_postgres::account_snapshot_material(&pool, &realm_id, participant)
@@ -3504,14 +3562,14 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     assert_eq!(durable.binding.unwrap().endorsements.len(), 2);
     assert_eq!(
         refused(
-            &sourced_cited(
+            &boxed_source(|| sourced_cited(
                 &pair,
                 &head,
                 EventKind::MessageCreate,
                 founder.clone(),
                 ciphertext(&facts.main_strand_id, 1, &add_ref),
                 Cites::Bootstrap(&create_ref),
-            )
+            ))
             .await
         )
         .await,
@@ -3520,14 +3578,14 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     // The participant source needs an accepted endorsement as its ref.
     assert_eq!(
         refused(
-            &sourced_cited(
+            &boxed_source(|| sourced_cited(
                 &pair,
                 &head,
                 EventKind::MessageCreate,
                 peer.clone(),
                 ciphertext(&facts.main_strand_id, 1, &add_ref),
                 Cites::Participant(&add_ref),
-            )
+            ))
             .await
         )
         .await,
@@ -3535,14 +3593,14 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     );
     // The technical root carries no masked action once found.
     let second_genesis = with_group(
-        sourced_cited(
+        boxed_source(|| sourced_cited(
             &pair,
             &head,
             EventKind::MlsGenesis,
             founder.clone(),
             mls_genesis_payload(&pair, &realm_id, at),
             Cites::Nothing,
-        )
+        ))
         .await,
         None,
         0,
@@ -3553,7 +3611,9 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         ConflictCode::DirectConversationRootMaskViolation
     );
 
-    let head = Box::pin(exercise_flat_topics(
+    }).await;
+    let head = boxed_source(|| async {
+    let head = boxed_source(|| exercise_flat_topics(
         &pair,
         &pool,
         &uow,
@@ -3591,14 +3651,14 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         ] {
             assert_eq!(
                 refused(
-                    &sourced_cited(
+                    &boxed_source(|| sourced_cited(
                         &pair,
                         &head,
                         EventKind::StrandWatchSet,
                         actor.clone(),
                         payload(watcher),
                         source
-                    )
+                    ))
                     .await
                 )
                 .await,
@@ -3614,14 +3674,14 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
                 rows_before
             );
         }
-        let write = sourced_cited(
+        let write = boxed_source(|| sourced_cited(
             &pair,
             &head,
             EventKind::StrandWatchSet,
             actor.clone(),
             payload(actor),
             Cites::Participant(&binding_ref),
-        )
+        ))
         .await;
         uow.commit_event(write.clone()).await.unwrap();
         head = write.authority_commit;
@@ -3630,14 +3690,14 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         stale["level"] = serde_json::json!("muted");
         assert_eq!(
             refused(
-                &sourced_cited(
+                &boxed_source(|| sourced_cited(
                     &pair,
                     &head,
                     EventKind::StrandWatchSet,
                     actor.clone(),
                     stale,
                     Cites::Participant(&binding_ref)
-                )
+                ))
                 .await
             )
             .await,
@@ -3647,238 +3707,248 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     }
 
     // Both participants send under the binding, citing either endorsement.
-    let peer_message = sourced_cited(
+    let peer_message = boxed_source(|| sourced_cited(
         &pair,
         &head,
         EventKind::MessageCreate,
         peer.clone(),
         ciphertext(&facts.main_strand_id, 1, &add_ref),
         Cites::Participant(&binding_ref),
-    )
+    ))
     .await;
     uow.commit_event(peer_message.clone()).await.unwrap();
-    let founder_message = sourced_cited(
+    let founder_message = boxed_source(|| sourced_cited(
         &pair,
         &peer_message.authority_commit,
         EventKind::MessageCreate,
         founder.clone(),
         ciphertext(&facts.main_strand_id, 1, &add_ref),
         Cites::Participant(&founder_endorsement.authority_commit.event.event_id),
-    )
+    ))
     .await;
     uow.commit_event(founder_message.clone()).await.unwrap();
     let head = founder_message.authority_commit.clone();
 
-    // Membership repair stays on the same stable Realm.  A joined
-    // participant may leave only through the participant source; while left,
-    // participant authority is inactive and only the repair source can carry
-    // that same participant's `leave -> join` edge.
-    let leave = sourced_cited(
-        &pair,
-        &head,
-        EventKind::MemberState,
-        peer.clone(),
-        serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"leave"}),
-        Cites::Participant(&binding_ref),
-    )
-    .await;
-    uow.commit_event(leave.clone()).await.unwrap();
-    assert_eq!(
-        refused(
-            &sourced_cited(
+    head
+    }).await;
+    boxed_source(|| async {
+        // Membership repair stays on the same stable Realm.  A joined
+        // participant may leave only through the participant source; while left,
+        // participant authority is inactive and only the repair source can carry
+        // that same participant's `leave -> join` edge.
+        let leave = boxed_source(|| {
+            sourced_cited(
+                &pair,
+                &head,
+                EventKind::MemberState,
+                peer.clone(),
+                serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"leave"}),
+                Cites::Participant(&binding_ref),
+            )
+        })
+        .await;
+        uow.commit_event(leave.clone()).await.unwrap();
+        assert_eq!(
+            refused(
+                &boxed_source(|| sourced_cited(
+                    &pair,
+                    &leave.authority_commit,
+                    EventKind::MemberState,
+                    peer.clone(),
+                    serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
+                    Cites::Participant(&binding_ref),
+                ))
+                .await
+            )
+            .await,
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        );
+        let rejoin = boxed_source(|| {
+            sourced_cited(
                 &pair,
                 &leave.authority_commit,
                 EventKind::MemberState,
                 peer.clone(),
                 serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
-                Cites::Participant(&binding_ref),
+                Cites::Repair(&binding_ref),
             )
-            .await
-        )
-        .await,
-        ConflictCode::DirectConversationParticipantAuthorityDenied
-    );
-    let rejoin = sourced_cited(
-        &pair,
-        &leave.authority_commit,
-        EventKind::MemberState,
-        peer.clone(),
-        serde_json::json!({"realm_id":realm_id,"member_id":peer,"membership":"join"}),
-        Cites::Repair(&binding_ref),
-    )
-    .await;
-    uow.commit_event(rejoin.clone()).await.unwrap();
-    let head = rejoin.authority_commit.clone();
-    let rejoin_history = exact_genesis_scan(&store, &realm_id, &pair.peer, &pair.station).await;
-    assert!(rejoin_history.committed_events.is_empty());
-    let rejoin_floor = rejoin_history.readable_floor.unwrap();
-    assert_eq!(rejoin_floor.oldest_position, head.commit.stream_position);
-    assert_eq!(rejoin_floor.floor_commit_id, head.commit.commit_id);
-    // Rejoining does not recover the old atomic unit's below-current-join
-    // foreign originals through the exact GET path.
-    assert!(matches!(
-        store
-            .committed_event_for_member(
-                &unit.transactions[1].event.event_id,
-                &pair.peer_actor(),
-                &pair.station
-            )
-            .await
-            .unwrap(),
-        soland_storage::MemberCommittedEventRead::NotVisible
-    ));
-    assert_eq!(
-        rejoin_floor.floor_reason,
-        arkret_wire::ReadableFloorReason::MembershipJoin
-    );
+        })
+        .await;
+        uow.commit_event(rejoin.clone()).await.unwrap();
+        let head = rejoin.authority_commit.clone();
+        let rejoin_history = exact_genesis_scan(&store, &realm_id, &pair.peer, &pair.station).await;
+        assert!(rejoin_history.committed_events.is_empty());
+        let rejoin_floor = rejoin_history.readable_floor.unwrap();
+        assert_eq!(rejoin_floor.oldest_position, head.commit.stream_position);
+        assert_eq!(rejoin_floor.floor_commit_id, head.commit.commit_id);
+        // Rejoining does not recover the old atomic unit's below-current-join
+        // foreign originals through the exact GET path.
+        assert!(matches!(
+            store
+                .committed_event_for_member(
+                    &unit.transactions[1].event.event_id,
+                    &pair.peer_actor(),
+                    &pair.station
+                )
+                .await
+                .unwrap(),
+            soland_storage::MemberCommittedEventRead::NotVisible
+        ));
+        assert_eq!(
+            rejoin_floor.floor_reason,
+            arkret_wire::ReadableFloorReason::MembershipJoin
+        );
 
-    assert_eq!(
-        store
-            .member_station_bootstrap_floor(&realm_id, &pair.peer, &head.commit.commit_id)
-            .await
-            .unwrap(),
-        Some(head.commit.stream_position)
-    );
-    assert_eq!(
-        store
-            .member_station_bootstrap_floor(
-                &realm_id,
-                &pair.peer,
-                &unit.transactions[2].commit.commit_id
-            )
-            .await
-            .unwrap(),
-        None
-    );
+        assert_eq!(
+            store
+                .member_station_bootstrap_floor(&realm_id, &pair.peer, &head.commit.commit_id)
+                .await
+                .unwrap(),
+            Some(head.commit.stream_position)
+        );
+        assert_eq!(
+            store
+                .member_station_bootstrap_floor(
+                    &realm_id,
+                    &pair.peer,
+                    &unit.transactions[2].commit.commit_id
+                )
+                .await
+                .unwrap(),
+            None
+        );
 
-    // A withdrawn directional Contact stops new sends and personal watch writes.
-    // Advance the candidate's own creation/commit time together so this is a
-    // distinct Event, not a retry of the accepted peer Message above. This
-    // storage-role ciphertext fixture does not prove a peer MLS decryption.
-    let mut conn = pool.get().await.unwrap();
-    diesel::sql_query(
-        "UPDATE contacts SET tombstone_event_ref=request_event_ref \
+        // A withdrawn directional Contact stops new sends and personal watch writes.
+        // Advance the candidate's own creation/commit time together so this is a
+        // distinct Event, not a retry of the accepted peer Message above. This
+        // storage-role ciphertext fixture does not prove a peer MLS decryption.
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "UPDATE contacts SET tombstone_event_ref=request_event_ref \
          WHERE (requester_id=$1 AND target_id=$2) OR (requester_id=$2 AND target_id=$1)",
-    )
-    .bind::<Text, _>(founder.to_string())
-    .bind::<Text, _>(peer.to_string())
-    .execute(&mut *conn)
-    .await
-    .unwrap();
-    drop(conn);
-    assert_eq!(
-        refused(
-            &sourced_cited_at(
-                &pair,
-                &head,
-                EventKind::MessageCreate,
-                peer.clone(),
-                ciphertext(&facts.main_strand_id, 1, &add_ref),
-                Cites::Participant(&binding_ref),
-                head.commit.committed_at + chrono::Duration::seconds(1),
-            )
-            .await
         )
-        .await,
-        ConflictCode::DirectConversationParticipantAuthorityDenied
-    );
-    let watch_rows = count(
-        &pool,
-        "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1",
-        &realm_id,
-    )
-    .await;
-    let watch = arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload::set(
-        facts.main_strand_id.clone(),
-        peer.clone(),
-        arkret_models_collaboration::events_payloads::strand::StrandWatchLevel::Muted,
-        None,
-    );
-    assert_eq!(
-        refused(
-            &sourced_cited(
-                &pair,
-                &head,
-                EventKind::StrandWatchSet,
-                peer.clone(),
-                serde_json::to_value(watch).unwrap(),
-                Cites::Participant(&binding_ref),
+        .bind::<Text, _>(founder.to_string())
+        .bind::<Text, _>(peer.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+        assert_eq!(
+            refused(
+                &boxed_source(|| sourced_cited_at(
+                    &pair,
+                    &head,
+                    EventKind::MessageCreate,
+                    peer.clone(),
+                    ciphertext(&facts.main_strand_id, 1, &add_ref),
+                    Cites::Participant(&binding_ref),
+                    head.commit.committed_at + chrono::Duration::seconds(1),
+                ))
+                .await
             )
-            .await
-        )
-        .await,
-        ConflictCode::DirectConversationParticipantAuthorityDenied
-    );
-    assert_eq!(
-        count(
+            .await,
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        );
+        let watch_rows = count(
             &pool,
             "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1",
             &realm_id,
         )
-        .await,
-        watch_rows
-    );
-    // The actual structure sequence above includes classification cancellation
-    // and lifecycle transitions. Cold hydration must preserve canonical state
-    // even though this fixture gives many Commit positions equal timestamps.
-    let persistence = PgPersistenceStore::new(pool.clone());
-    let canonical =
-        soland_storage::EventProjectionStoreRegistry::object_current_snapshot(&persistence)
-            .snapshot()
+        .await;
+        let watch =
+            arkret_models_collaboration::events_payloads::strand::StrandWatchSetPayload::set(
+                facts.main_strand_id.clone(),
+                peer.clone(),
+                arkret_models_collaboration::events_payloads::strand::StrandWatchLevel::Muted,
+                None,
+            );
+        assert_eq!(
+            refused(
+                &boxed_source(|| sourced_cited(
+                    &pair,
+                    &head,
+                    EventKind::StrandWatchSet,
+                    peer.clone(),
+                    serde_json::to_value(watch).unwrap(),
+                    Cites::Participant(&binding_ref),
+                ))
+                .await
+            )
+            .await,
+            ConflictCode::DirectConversationParticipantAuthorityDenied
+        );
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) AS count FROM strand_watch_current_results WHERE realm_id=$1",
+                &realm_id,
+            )
+            .await,
+            watch_rows
+        );
+        // The actual structure sequence above includes classification cancellation
+        // and lifecycle transitions. Cold hydration must preserve canonical state
+        // even though this fixture gives many Commit positions equal timestamps.
+        let persistence = PgPersistenceStore::new(pool.clone());
+        let canonical =
+            soland_storage::EventProjectionStoreRegistry::object_current_snapshot(&persistence)
+                .snapshot()
+                .await
+                .unwrap();
+        let projection = soland_services::projection::ProjectionService::new("topic-watch-restart");
+        projection
+            .hydrate_from_persistence(&persistence, &CanonicalHydrationAdapter, [realm_id.clone()])
             .await
             .unwrap();
-    let projection = soland_services::projection::ProjectionService::new("topic-watch-restart");
-    projection
-        .hydrate_from_persistence(&persistence, &CanonicalHydrationAdapter, [realm_id.clone()])
-        .await
-        .unwrap();
-    let state = projection.snapshot();
-    let expected = canonical
-        .strands
-        .iter()
-        .filter(|strand| strand.realm_id == realm_id);
-    let mut expected_count = 0;
-    for strand in expected {
-        expected_count += 1;
-        let id = strand.id.as_ref().unwrap();
-        let cached = &state.strands[id.as_str()];
-        let lifecycle = match strand.state.as_ref().unwrap() {
-            arkret_wire::ObjectState::Active => {
-                soland_domain::reducer::ObjectLifecycleState::Active
-            }
-            arkret_wire::ObjectState::Archived => {
-                soland_domain::reducer::ObjectLifecycleState::Archived
-            }
-            arkret_wire::ObjectState::Redacted => {
-                soland_domain::reducer::ObjectLifecycleState::Redacted
-            }
-        };
-        assert_eq!(cached.state, lifecycle);
-        assert_eq!(cached.tracks, strand.tracks);
-        assert_eq!(cached.stage, strand.stage);
-        assert_eq!(
-            cached.content,
-            strand
-                .content
-                .as_ref()
-                .map(|value| serde_json::to_value(value).unwrap())
-        );
-        assert_eq!(
-            cached.encrypted_content,
-            strand
-                .encrypted_content
-                .as_ref()
-                .map(|value| serde_json::to_value(value).unwrap())
-        );
-    }
-    assert_eq!(
-        state
+        let state = projection.snapshot();
+        let expected = canonical
             .strands
-            .values()
-            .filter(|strand| strand.realm_id == realm_id.as_str())
-            .count(),
-        expected_count
-    );
+            .iter()
+            .filter(|strand| strand.realm_id == realm_id);
+        let mut expected_count = 0;
+        for strand in expected {
+            expected_count += 1;
+            let id = strand.id.as_ref().unwrap();
+            let cached = &state.strands[id.as_str()];
+            let lifecycle = match strand.state.as_ref().unwrap() {
+                arkret_wire::ObjectState::Active => {
+                    soland_domain::reducer::ObjectLifecycleState::Active
+                }
+                arkret_wire::ObjectState::Archived => {
+                    soland_domain::reducer::ObjectLifecycleState::Archived
+                }
+                arkret_wire::ObjectState::Redacted => {
+                    soland_domain::reducer::ObjectLifecycleState::Redacted
+                }
+            };
+            assert_eq!(cached.state, lifecycle);
+            assert_eq!(cached.tracks, strand.tracks);
+            assert_eq!(cached.stage, strand.stage);
+            assert_eq!(
+                cached.content,
+                strand
+                    .content
+                    .as_ref()
+                    .map(|value| serde_json::to_value(value).unwrap())
+            );
+            assert_eq!(
+                cached.encrypted_content,
+                strand
+                    .encrypted_content
+                    .as_ref()
+                    .map(|value| serde_json::to_value(value).unwrap())
+            );
+        }
+        assert_eq!(
+            state
+                .strands
+                .values()
+                .filter(|strand| strand.realm_id == realm_id.as_str())
+                .count(),
+            expected_count
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -4095,89 +4165,103 @@ async fn exercise_flat_topics(
         &realm,
     )
     .await;
-    let mut envelope: arkret_models_crypto::EncryptedEnvelope =
-        serde_json::from_value(ciphertext(main, 1, group)["encrypted_content"].clone()).unwrap();
-    envelope.content_type = "application/json".into();
-    let mut space = Space::create_object(realm.clone(), "topic", "", founder.clone());
-    space.title = None;
-    space.encrypted_metadata = Some(envelope.clone());
-    space.created_at = head.commit.committed_at;
-    space.rank = Some("a0".into());
-    for kind in ["list", "board"] {
-        let mut other = space.clone();
-        other.kind = kind.into();
-        let request = sourced_cited(
-            pair,
-            &head,
-            EventKind::SpaceCreate,
-            founder.clone(),
-            serde_json::to_value(SpaceCreatePayload::new(other)).unwrap(),
-            Cites::Participant(binding),
-        )
+    let (mut head, first, second, chat_id, space) = boxed_source(|| async {
+        let mut envelope: arkret_models_crypto::EncryptedEnvelope =
+            serde_json::from_value(ciphertext(main, 1, group)["encrypted_content"].clone())
+                .unwrap();
+        envelope.content_type = "application/json".into();
+        let mut space = Space::create_object(realm.clone(), "topic", "", founder.clone());
+        space.title = None;
+        space.encrypted_metadata = Some(envelope.clone());
+        space.created_at = head.commit.committed_at;
+        space.rank = Some("a0".into());
+        for kind in ["list", "board"] {
+            let mut other = space.clone();
+            other.kind = kind.into();
+            let request = boxed_source(|| {
+                sourced_cited(
+                    pair,
+                    &head,
+                    EventKind::SpaceCreate,
+                    founder.clone(),
+                    serde_json::to_value(SpaceCreatePayload::new(other)).unwrap(),
+                    Cites::Participant(binding),
+                )
+            })
+            .await;
+            let before = dc_footprint(pool, &realm).await;
+            let before_structure = structure(pool, &realm).await;
+            assert_eq!(
+                refusal_code(uow.commit_event(request).await),
+                ConflictCode::DirectConversationSpaceForbidden
+            );
+            assert_eq!(dc_footprint(pool, &realm).await, before);
+            assert_eq!(structure(pool, &realm).await, before_structure);
+        }
+        let create = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::SpaceCreate,
+                founder.clone(),
+                serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
+                Cites::Participant(binding),
+            )
+        })
         .await;
-        let before = dc_footprint(pool, &realm).await;
-        let before_structure = structure(pool, &realm).await;
-        assert_eq!(
-            refusal_code(uow.commit_event(request).await),
-            ConflictCode::DirectConversationSpaceForbidden
+        let first = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
+        uow.commit_event(create.clone()).await.unwrap();
+        head = create.authority_commit;
+        space.created_by = peer.clone();
+        space.created_at = head.commit.committed_at;
+        space.rank = Some("a1".into());
+        let create = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::SpaceCreate,
+                peer.clone(),
+                serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        let second = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
+        uow.commit_event(create.clone()).await.unwrap();
+        head = create.authority_commit;
+        let mut chat = Strand::new_create(realm.clone(), "", founder.clone());
+        chat.metadata = None;
+        chat.encrypted_metadata = Some(envelope);
+        chat.tracks.clear();
+        chat.tracks.insert(
+            "discussion".into(),
+            arkret_models_collaboration::objects::profiles::StrandTrack::discussion_primary(),
         );
-        assert_eq!(dc_footprint(pool, &realm).await, before);
-        assert_eq!(structure(pool, &realm).await, before_structure);
-    }
-    let create = sourced_cited(
-        pair,
-        &head,
-        EventKind::SpaceCreate,
-        founder.clone(),
-        serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
-        Cites::Participant(binding),
-    )
+        chat.created_at = head.commit.committed_at;
+        let create = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::StrandCreate,
+                founder.clone(),
+                serde_json::to_value(StrandCreatePayload { object: chat }).unwrap(),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        let chat_id = arkret_wire::StrandId::from_event_id(&create.authority_commit.event.event_id);
+        uow.commit_event(create.clone()).await.unwrap();
+        head = create.authority_commit;
+        (head, first, second, chat_id, space)
+    })
     .await;
-    let first = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
-    uow.commit_event(create.clone()).await.unwrap();
-    head = create.authority_commit;
-    space.created_by = peer.clone();
-    space.created_at = head.commit.committed_at;
-    space.rank = Some("a1".into());
-    let create = sourced_cited(
-        pair,
-        &head,
-        EventKind::SpaceCreate,
-        peer.clone(),
-        serde_json::to_value(SpaceCreatePayload::new(space.clone())).unwrap(),
-        Cites::Participant(binding),
-    )
-    .await;
-    let second = arkret_wire::SpaceId::from_event_id(&create.authority_commit.event.event_id);
-    uow.commit_event(create.clone()).await.unwrap();
-    head = create.authority_commit;
-    let mut chat = Strand::new_create(realm.clone(), "", founder.clone());
-    chat.metadata = None;
-    chat.encrypted_metadata = Some(envelope);
-    chat.tracks.clear();
-    chat.tracks.insert(
-        "discussion".into(),
-        arkret_models_collaboration::objects::profiles::StrandTrack::discussion_primary(),
-    );
-    chat.created_at = head.commit.committed_at;
-    let create = sourced_cited(
-        pair,
-        &head,
-        EventKind::StrandCreate,
-        founder.clone(),
-        serde_json::to_value(StrandCreatePayload { object: chat }).unwrap(),
-        Cites::Participant(binding),
-    )
-    .await;
-    let chat_id = arkret_wire::StrandId::from_event_id(&create.authority_commit.event.event_id);
-    uow.commit_event(create.clone()).await.unwrap();
-    head = create.authority_commit;
     let digest = |value: &serde_json::Value| {
         arkret_wire::Hash::new(arkret_canonical::sha256_digest(
             arkret_canonical::canonical_json_bytes(value).unwrap(),
         ))
         .unwrap()
     };
+    let mut head = boxed_source(|| async {
     let initial = current(pool, &chat_id).await;
     assert!(initial.get("topic").is_none());
     let stale = digest(&initial);
@@ -4191,14 +4275,16 @@ async fn exercise_flat_topics(
             digest(&current(pool, &chat_id).await),
         )
         .unwrap();
-        let request = sourced_cited(
-            pair,
-            &head,
-            EventKind::StrandUpdate,
-            actor.clone(),
-            serde_json::to_value(payload).unwrap(),
-            Cites::Participant(binding),
-        )
+        let request = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::StrandUpdate,
+                actor.clone(),
+                serde_json::to_value(payload).unwrap(),
+                Cites::Participant(binding),
+            )
+        })
         .await;
         uow.commit_event(request.clone()).await.unwrap();
         head = request.authority_commit;
@@ -4208,14 +4294,16 @@ async fn exercise_flat_topics(
         );
     }
     let bad = StrandPatchPayload::for_topic(chat_id.clone(), None, stale).unwrap();
-    let request = sourced_cited(
-        pair,
-        &head,
-        EventKind::StrandUpdate,
-        peer.clone(),
-        serde_json::to_value(bad).unwrap(),
-        Cites::Participant(binding),
-    )
+    let request = boxed_source(|| {
+        sourced_cited(
+            pair,
+            &head,
+            EventKind::StrandUpdate,
+            peer.clone(),
+            serde_json::to_value(bad).unwrap(),
+            Cites::Participant(binding),
+        )
+    })
     .await;
     let footprint_before = dc_footprint(pool, &realm).await;
     let structure_before = structure(pool, &realm).await;
@@ -4248,14 +4336,16 @@ async fn exercise_flat_topics(
         ),
     ];
     for (kind, payload) in invalid {
-        let request = sourced_cited(
-            pair,
-            &head,
-            kind.clone(),
-            founder.clone(),
-            payload,
-            Cites::Participant(binding),
-        )
+        let request = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                kind.clone(),
+                founder.clone(),
+                payload,
+                Cites::Participant(binding),
+            )
+        })
         .await;
         let before = dc_footprint(pool, &realm).await;
         let state = structure(pool, &realm).await;
@@ -4263,102 +4353,119 @@ async fn exercise_flat_topics(
         assert_eq!(dc_footprint(pool, &realm).await, before);
         assert_eq!(structure(pool, &realm).await, state);
     }
-    let archive = sourced_cited(
-        pair,
-        &head,
-        EventKind::StrandArchive,
-        peer.clone(),
-        serde_json::json!({"target_ref":chat_id}),
-        Cites::Participant(binding),
-    )
-    .await;
-    uow.commit_event(archive.clone()).await.unwrap();
-    head = archive.authority_commit;
-    let delete = sourced_cited(
-        pair,
-        &head,
-        EventKind::SpaceTombstone,
-        founder.clone(),
-        serde_json::json!({"space_id":second}),
-        Cites::Participant(binding),
-    )
-    .await;
-    assert_eq!(
-        refusal_code(uow.commit_event(delete).await),
-        ConflictCode::SpaceHasLiveDependents
-    );
-    let restore = sourced_cited(
-        pair,
-        &head,
-        EventKind::StrandRestore,
-        founder.clone(),
-        serde_json::json!({"target_ref":chat_id}),
-        Cites::Participant(binding),
-    )
-    .await;
-    uow.commit_event(restore.clone()).await.unwrap();
-    head = restore.authority_commit;
-    let archive = sourced_cited(
-        pair,
-        &head,
-        EventKind::SpaceArchive,
-        peer.clone(),
-        serde_json::json!({"space_id":second}),
-        Cites::Participant(binding),
-    )
-    .await;
-    uow.commit_event(archive.clone()).await.unwrap();
-    head = archive.authority_commit;
-    assert_eq!(current(pool, &chat_id).await["state"], "active");
-    let unset = StrandPatchPayload::for_topic(
-        chat_id.clone(),
-        None,
-        digest(&current(pool, &chat_id).await),
-    )
-    .unwrap();
-    let clear = sourced_cited(
-        pair,
-        &head,
-        EventKind::StrandUpdate,
-        peer.clone(),
-        serde_json::to_value(unset).unwrap(),
-        Cites::Participant(binding),
-    )
-    .await;
-    uow.commit_event(clear.clone()).await.unwrap();
-    head = clear.authority_commit;
-    assert!(current(pool, &chat_id).await.get("topic").is_none());
-    let delete = sourced_cited(
-        pair,
-        &head,
-        EventKind::SpaceTombstone,
-        founder.clone(),
-        serde_json::json!({"space_id":second}),
-        Cites::Participant(binding),
-    )
-    .await;
-    uow.commit_event(delete.clone()).await.unwrap();
-    head = delete.authority_commit;
-    assert_eq!(current(pool, main).await["state"], "active");
-    assert_eq!(
-        count(
-            pool,
-            "SELECT COUNT(*) AS count FROM strand_position_current_results WHERE realm_id=$1",
-            &realm
-        )
-        .await,
-        0
-    );
-    assert_eq!(
-        count(
-            pool,
-            "SELECT COUNT(*) AS count FROM mls_group_current_results WHERE realm_id=$1",
-            &realm
-        )
-        .await,
-        before_group
-    );
     head
+    }).await;
+    boxed_source(|| async {
+        let archive = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::StrandArchive,
+                peer.clone(),
+                serde_json::json!({"target_ref":chat_id}),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        uow.commit_event(archive.clone()).await.unwrap();
+        head = archive.authority_commit;
+        let delete = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::SpaceTombstone,
+                founder.clone(),
+                serde_json::json!({"space_id":second}),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        assert_eq!(
+            refusal_code(uow.commit_event(delete).await),
+            ConflictCode::SpaceHasLiveDependents
+        );
+        let restore = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::StrandRestore,
+                founder.clone(),
+                serde_json::json!({"target_ref":chat_id}),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        uow.commit_event(restore.clone()).await.unwrap();
+        head = restore.authority_commit;
+        let archive = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::SpaceArchive,
+                peer.clone(),
+                serde_json::json!({"space_id":second}),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        uow.commit_event(archive.clone()).await.unwrap();
+        head = archive.authority_commit;
+        assert_eq!(current(pool, &chat_id).await["state"], "active");
+        let unset = StrandPatchPayload::for_topic(
+            chat_id.clone(),
+            None,
+            digest(&current(pool, &chat_id).await),
+        )
+        .unwrap();
+        let clear = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::StrandUpdate,
+                peer.clone(),
+                serde_json::to_value(unset).unwrap(),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        uow.commit_event(clear.clone()).await.unwrap();
+        head = clear.authority_commit;
+        assert!(current(pool, &chat_id).await.get("topic").is_none());
+        let delete = boxed_source(|| {
+            sourced_cited(
+                pair,
+                &head,
+                EventKind::SpaceTombstone,
+                founder.clone(),
+                serde_json::json!({"space_id":second}),
+                Cites::Participant(binding),
+            )
+        })
+        .await;
+        uow.commit_event(delete.clone()).await.unwrap();
+        head = delete.authority_commit;
+        assert_eq!(current(pool, main).await["state"], "active");
+        assert_eq!(
+            count(
+                pool,
+                "SELECT COUNT(*) AS count FROM strand_position_current_results WHERE realm_id=$1",
+                &realm
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            count(
+                pool,
+                "SELECT COUNT(*) AS count FROM mls_group_current_results WHERE realm_id=$1",
+                &realm
+            )
+            .await,
+            before_group
+        );
+        head
+    })
+    .await
 }
 
 /// Real stored Human package and terminal claim, before SDK Add. The claimed
