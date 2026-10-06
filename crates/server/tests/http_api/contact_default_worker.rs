@@ -54,7 +54,12 @@ async fn post(
     // production-style Tokio worker, not merely by block_on's calling thread.
     tokio::spawn(Box::pin(async move {
         assert_worker();
-        let mut request = TestClient::post(PATH).json(&body);
+        // Send the unique SDK canonical wire form; typed struct serde order
+        // alone is not the registered canonical JSON ingress contract.
+        let wire_body = arkret_canonical::canonical::canonical_json_bytes(&body).unwrap();
+        let mut request = TestClient::post(PATH)
+            .add_header("content-type", "application/json", true)
+            .body(wire_body);
         if let Some(token) = token {
             request = request.add_header("authorization", format!("Bearer {token}"), true);
         }
