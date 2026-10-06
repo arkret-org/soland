@@ -329,9 +329,9 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
         1
     );
     let mut disclosure: arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload =
-        serde_json::from_value(serde_json::Value::Object(
-            governor.unit.transactions[disclosure_index].event.payload.clone(),
-        )).unwrap();
+        serde_json::from_value(
+            serde_json::to_value(&governor.unit.transactions[disclosure_index].event.payload).unwrap(),
+        ).unwrap();
     assert_eq!(disclosure.services.len(), 1);
     assert_eq!(
         disclosure.services[0].service_id,
