@@ -1478,11 +1478,41 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
         ConflictCode::DependencyMissing
     );
     assert_eq!(footprint(&peer_pool, &realm_id).await, [0; 5]);
+    for table in [
+        "replica_authorization_cuts",
+        "replica_authorization_rows",
+        "replica_stream_anchors",
+    ] {
+        assert_eq!(
+            count(
+                &peer_pool,
+                &format!("SELECT COUNT(*) AS count FROM {table} WHERE realm_id=$1"),
+                &realm_id,
+            )
+            .await,
+            0,
+        );
+    }
     assert_eq!(
         refusal_code(refuse().await),
         ConflictCode::DependencyMissing
     );
     assert_eq!(footprint(&peer_pool, &realm_id).await, [0; 5]);
+    for table in [
+        "replica_authorization_cuts",
+        "replica_authorization_rows",
+        "replica_stream_anchors",
+    ] {
+        assert_eq!(
+            count(
+                &peer_pool,
+                &format!("SELECT COUNT(*) AS count FROM {table} WHERE realm_id=$1"),
+                &realm_id,
+            )
+            .await,
+            0,
+        );
+    }
 
     // Install the same accepted Contact evidence on the peer after the
     // dependency refusal. The peer must now materialize exact source facts
@@ -1612,6 +1642,22 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
         at,
     )
     .unwrap();
+    // Validate the original governing signature before archiving the snapshot;
+    // the accepted founding unit already established the exact current cut.
+    arkret_signatures::detached_object::verify_detached_object_signature(
+        &original.signature,
+        &arkret_canonical::unsigned_value(&original, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmSnapshot,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: snapshot_key.verifying_key().to_bytes().to_vec(),
+        },
+    )
+    .unwrap();
+    assert_eq!(original.visible_stream_heads.len(), 1);
+    assert_eq!(
+        original.visible_stream_heads[0].commit_id,
+        unit.transactions[3].commit.commit_id
+    );
     peer_store
         .install_verified_account_snapshot(&pair.peer, &peer_station, &original)
         .await

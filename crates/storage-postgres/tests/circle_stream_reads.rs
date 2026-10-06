@@ -1,5 +1,3 @@
-#[path = "support/accepted_pcr_account.rs"]
-mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -81,15 +79,26 @@ async fn circle_all_history_requires_current_membership_and_uses_its_own_genesis
 
 async fn check_circle_reads(history: &str) {
     let database = TestDatabase::lease().await;
+    database.bind_device_inventory_station(ordinary_realm::station().as_str());
     let pool = database.pool();
     let did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let actor = accepted_pcr_account::accepted_pcr_account(&pool, did.clone()).await;
-    let account = actor.as_account_id().unwrap();
-    let unit = ordinary_realm::bootstrap_unit_for_account(
+    let account = ordinary_realm::human_profile::admit_without_profile(
+        &pool,
+        &ordinary_realm::station(),
         &uuid::Uuid::now_v7().to_string(),
-        account,
-        &did,
-    );
+    )
+    .await;
+    let actor = ActorId::account(account);
+    let account = actor.as_account_id().unwrap();
+    let unit = ordinary_realm::source_bootstrap(
+        &pool,
+        ordinary_realm::bootstrap_unit_for_account(
+            &uuid::Uuid::now_v7().to_string(),
+            account,
+            &did,
+        ),
+    )
+    .await;
     let head = unit.transactions.last().unwrap();
     let at = head.commit.committed_at;
     let realm = head.event.realm_id.clone();
@@ -98,7 +107,7 @@ async fn check_circle_reads(history: &str) {
         .admit_ordinary_realm_bootstrap_unit(&unit, at)
         .await
         .unwrap();
-    let uow = PgEventCommitUnitOfWork::new(pool);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let create = ordinary_realm::next_request_for_actor(
         head,
         EventKind::CircleCreate,
@@ -109,6 +118,7 @@ async fn check_circle_reads(history: &str) {
             "created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
     );
+    let create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let circle = arkret_wire::CircleId::from_event_id(&create.authority_commit.event.event_id);
     let stream = CommitStreamRef::Circle {
@@ -150,6 +160,7 @@ async fn check_circle_reads(history: &str) {
         None,
         Some(parent.clone()),
     );
+    let join = ordinary_realm::source_request(&pool, join).await;
     uow.commit_event(join.clone()).await.unwrap();
     let first = page(
         store
@@ -212,6 +223,7 @@ async fn check_circle_reads(history: &str) {
         Some("join"),
         None,
     );
+    let leave = ordinary_realm::source_request(&pool, leave).await;
     uow.commit_event(leave.clone()).await.unwrap();
     assert!(matches!(
         store
@@ -267,6 +279,7 @@ async fn check_circle_reads(history: &str) {
         Some("leave"),
         Some(parent),
     );
+    let rejoin = ordinary_realm::source_request(&pool, rejoin).await;
     uow.commit_event(rejoin.clone()).await.unwrap();
     let current = page(
         store

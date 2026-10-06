@@ -323,6 +323,40 @@ pub(crate) async fn materialize_founding_in_connection(
     .bind::<Timestamptz, _>(received_at)
     .execute(&mut *conn)
     .await?;
+    // The registered unit has been verified and all four source-committed
+    // reducers have run in this transaction. Retain their exact current rows
+    // and head as the complete founding authorization cut, without a snapshot.
+    let material = super::realm_state_snapshot_material_in_connection(conn, &facts.realm_id)
+        .await?
+        .ok_or_else(|| invalid("accepted founding unit has no reducer current"))?;
+    let last = &unit.transactions[3].commit;
+    let source_head = arkret_wire::CommitStreamHead {
+        stream_ref: last.stream_ref.clone(),
+        commit_id: last.commit_id.clone(),
+        stream_position: last.stream_position,
+    };
+    if material.governance_generation != authority.generation
+        || material.visible_stream_heads.as_slice() != std::slice::from_ref(&source_head)
+        || material.current_state_entries.is_empty()
+    {
+        return Err(invalid("founding reducer cut differs from the accepted unit").into());
+    }
+    for entry in &material.current_state_entries {
+        let arkret_wire::TypedCurrentResult::Value {
+            source_stream_ref,
+            revision,
+            ..
+        } = entry;
+        if !unit.transactions.iter().any(|transaction| {
+            source_stream_ref == &transaction.commit.stream_ref
+                && revision.commit_id == transaction.commit.commit_id
+                && revision.stream_position == transaction.commit.stream_position
+        }) {
+            return Err(invalid("founding current row has no exact accepted source").into());
+        }
+        crate::replica_authorization::save_row(conn, &facts.realm_id, entry, received_at).await?;
+    }
+    crate::replica_authorization::install_verified_head(conn, &source_head, received_at).await?;
     crate::account_summary::publish_realm_account_summary_in_connection(conn, &facts.realm_id)
         .await?;
     Ok(())
