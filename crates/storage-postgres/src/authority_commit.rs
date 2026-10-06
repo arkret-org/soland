@@ -4139,6 +4139,21 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .await
     }
 
+    async fn member_station_bootstrap_floor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        membership_commit_id: &arkret_wire::RealmCommitId,
+    ) -> PersistenceResult<Option<u64>> {
+        crate::snapshot_disclosure_gate::member_station_bootstrap_floor(
+            &self.pool,
+            realm_id,
+            account,
+            membership_commit_id,
+        )
+        .await
+    }
+
     async fn issue_realm_state_snapshot_for_account(
         &self,
         realm_id: &arkret_wire::RealmId,

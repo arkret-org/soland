@@ -358,22 +358,16 @@ struct JoinPositionRow {
 
 /// Material for `ak.peer.realm_join.read.bootstrap.v1` (`federation.md`
 /// §4.1.1, member Station bootstrap): the member Account's complete
-/// disclosure at one cut, with the exact join stream floor at the member's own
-/// join Commit -- the prefix evidence the member Station anchors its held
-/// stream on. `None` unless `membership_commit_id` is still the member's
+/// disclosure at one cut, with an ordinary join-position prefix or the exact
+/// registered founding-unit position-zero prefix. `None` unless `membership_commit_id` is still the member's
 /// current joined membership.
-pub async fn member_station_bootstrap_material(
-    pool: &PgPool,
+async fn current_bootstrap_join_in_connection(
+    conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
     account: &AccountId,
     membership_commit_id: &arkret_wire::RealmCommitId,
-) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
-    let mut conn = pg_conn(pool).await?;
-    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            .execute(&mut *conn)
-            .await?;
-        let Some(join) = sql_query(
+) -> PersistenceResult<Option<JoinPositionRow>> {
+    sql_query(
             "SELECT membership.current_stream_position,covering.stream_ref FROM ( \
              SELECT current_stream_position,current_commit_id FROM member_state_current_results \
              WHERE realm_id=$1 AND member_id=$2 AND membership='join' AND current_commit_id=$3 \
@@ -389,7 +383,58 @@ pub async fn member_station_bootstrap_material(
         .bind::<Text, _>(membership_commit_id.as_str())
         .get_result::<JoinPositionRow>(&mut *conn)
         .await
-        .optional()?
+        .optional()
+    .map_err(PersistenceError::database)
+}
+
+pub(crate) async fn member_station_bootstrap_floor(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    account: &AccountId,
+    membership_commit_id: &arkret_wire::RealmCommitId,
+) -> PersistenceResult<Option<u64>> {
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let Some(join) =
+            current_bootstrap_join_in_connection(conn, realm_id, account, membership_commit_id)
+                .await?
+        else {
+            return Ok(None);
+        };
+        let stream: CommitStreamRef =
+            serde_json::from_value(join.stream_ref).map_err(PersistenceError::database)?;
+        Ok(Some(
+            crate::account_stream_scan::bootstrap_floor_in_connection(
+                conn,
+                realm_id,
+                &stream,
+                membership_commit_id.as_str(),
+                join.current_stream_position,
+            )
+            .await?,
+        ))
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
+pub async fn member_station_bootstrap_material(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    account: &AccountId,
+    membership_commit_id: &arkret_wire::RealmCommitId,
+) -> PersistenceResult<Option<soland_storage::RealmStateSnapshotMaterial>> {
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let Some(join) =
+            current_bootstrap_join_in_connection(conn, realm_id, account, membership_commit_id)
+                .await?
         else {
             return Ok(None);
         };
@@ -401,9 +446,23 @@ pub async fn member_station_bootstrap_material(
         let join_position = u64::try_from(join.current_stream_position).map_err(|_| {
             PersistenceError::Internal("stored join position is negative".to_owned())
         })?;
-        let stream: CommitStreamRef = serde_json::from_value(join.stream_ref)
-            .map_err(PersistenceError::database)?;
-        anchor_bootstrap_join(&mut material, &stream, membership_commit_id, join_position)?;
+        let stream: CommitStreamRef =
+            serde_json::from_value(join.stream_ref).map_err(PersistenceError::database)?;
+        let floor = crate::account_stream_scan::bootstrap_floor_in_connection(
+            conn,
+            realm_id,
+            &stream,
+            membership_commit_id.as_str(),
+            join.current_stream_position,
+        )
+        .await?;
+        anchor_bootstrap_join(
+            &mut material,
+            &stream,
+            membership_commit_id,
+            join_position,
+            floor,
+        )?;
         Ok(Some(material))
     })
     .await
@@ -417,6 +476,7 @@ fn anchor_bootstrap_join(
     stream: &CommitStreamRef,
     commit_id: &arkret_wire::RealmCommitId,
     position: u64,
+    floor_position: u64,
 ) -> PersistenceResult<()> {
     if stream.realm_id() != &material.realm_id {
         return Err(rejected("bootstrap join is outside its Realm"));
@@ -439,10 +499,15 @@ fn anchor_bootstrap_join(
         .iter_mut()
         .find(|floor| &floor.stream_ref == stream)
         .ok_or_else(|| rejected("bootstrap join stream has no authorized floor"))?;
-    floor.oldest_position = position;
+    if floor_position > position || (floor_position != 0 && floor_position != position) {
+        return Err(rejected(
+            "bootstrap floor does not bind the registered opening unit",
+        ));
+    }
+    floor.oldest_position = floor_position;
     material.current_state_entries.retain(|row| !matches!(row,
         TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { .. }, source_stream_ref, revision, .. }
-        if source_stream_ref == stream && revision.stream_position < position
+        if source_stream_ref == stream && revision.stream_position < floor_position
     ));
     Ok(())
 }
@@ -2781,6 +2846,31 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_registered_zero_floor_preserves_complete_current_material() {
+        let (caller, material, facts) = circle_fixture();
+        let disclosed = disclose_to_account(material, &caller, &facts).unwrap();
+        let stream = CommitStreamRef::Realm {
+            realm_id: realm_id(),
+        };
+        let head = disclosed
+            .visible_stream_heads
+            .iter()
+            .find(|head| head.stream_ref == stream)
+            .unwrap()
+            .clone();
+        let mut retained = disclosed.clone();
+        anchor_bootstrap_join(
+            &mut retained,
+            &stream,
+            &head.commit_id,
+            head.stream_position,
+            0,
+        )
+        .unwrap();
+        assert_eq!(retained, disclosed);
+    }
+
+    #[test]
     fn bootstrap_join_changes_only_its_own_stream_floor_and_content_interval() {
         let (caller, material, facts) = circle_fixture();
         let mut disclosed = disclose_to_account(material, &caller, &facts).unwrap();
@@ -2792,6 +2882,7 @@ mod tests {
             &mut disclosed,
             &stream,
             &RealmCommitId::from_digest([4; 32]),
+            3,
             3,
         )
         .unwrap();
@@ -2815,6 +2906,16 @@ mod tests {
                 .oldest_position,
             0
         );
+        assert!(
+            anchor_bootstrap_join(
+                &mut disclosed.clone(),
+                &stream,
+                &RealmCommitId::from_digest([4; 32]),
+                3,
+                2,
+            )
+            .is_err()
+        );
         assert!(disclosed.current_state_entries.iter().any(|row| matches!(row,
             TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
                 if message_id==&MessageId::from_event_id(&event_id(0x33))
@@ -2824,6 +2925,7 @@ mod tests {
                 &mut disclosed,
                 &stream,
                 &RealmCommitId::from_digest([9; 32]),
+                4,
                 4
             )
             .is_err()
@@ -2833,6 +2935,7 @@ mod tests {
                 &mut disclosed,
                 &stream,
                 &RealmCommitId::from_digest([9; 32]),
+                5,
                 5
             )
             .is_err()

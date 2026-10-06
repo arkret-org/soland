@@ -426,6 +426,68 @@ async fn direct_founding_join_in_connection(
     Ok(direct_founding.present)
 }
 
+/// Bootstrap narrows an ordinary opening join to its own position. An exact
+/// registered atomic unit is the exception: its current opening join and
+/// position zero were accepted together, so the canonical floor remains zero.
+/// This is not the all-history policy shortcut used by ordinary scan reads.
+pub(crate) async fn bootstrap_floor_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &arkret_wire::RealmId,
+    stream: &CommitStreamRef,
+    join_commit_id: &str,
+    join_position: i64,
+) -> PersistenceResult<u64> {
+    let position = u64::try_from(join_position)
+        .map_err(|_| PersistenceError::Internal("stored join position is negative".into()))?;
+    if !matches!(stream, CommitStreamRef::Realm { realm_id: held } if held == realm_id) {
+        return Ok(position);
+    }
+    let Some(genesis) = held_genesis_floor_in_connection(conn, realm_id).await? else {
+        return Ok(position);
+    };
+    let ordinary = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM ordinary_realm_bootstrap_units u \
+         WHERE u.realm_id=$1 AND u.commits_json->0->>'commit_id'=$3 \
+         AND EXISTS (SELECT 1 FROM jsonb_array_elements(u.commits_json) \
+             WITH ORDINALITY AS c(value,ordinality) \
+             WHERE c.value->>'commit_id'=$2 AND (c.ordinality-1)=$4) \
+         AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(u.commits_json) \
+             WITH ORDINALITY AS c(value,ordinality) \
+             WHERE c.value->>'realm_id' IS DISTINCT FROM $1 \
+             OR c.value->'stream_ref' IS DISTINCT FROM $5 \
+             OR c.value->>'stream_position' IS DISTINCT FROM (c.ordinality-1)::text \
+             OR NOT EXISTS (SELECT 1 FROM realm_commits r \
+                 WHERE r.commit_id=c.value->>'commit_id' AND r.realm_id=$1 \
+                 AND r.stream_key=$6 AND r.stream_position=c.ordinality-1 \
+                 AND r.previous_commit_ref IS NOT DISTINCT FROM \
+                     CASE WHEN c.ordinality=1 THEN NULL \
+                     ELSE u.commits_json->((c.ordinality-2)::int)->>'commit_id' END)) \
+         ) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(join_commit_id)
+    .bind::<Text, _>(genesis.floor_commit_id.as_str())
+    .bind::<BigInt, _>(join_position)
+    .bind::<Jsonb, _>(serde_json::to_value(stream).map_err(PersistenceError::database)?)
+    .bind::<Text, _>(crate::authority_commit::stream_key(stream)?)
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if ordinary.present
+        || direct_founding_join_in_connection(
+            conn,
+            realm_id,
+            &genesis,
+            join_commit_id,
+            join_position,
+        )
+        .await?
+    {
+        return Ok(0);
+    }
+    Ok(position)
+}
+
 /// The `membership_join` floor at a join Commit this Station holds on the
 /// Realm stream.
 async fn held_join_floor(

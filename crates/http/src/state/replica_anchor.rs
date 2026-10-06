@@ -233,13 +233,18 @@ pub(crate) async fn refresh_account_snapshot(
     RealmJoinBootstrapAssembly::new(outcome.clone()).map_err(temporary)?;
     let snapshot = outcome.snapshot;
     verify_snapshot(state, &mut located, &snapshot).await?;
+    let expected_floor = commits
+        .member_station_bootstrap_floor(realm_id, account, &revision.commit_id)
+        .await
+        .map_err(temporary)?
+        .ok_or("the hosted opening join has no provable bootstrap floor")?;
     if !snapshot.current_state_entries.contains(own_join)
         || snapshot
             .retention_and_history_floor
             .stream_floors
             .iter()
             .find(|floor| floor.stream_ref == realm_stream)
-            .is_none_or(|floor| floor.oldest_position != revision.stream_position)
+            .is_none_or(|floor| floor.oldest_position != expected_floor)
         || snapshot
             .visible_stream_heads
             .iter()
@@ -431,16 +436,22 @@ async fn anchor_stream(
     let snapshot = &outcome.snapshot;
     verify_snapshot(state, located, snapshot).await?;
     let realm_stream = join.stream_ref.clone();
-    // The prefix evidence: the Realm stream floor is the join itself and the
-    // snapshot head is not below it.
+    // A single opening join anchors at itself; a held registered founding
+    // unit proves its position-zero floor. The head must cover the join.
     let floor = snapshot
         .retention_and_history_floor
         .stream_floors
         .iter()
         .find(|floor| floor.stream_ref == realm_stream)
         .ok_or("bootstrap snapshot has no Realm stream floor")?;
-    if floor.oldest_position != join.stream_position {
-        return Err("bootstrap snapshot floor is not the join position".to_owned());
+    let expected_floor = state
+        .authority_commits()
+        .member_station_bootstrap_floor(realm_id, &anchor.member_account_id, &join.commit_id)
+        .await
+        .map_err(temporary)?
+        .ok_or("bootstrap opening join has no provable floor")?;
+    if floor.oldest_position != expected_floor {
+        return Err("bootstrap snapshot floor differs from its exact opening unit".to_owned());
     }
     let head = snapshot
         .visible_stream_heads

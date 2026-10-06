@@ -2123,7 +2123,8 @@ pub trait AuthorityCommitStore: Send + Sync {
 
     /// The bootstrap snapshot material a member Station anchors on
     /// (`federation.md` §4.1.1): `account`'s complete disclosure with the
-    /// Realm stream floor at its join `membership_commit_id`, or `None`
+    /// Realm stream floor at its join `membership_commit_id`, except an exact
+    /// registered founding unit retains position zero, or `None`
     /// unless that Commit is still its current joined membership.
     async fn member_station_bootstrap_material(
         &self,
@@ -2131,6 +2132,19 @@ pub trait AuthorityCommitStore: Send + Sync {
         account: &arkret_wire::AccountId,
         membership_commit_id: &arkret_wire::RealmCommitId,
     ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
+
+    /// Prove the bootstrap floor of this exact current opening join from held
+    /// registered atomic-unit originals. Missing store support is unavailable,
+    /// never permission to accept a smaller floor.
+    async fn member_station_bootstrap_floor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        membership_commit_id: &arkret_wire::RealmCommitId,
+    ) -> PersistenceResult<Option<u64>> {
+        let _ = (realm_id, account, membership_commit_id);
+        Ok(None)
+    }
 
     /// Issue one complete signed Snapshot to `account` from a single durable
     /// cut: the governing tenure of `issuer` is locked and checked, the

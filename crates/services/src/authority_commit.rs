@@ -1556,6 +1556,18 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    pub async fn member_station_bootstrap_floor(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        membership_commit_id: &RealmCommitId,
+    ) -> ServiceResult<Option<u64>> {
+        Ok(self
+            .store()
+            .member_station_bootstrap_floor(realm_id, account, membership_commit_id)
+            .await?)
+    }
+
     pub async fn stream_head(
         &self,
         stream_ref: &CommitStreamRef,

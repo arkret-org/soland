@@ -876,6 +876,51 @@ async fn direct_founding_members_read_exact_genesis_and_unmatched_slot_keeps_joi
             )]
         );
     }
+    // Bootstrap must retain the exact canonical disclosure of both founding
+    // members. The old join-position override changes the original snapshot
+    // even though every current row and stream head is already complete.
+    for (account, join) in [(&pair.founder, &commits[1]), (&pair.peer, &commits[2])] {
+        let canonical = soland_storage_postgres::account_snapshot_material(&pool, &realm, account)
+            .await
+            .unwrap()
+            .unwrap();
+        let bootstrap = store
+            .member_station_bootstrap_material(&realm, account, &join.commit_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bootstrap, canonical);
+        assert_eq!(
+            store
+                .member_station_bootstrap_floor(&realm, account, &join.commit_id)
+                .await
+                .unwrap(),
+            Some(0)
+        );
+        let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+        let method = DidUrl::new(format!("{}#authority", pair.station_did)).unwrap();
+        let snapshot = soland_services::authority_commit::build_signed_realm_state_snapshot(
+            &bootstrap, method, &key, at,
+        )
+        .unwrap();
+        assert!(soland_storage::signed_snapshot_matches_material(
+            &snapshot, &canonical
+        ));
+        let mut old_bootstrap = bootstrap.clone();
+        old_bootstrap.retention_and_history_floor.stream_floors[0].oldest_position =
+            join.stream_position;
+        assert!(!soland_storage::signed_snapshot_matches_material(
+            &snapshot,
+            &old_bootstrap
+        ));
+        assert_eq!(
+            store
+                .member_station_bootstrap_floor(&realm, account, &commits[3].commit_id)
+                .await
+                .unwrap(),
+            None
+        );
+    }
     // A stored slot is not enough if its genesis differs from the real held
     // stream start. It must not grant an unrelated join history before itself.
     let mut conn = pool.get().await.unwrap();
@@ -899,6 +944,22 @@ async fn direct_founding_members_read_exact_genesis_and_unmatched_slot_keeps_joi
         } else {
             &commits[2]
         };
+        assert_eq!(
+            store
+                .member_station_bootstrap_floor(&realm, account, &join.commit_id)
+                .await
+                .unwrap(),
+            Some(join.stream_position)
+        );
+        let bootstrap = store
+            .member_station_bootstrap_material(&realm, account, &join.commit_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            bootstrap.retention_and_history_floor.stream_floors[0].oldest_position,
+            join.stream_position
+        );
         assert_eq!(floor.oldest_position, join.stream_position);
         assert_eq!(floor.floor_commit_id, join.commit_id);
         assert_eq!(
@@ -923,6 +984,13 @@ async fn direct_founding_members_read_exact_genesis_and_unmatched_slot_keeps_joi
     let page = exact_genesis_scan(&store, &realm, &pair.founder, &pair.station).await;
     assert!(page.committed_events.is_empty());
     let floor = page.readable_floor.unwrap();
+    assert_eq!(
+        store
+            .member_station_bootstrap_floor(&realm, &pair.founder, &commits[1].commit_id)
+            .await
+            .unwrap(),
+        Some(commits[1].stream_position)
+    );
     assert_eq!(floor.oldest_position, commits[1].stream_position);
     assert_eq!(floor.floor_commit_id, commits[1].commit_id);
     assert_eq!(
@@ -1512,6 +1580,77 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
             stream_ref: request.stream_ref,
             oldest_position: 0
         }]
+    );
+
+    let origin_bootstrap = pair
+        .store()
+        .member_station_bootstrap_material(
+            &realm_id,
+            &pair.peer,
+            &unit.transactions[2].commit.commit_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(origin_bootstrap, snapshot);
+    assert_eq!(
+        peer_store
+            .member_station_bootstrap_floor(
+                &realm_id,
+                &pair.peer,
+                &unit.transactions[2].commit.commit_id
+            )
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    let snapshot_key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let original = soland_services::authority_commit::build_signed_realm_state_snapshot(
+        &origin_bootstrap,
+        DidUrl::new(format!("{}#authority", pair.station_did)).unwrap(),
+        &snapshot_key,
+        at,
+    )
+    .unwrap();
+    peer_store
+        .install_verified_account_snapshot(&pair.peer, &peer_station, &original)
+        .await
+        .unwrap();
+    let archived_before = count(
+        &peer_pool,
+        "SELECT COUNT(*) AS count FROM realm_state_snapshots WHERE realm_id=$1",
+        &realm_id,
+    )
+    .await;
+    let mut mismatched_material = origin_bootstrap.clone();
+    mismatched_material
+        .retention_and_history_floor
+        .stream_floors[0]
+        .oldest_position = 1;
+    let changed = soland_services::authority_commit::build_signed_realm_state_snapshot(
+        &mismatched_material,
+        DidUrl::new(format!("{}#authority", pair.station_did)).unwrap(),
+        &snapshot_key,
+        at,
+    )
+    .unwrap();
+    assert!(!soland_storage::signed_snapshot_matches_material(
+        &changed, &snapshot
+    ));
+    assert!(
+        peer_store
+            .install_verified_account_snapshot(&pair.peer, &peer_station, &changed)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        count(
+            &peer_pool,
+            "SELECT COUNT(*) AS count FROM realm_state_snapshots WHERE realm_id=$1",
+            &realm_id,
+        )
+        .await,
+        archived_before
     );
 
     // A retained founding slot cannot invent a missing physical Genesis.
@@ -3466,6 +3605,25 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     assert_eq!(
         rejoin_floor.floor_reason,
         arkret_wire::ReadableFloorReason::MembershipJoin
+    );
+
+    assert_eq!(
+        store
+            .member_station_bootstrap_floor(&realm_id, &pair.peer, &head.commit.commit_id)
+            .await
+            .unwrap(),
+        Some(head.commit.stream_position)
+    );
+    assert_eq!(
+        store
+            .member_station_bootstrap_floor(
+                &realm_id,
+                &pair.peer,
+                &unit.transactions[2].commit.commit_id
+            )
+            .await
+            .unwrap(),
+        None
     );
 
     // A withdrawn directional Contact stops new sends and personal watch writes.

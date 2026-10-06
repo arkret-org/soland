@@ -167,6 +167,17 @@ async fn check_circle_reads(history: &str) {
             .unwrap(),
         MemberCommittedEventRead::Read(_)
     ));
+    assert_eq!(
+        store
+            .member_station_bootstrap_floor(
+                &realm,
+                account,
+                &join.authority_commit.commit.commit_id,
+            )
+            .await
+            .unwrap(),
+        Some(join.authority_commit.commit.stream_position)
+    );
     let bootstrap = store
         .member_station_bootstrap_material(&realm, account, &join.authority_commit.commit.commit_id)
         .await
