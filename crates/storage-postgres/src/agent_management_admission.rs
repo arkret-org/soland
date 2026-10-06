@@ -10,6 +10,73 @@ fn unavailable(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {detail}"))
 }
 
+/// The caller has verified the prospective member's ownership. Do not read
+/// an existing Agent join here: this gate precedes its first membership write.
+pub(crate) async fn require_join_in_connection(
+    conn: &mut diesel_async::AsyncPgConnection,
+    realm: &RealmId,
+    controller: &AccountId,
+    agent: &AccountId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let policies =
+        crate::policy_current_results::read_scoped_agent_management_policies_in_connection(
+            conn, realm, None,
+        )
+        .await?;
+    require_join(&policies, realm, controller, agent, at)
+}
+
+fn require_join(
+    policies: &[Policy],
+    realm: &RealmId,
+    controller: &AccountId,
+    agent: &AccountId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    // Realm membership does not establish an actual Strand/object action.
+    // Unsupported scoped evidence must not be treated as a nonmatching ban.
+    if policies
+        .iter()
+        .flat_map(|policy| &policy.rules)
+        .any(|rule| {
+            rule.resources.as_ref().is_some_and(|resources| {
+                resources
+                    .iter()
+                    .any(|resource| resource.kind != PolicyResourceKind::Realm)
+            })
+        })
+    {
+        return Err(unavailable("Agent join resource evidence is unavailable"));
+    }
+    let resources = [PolicyResourceSelector {
+        kind: PolicyResourceKind::Realm,
+        realm_id: Some(realm.clone()),
+        resource_ref: Some(realm.to_string()),
+    }];
+    let effect = evaluate_agent_management(
+        Some(policies),
+        &AgentManagementContext {
+            realm_id: realm,
+            ownership: Some((controller, agent)),
+            operation: AgentPolicyOperation::Join,
+            content_action: None,
+            resources: Some(&resources),
+            at,
+        },
+    )
+    .map_err(unavailable)?;
+    match effect {
+        PolicyEffect::Allow => Ok(()),
+        PolicyEffect::Deny => Err(PersistenceError::Conflict(
+            "capability_denied: Agent management forbids joining".to_owned(),
+        )),
+        PolicyEffect::Quarantine | PolicyEffect::RequireReview => Err(unavailable(
+            "Agent join requires unresolved quarantine or review evidence",
+        )),
+    }
+}
+
 /// Every requested action must pass: grant admission has no alternative-action
 /// semantics. The issuer's own grant/root authority is checked separately.
 pub(crate) async fn require_authorization_in_connection(

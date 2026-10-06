@@ -644,3 +644,102 @@ async fn management_authorization_uses_accepted_current_and_refuses_missing_proj
     assert!(empty.present);
     sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
 }
+
+#[tokio::test]
+async fn management_join_rechecks_current_ban_and_explicit_lifting_without_membership_effects() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    let controller = arkret_wire::AccountId::new(
+        "ak:did_core:web:controller.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    );
+    let agent = arkret_wire::AccountId::new(
+        "ak:did_core:web:agent.example".parse().unwrap(),
+        controller.station_id.clone(),
+    );
+    let at = chrono::Utc::now();
+    assert!(
+        crate::agent_management_admission::require_join_in_connection(
+            &mut conn,
+            &realm(),
+            &controller,
+            &agent,
+            at,
+        )
+        .await
+        .is_err()
+    );
+    seed_genesis(&mut conn).await;
+    crate::agent_management_admission::require_join_in_connection(
+        &mut conn,
+        &realm(),
+        &controller,
+        &agent,
+        at,
+    )
+    .await
+    .unwrap();
+    let mut payload = management_policy(None, "deny");
+    let PolicySetValue::Governance(document) = &mut payload.value else {
+        unreachable!()
+    };
+    document.rules[0].agent_operations = Some(vec![
+        arkret_models_collaboration::governance::operation_wire::AgentPolicyOperation::Join,
+    ]);
+    let accepted = event(EventKind::PolicySet, json!(payload), 1);
+    let basis = commit(&accepted, 1);
+    insert_history(&mut conn, &accepted, &basis).await;
+    commit_in_connection(&mut conn, &accepted, &basis)
+        .await
+        .unwrap();
+    let error = crate::agent_management_admission::require_join_in_connection(
+        &mut conn,
+        &realm(),
+        &controller,
+        &agent,
+        at,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("forbids joining"), "{error}");
+    payload.expected_revision = Some(Some(revision(&basis)));
+    let PolicySetValue::Governance(document) = &mut payload.value else {
+        unreachable!()
+    };
+    document.rules[0].effect = arkret_wire::PolicyEffect::Allow;
+    let lifted = event(EventKind::PolicySet, json!(payload), 2);
+    let next = commit(&lifted, 2);
+    insert_history(&mut conn, &lifted, &next).await;
+    commit_in_connection(&mut conn, &lifted, &next)
+        .await
+        .unwrap();
+    crate::agent_management_admission::require_join_in_connection(
+        &mut conn,
+        &realm(),
+        &controller,
+        &agent,
+        at,
+    )
+    .await
+    .unwrap();
+    sql_query("DELETE FROM policy_current_results")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(
+        crate::agent_management_admission::require_join_in_connection(
+            &mut conn,
+            &realm(),
+            &controller,
+            &agent,
+            at,
+        )
+        .await
+        .is_err()
+    );
+    let untouched = sql_query("SELECT NOT EXISTS(SELECT 1 FROM member_state_current_results) AND NOT EXISTS(SELECT 1 FROM mls_group_current_results) AS present")
+        .get_result::<Present>(&mut conn).await.unwrap();
+    assert!(untouched.present);
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}
