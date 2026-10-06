@@ -278,7 +278,78 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
     let strand = historical_human::request_for_event(&governor, previous, strand_event, at);
     let uow = PgEventCommitUnitOfWork::new(governor_pool.clone());
     uow.commit_event(strand.clone()).await.unwrap();
+    // Membership is not an action grant. Read the actual accepted root cut,
+    // then admit the owner's narrow Grant before the foreign member joins. The
+    // Grant grants no membership; MessageCreate still runs after the real join.
+    #[derive(diesel::QueryableByName)]
+    struct RootCut {
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        controller_actor_id: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        authority_event_ref: String,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        authority_generation: i64,
+    }
+    use diesel_async::RunQueryDsl as _;
+    let root_cut = {
+        let mut conn = governor_pool.get().await.unwrap();
+        diesel::sql_query(
+            "SELECT controller_actor_id, authority_event_ref, authority_generation \
+             FROM realm_authority_root_current_results WHERE realm_id=$1",
+        )
+        .bind::<diesel::sql_types::Text, _>(strand.authority_commit.event.realm_id.as_str())
+        .get_result::<RootCut>(&mut *conn)
+        .await
+        .unwrap()
+    };
+    assert_eq!(
+        serde_json::from_value::<ActorId>(root_cut.controller_actor_id).unwrap(),
+        owner
+    );
+    let root_generation = u64::try_from(root_cut.authority_generation).unwrap();
     let previous = &strand.authority_commit;
+    let grant_at = previous.commit.committed_at + Duration::seconds(1);
+    let grant_payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
+        serde_json::from_value(serde_json::json!({"grant": {
+            "schema":"ak.schema.capability.v1",
+            "realm_id":previous.event.realm_id,
+            "issuer_id":owner,
+            "subject":actor,
+            "actions":["ak.message.create"],
+            "resources":[{"kind":"realm","realm_id":previous.event.realm_id}],
+            "issuer_authority_refs":[{
+                "kind":"realm_root","realm_id":previous.event.realm_id,
+                "authority_event_ref":root_cut.authority_event_ref,
+                "authority_generation":root_generation
+            }],
+            "issued_at":arkret_canonical::format_timestamp_canonical(grant_at)
+        }}))
+        .unwrap();
+    let grant_event = historical_human::signed_ordinary_event(
+        &governor,
+        previous,
+        EventKind::CapabilityGrant,
+        serde_json::to_value(grant_payload).unwrap(),
+        grant_at,
+    );
+    let mut grant = historical_human::request_for_event(&governor, previous, grant_event, grant_at);
+    // This is a fresh PG source candidate, not a cached authorizing capability.
+    // The UOW independently prepares and compares it under its admission locks.
+    let grant_fact = PgAuthorityCommitStore {
+        pool: governor_pool.clone(),
+    }
+    .prepare_human_signer_fact(&grant.authority_commit.event, grant_at)
+    .await
+    .unwrap()
+    .unwrap();
+    grant.authority_commit.commit.producer_signer_fact_digest = Some(grant_fact.digest().unwrap());
+    grant.authority_commit.producer_signer_fact = Some(grant_fact);
+    historical_human::seal_commit(
+        &mut grant.authority_commit.commit,
+        &governor.pcr.history.station_did,
+    );
+    uow.commit_event(grant.clone()).await.unwrap();
+    let previous = &grant.authority_commit;
     let join = foreign_request(&origin, &human, &governor, previous, EventKind::MemberState,
         serde_json::json!({"realm_id":previous.event.realm_id,"member_id":actor,"membership":"join","reason":"real forward recovery membership"})).await;
     uow.commit_event(join.clone()).await.unwrap();

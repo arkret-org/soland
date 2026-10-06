@@ -4,28 +4,149 @@ use super::*;
 use crate::routing::federation::outbox::PeerSubmitResponse;
 
 fn forwarded_request(seed: u8) -> PeerAuthoritySubmitRequest {
-    let realm_id = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+    use arkret_models_crypto::{
+        DeviceAuthorizationWindow, DeviceStatus, ForwardDeviceProjectionAttestationCore,
+        HumanEventAuthorization,
+    };
+    use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
+    use arkret_signatures::webvh::{
+        ServiceRegistrationInceptionInput, prepare_service_registration_inception,
+    };
+    use arkret_wire::{DeviceId, Did, DidKey, DidUrl, EventId, NonEmptyString, ServiceKind};
+
+    let at = chrono::DateTime::parse_from_rfc3339("2026-09-25T09:59:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let registration = ServiceRegistrationKey::new(
+        ServiceKind::Station,
+        CanonicalServiceUrl::new("https://relay-forwarder.example/").unwrap(),
+    )
+    .unwrap();
+    let prepared = prepare_service_registration_inception(
+        &mut rand::rng(),
+        &ServiceRegistrationInceptionInput {
+            provider_endpoint: &"https://identity.example/".parse().unwrap(),
+            registration_key: &registration,
+            also_known_as: &[],
+            version_time: at - chrono::Duration::days(1),
+            did_key_fragment: None,
+        },
+    )
+    .unwrap();
+    let origin_did = Did::new(prepared.did.clone()).unwrap();
+    let origin = arkret_wire::project_did_to_core_id(&origin_did).unwrap();
+    let resolution = arkret_identity::build_authenticated_webvh_service_resolution(
+        origin.clone(),
+        "station".into(),
+        serde_json::from_value(prepared.log_entry["state"].clone()).unwrap(),
+        vec![prepared.log_entry.clone()],
+        vec![],
+        at,
+    )
+    .unwrap();
+    let realm_id = RealmId::from_event_id(&EventId::from_digest(
         arkret_canonical::DigestSuite::Sha256,
         [seed; 32],
     ));
-    let mut event = arkret_wire::test_support::raw_event_at(
+    let device = DeviceId::new("ak:device:01904100-0000-7000-8000-000000000085").unwrap();
+    let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmProfile.as_str(),
         ScopeRef::Realm { realm_id },
         DidCoreId::new("ak:did_core:web:relay-producer.example").unwrap(),
-        DidCoreId::new("ak:did_core:web:relay-forwarder.example").unwrap(),
+        origin,
         serde_json::json!({"name": format!("relay {seed}")}),
-        chrono::DateTime::parse_from_rfc3339("2026-09-25T09:59:00.000Z")
-            .unwrap()
-            .with_timezone(&Utc),
+        at,
     )
     .unwrap();
-    crate::test_event::attach_structural_only_producer_proof(
-        &mut event,
-        arkret_wire::DidUrl::new("did:web:relay-producer.example#key-1").unwrap(),
+    let event = soland_test_support::signed_event::sign_fixture_event(
+        event,
+        "did:web:relay-producer.example",
+        device.as_str(),
+        [0x71; 32],
     );
-    PeerAuthoritySubmitRequest::AuthorityForwardEvent(
-        PeerAuthorityForwardEventRequest::new(EventAdmissionSubmission::new(event), None, None)
+    let producer = event.human_device_producer().unwrap().unwrap();
+    let draft = PeerAuthorityForwardEventRequest {
+        branch:
+            arkret_models_collaboration::authority_commit::AuthorityForwardBranch::AuthorityForward,
+        event_submission: EventAdmissionSubmission::new(event.clone()),
+        mls_genesis_material: None,
+        producer_device_evidence: None,
+        producer_agent_evidence: None,
+    };
+    let body_digest =
+        arkret_models_collaboration::authority_commit::authority_forward_body_digest(&draft)
+            .unwrap();
+    // These pure relay/coordinate cases do not assert an accepted PCR source.
+    // Independent source coordinates avoid treating the target as its authorizer.
+    let source_event = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x72; 32]);
+    let source_commit = arkret_wire::RealmCommitId::from_digest([0x73; 32]);
+    let device_public = ed25519_dalek::SigningKey::from_bytes(&[0x71; 32])
+        .verifying_key()
+        .to_bytes();
+    let core = ForwardDeviceProjectionAttestationCore {
+        account_id: producer.account_id.clone(),
+        device_id: device,
+        device_signing_key_did: DidKey::new(format!(
+            "did:key:{}",
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(&device_public)
+        ))
+        .unwrap(),
+        hpke_key: NonEmptyString::new("relay-fixture-hpke").unwrap(),
+        device_authorize_event_id: source_event.clone(),
+        authorized_generation_ref: 1,
+        device_status: DeviceStatus::Active,
+        authorization_window: DeviceAuthorizationWindow {
+            not_before: at - chrono::Duration::days(1),
+            expires_at: None,
+        },
+        attested_at: at,
+        expires_at: at + chrono::Duration::minutes(5),
+        event_authorization: HumanEventAuthorization {
+            event_id: event.event_id.clone(),
+            verification_method: event
+                .producer_proof
+                .as_ref()
+                .unwrap()
+                .verification_method
+                .clone(),
+            destination_service_id: DidCoreId::new("ak:did_core:web:governance.example").unwrap(),
+            forward_body_digest: body_digest,
+            authorization_ref: arkret_wire::CommittedEventRef {
+                event_id: source_event.clone(),
+                commit_id: source_commit.clone(),
+                stream_ref: arkret_wire::CommitStreamRef::Realm {
+                    realm_id: RealmId::from_event_id(&source_event),
+                },
+                stream_position: 1,
+            },
+            revision: arkret_wire::CurrentRevision {
+                commit_id: source_commit,
+                stream_position: 1,
+            },
+            governance_generation: 0,
+            accepted_at: at - chrono::Duration::hours(1),
+        },
+    };
+    let evidence = arkret_models_identity::ForwardAccountDeviceSignerEvidence {
+        device_projection_attestation:
+            arkret_signatures::device_projection::sign_forward_device_projection_attestation(
+                core,
+                DidUrl::new(prepared.did_key_id.clone()).unwrap(),
+                &ed25519_dalek::SigningKey::from_bytes(&prepared.did_key_seed),
+            )
             .unwrap(),
+        service_resolution: resolution,
+    };
+    evidence
+        .validate_binding(&producer.account_id, &producer.device_id)
+        .unwrap();
+    PeerAuthoritySubmitRequest::AuthorityForwardEvent(
+        PeerAuthorityForwardEventRequest::new(
+            EventAdmissionSubmission::new(event),
+            None,
+            Some(evidence),
+        )
+        .unwrap(),
     )
 }
 
