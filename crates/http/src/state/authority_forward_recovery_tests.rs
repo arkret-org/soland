@@ -307,9 +307,89 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
     let (governor_state, governor_pool, _governor_lease) = station(base.clone());
     let (origin, origin_pool, _origin_lease) =
         station("https://forward-recovery-origin.internal/".into());
-    let governor =
+    let mut governor =
         historical_human::HumanFixture::new(&governor_pool, governor_state.service_did()).await;
+    // The existing closed bootstrap facet must explicitly authorize the Origin
+    // to receive plaintext. Membership/action grants alone grant no such right.
+    // Author this before the unit is accepted; never patch accepted state.
+    let disclosure_index = governor
+        .unit
+        .transactions
+        .iter()
+        .position(|tx| tx.event.kind == EventKind::RealmPlaintextVisibleServices)
+        .unwrap();
+    assert!(disclosure_index > 0);
+    assert_eq!(
+        governor
+            .unit
+            .transactions
+            .iter()
+            .filter(|tx| tx.event.kind == EventKind::RealmPlaintextVisibleServices)
+            .count(),
+        1
+    );
+    let mut disclosure: arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload =
+        serde_json::from_value(serde_json::Value::Object(
+            governor.unit.transactions[disclosure_index].event.payload.clone(),
+        )).unwrap();
+    assert_eq!(disclosure.services.len(), 1);
+    assert_eq!(
+        disclosure.services[0].service_id,
+        governor_state.service_core_id()
+    );
+    assert_ne!(governor_state.service_core_id(), origin.service_core_id());
+    disclosure.services.push(
+        serde_json::from_value(serde_json::json!({
+            "service_id":origin.service_core_id(), "service_kind":"station",
+            "data_classes":["message_content"],
+            "purposes":["accepted original recovery fixture"],
+            "visibility":"private_plaintext"
+        }))
+        .unwrap(),
+    );
+    let disclosure_event = historical_human::signed_ordinary_event(
+        &governor,
+        &governor.unit.transactions[disclosure_index - 1],
+        EventKind::RealmPlaintextVisibleServices,
+        disclosure.to_value().unwrap(),
+        governor.unit.transactions[disclosure_index]
+            .commit
+            .committed_at,
+    );
+    governor.unit.transactions[disclosure_index].event = disclosure_event;
+    let source = PgAuthorityCommitStore {
+        pool: governor_pool.clone(),
+    };
+    let mut previous_commit = None;
+    for (index, transaction) in governor.unit.transactions.iter_mut().enumerate() {
+        transaction.commit.event_ref = transaction.event.event_id.clone();
+        transaction.producer_signer_fact = source
+            .prepare_human_signer_fact(&transaction.event, transaction.commit.committed_at)
+            .await
+            .unwrap();
+        assert!(transaction.producer_signer_fact.is_some());
+        transaction.commit.producer_signer_fact_digest = transaction
+            .producer_signer_fact
+            .as_ref()
+            .map(|fact| fact.digest().unwrap());
+        transaction.commit.previous_commit_ref = previous_commit;
+        historical_human::seal_commit(&mut transaction.commit, &governor.pcr.history.station_did);
+        previous_commit = Some(transaction.commit.commit_id.clone());
+        governor.unit.submission.events[index] =
+            EventAdmissionSubmission::new(transaction.event.clone());
+    }
+    governor.unit.exact_request_body = serde_json::to_vec(
+        &SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(governor.unit.submission.clone()),
+    )
+    .unwrap();
     governor.admit(&governor_pool).await;
+    assert_eq!(
+        source
+            .accepted_plaintext_visible_services(&governor.unit.transactions[0].event.realm_id,)
+            .await
+            .unwrap(),
+        Some(disclosure)
+    );
     let human = historical_human::HumanFixture::new(&origin_pool, origin.service_did()).await;
     let actor = ActorId::account(human.pcr.history.account.clone());
     let previous = governor.unit.transactions.last().unwrap();
@@ -580,6 +660,27 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
         panic!("actually joined Origin is authorized for the real peer prefix")
     };
     page.validate_for_request(&scan).unwrap();
+    let original_target = page
+        .committed_events
+        .iter()
+        .find(|row| row.commit().commit_id == commit.commit_id)
+        .unwrap();
+    let arkret_wire::CommittedEventView::Full(original_target) = original_target else {
+        panic!("the explicitly authorized plaintext target must be a real Full row")
+    };
+    assert_eq!(&original_target.event, event);
+    assert_eq!(&original_target.commit, commit);
+    let archived_fact = source.human_signer_fact(event, commit).await.unwrap();
+    assert!(archived_fact.is_some());
+    assert_eq!(archived_fact, target.authority_commit.producer_signer_fact);
+    assert_eq!(
+        page.producer_signer_facts
+            .iter()
+            .find(|entry| entry.target.commit_id == commit.commit_id)
+            .map(|entry| &entry.producer_signer_fact),
+        archived_fact.as_ref(),
+    );
+    assert!(target.authority_commit.producer_signer_fact.is_some());
     let before_head = reopened
         .held_stream_head_commit(&commit.stream_ref)
         .await
