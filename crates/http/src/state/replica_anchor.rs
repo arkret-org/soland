@@ -997,7 +997,7 @@ async fn require_forward_bound_result_visibility(
 ) -> Result<(), String> {
     super::authority_forward::validate_recovery_caller(state, session, event)
         .await
-        .map_err(|error| error.message)?;
+        .map_err(temporary)?;
     if expected == Some(commit) {
         let account = &session
             .session_grant
@@ -1012,7 +1012,7 @@ async fn require_forward_bound_result_visibility(
         {
             super::authority_forward::validate_recovery_caller(state, session, event)
                 .await
-                .map_err(|error| error.message)?;
+                .map_err(temporary)?;
             return Ok(());
         }
     }
