@@ -50,7 +50,7 @@ pub(crate) async fn materialize_contact_completions(state: &AppState) -> Result<
         // Continue past incomplete histories: one peer's missing evidence must
         // not starve unrelated committed commands behind the first page.
         for item in &ready {
-            if let Err(error) = materialize_one(state, item).await {
+            if let Err(error) = Box::pin(materialize_one(state, item)).await {
                 tracing::warn!(event_id=%item.intent.plan.event.event_id,error=%error,"Contact committed completion remains pending");
             }
         }

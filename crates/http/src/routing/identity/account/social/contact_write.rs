@@ -1570,7 +1570,7 @@ async fn commit(
                 "Contact commit key is bound to another Event",
             ));
         }
-        return completion::resolve_completion(state, &response_binding).await;
+        return Box::pin(completion::resolve_completion(state, &response_binding)).await;
     }
     if let Some(outcome) = replay::<ContactOperationOutcome>(
         state,
@@ -1628,35 +1628,41 @@ async fn commit(
     // One linearization instant: the slot CAS observation, every receipt's
     // `accepted_at` and the covering Commit.
     let accepted_at = arkret_canonical::normalize_timestamp_canonical(now());
-    let (mut contact_projection, action, local_mirror_target) =
-        match plan_contact_commit(state, &reservation, &body.signed_event, accepted_at).await? {
-            ContactCommitPlan::Failed(failed) => {
-                let outcome = ContactOperationOutcome::Failed { outcome: failed };
-                persist_final(
-                    state,
-                    &session.actor,
-                    "ak.self.contact.command.commit",
-                    &response_binding.idempotency_key,
-                    &request_hash,
-                    &outcome,
-                )
-                .await?;
-                return json_ok(outcome);
-            }
-            ContactCommitPlan::Ready {
-                projection,
-                action,
-                local_mirror_target,
-            } => (projection, action, local_mirror_target),
-        };
-    let mut intent = prepare_contact_completion_draft(
+    let (mut contact_projection, action, local_mirror_target) = match Box::pin(plan_contact_commit(
+        state,
+        &reservation,
+        &body.signed_event,
+        accepted_at,
+    ))
+    .await?
+    {
+        ContactCommitPlan::Failed(failed) => {
+            let outcome = ContactOperationOutcome::Failed { outcome: failed };
+            persist_final(
+                state,
+                &session.actor,
+                "ak.self.contact.command.commit",
+                &response_binding.idempotency_key,
+                &request_hash,
+                &outcome,
+            )
+            .await?;
+            return json_ok(outcome);
+        }
+        ContactCommitPlan::Ready {
+            projection,
+            action,
+            local_mirror_target,
+        } => (projection, action, local_mirror_target),
+    };
+    let mut intent = Box::pin(prepare_contact_completion_draft(
         state,
         &reservation,
         &body.signed_event,
         action,
         response_binding.clone(),
         local_mirror_target,
-    )
+    ))
     .await?
     .bind_producer(producer.signer)
     .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1690,16 +1696,16 @@ async fn commit(
         )?;
     }
     contact_projection.completion_intent = Some(intent);
-    crate::state::commit_contact_event_unit(
+    Box::pin(crate::state::commit_contact_event_unit(
         state,
         &arkret_wire::EventAdmissionSubmission::new(body.signed_event.clone()),
         producer.guard,
         contact_projection,
         accepted_at,
-    )
+    ))
     .await
     .map_err(contact_admission_error)?;
-    completion::resolve_completion(state, &response_binding).await
+    Box::pin(completion::resolve_completion(state, &response_binding)).await
 }
 
 /// Map a refused Contact admission onto its registered wire code. A lost
