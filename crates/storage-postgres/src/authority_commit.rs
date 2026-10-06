@@ -3204,6 +3204,148 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn accepted_own_leave_bound_result(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        account: &arkret_wire::AccountId,
+        local_service: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<bool> {
+        use arkret_models_collaboration::authority_commit::{
+            HumanHistoricalSignerFact, SelfAuthoritySubmitRequest,
+        };
+        use arkret_models_collaboration::governance::membership_invite::{
+            MembershipPayload, MembershipPayloadState,
+        };
+        let actor = arkret_wire::ActorId::account(account.clone());
+        let stream = arkret_wire::CommitStreamRef::Realm {
+            realm_id: event.realm_id.clone(),
+        };
+        if event.kind != arkret_wire::EventKind::MemberState
+            || event.actor_id != actor
+            || event.executed_by.is_some()
+            || account.station_id != *local_service
+            || event.scope_ref
+                != (arkret_wire::ScopeRef::Realm {
+                    realm_id: event.realm_id.clone(),
+                })
+            || commit.stream_ref != stream
+            || commit.realm_id != event.realm_id
+            || commit.event_ref != event.event_id
+            || event.human_device_producer().map_err(invalid)?.is_none()
+        {
+            return Ok(false);
+        }
+        let payload: MembershipPayload = serde_json::from_value(
+            serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(invalid)?;
+        if payload.membership != MembershipPayloadState::Leave
+            || payload.member_id != actor
+            || payload
+                .realm_id
+                .as_ref()
+                .is_some_and(|realm| realm != &event.realm_id)
+        {
+            return Ok(false);
+        }
+        event
+            .verify_event_id_matches_content_with_digest_suite(
+                event.event_id.digest_suite_code().digest_suite(),
+            )
+            .map_err(invalid)?;
+        commit.validate_shape().map_err(invalid)?;
+        commit.verify_commit_id_matches_content().map_err(invalid)?;
+        #[derive(QueryableByName)]
+        struct BoundLeaveRow {
+            #[diesel(sql_type=Jsonb)]
+            envelope: Value,
+            #[diesel(sql_type=Jsonb)]
+            commit_json: Value,
+            #[diesel(sql_type=Jsonb)]
+            submission_json: Value,
+            #[diesel(sql_type=Jsonb)]
+            accepted_json: Value,
+            #[diesel(sql_type=Jsonb)]
+            fact_json: Value,
+            #[diesel(sql_type=Jsonb)]
+            member_value: Value,
+            #[diesel(sql_type=Jsonb)]
+            join_envelope: Value,
+            #[diesel(sql_type=Jsonb)]
+            join_commit_json: Value,
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *conn).await?;
+            let row = sql_query(
+                "SELECT e.envelope,c.commit_json,f.original_submission_json AS submission_json, \
+                 f.accepted_commit_json AS accepted_json,k.human_source_fact AS fact_json, \
+                 m.value AS member_value,j.envelope AS join_envelope,jc.commit_json AS join_commit_json \
+                 FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
+                 JOIN authority_forward_attempts f ON f.event_pk=e.pk \
+                 JOIN member_state_current_results m ON m.realm_id=c.realm_id AND m.member_id=$2 \
+                 JOIN replica_stream_anchors a ON a.realm_id=c.realm_id AND a.stream_key=c.stream_key \
+                 JOIN realm_commits jc ON jc.commit_id=a.join_commit_id \
+                 JOIN canonical_events j ON j.pk=jc.event_pk \
+                 JOIN agent_producer_signer_keys k ON k.commit_id=c.commit_id \
+                 WHERE e.id=$1 AND e.state='committed' AND j.state='committed' \
+                   AND c.commit_id=$3 AND c.realm_id=$4 AND c.stream_ref=$5 AND c.stream_position=$6 \
+                   AND m.membership='leave' AND m.current_commit_id=c.commit_id \
+                   AND m.current_stream_position=c.stream_position \
+                   AND a.member_account_id=$7 AND a.anchor_commit_id IS NOT NULL \
+                   AND jc.realm_id=c.realm_id AND jc.stream_key=c.stream_key AND jc.stream_ref=c.stream_ref \
+                   AND jc.stream_position<c.stream_position \
+                   AND f.original_submission_json IS NOT NULL AND f.accepted_commit_json IS NOT NULL \
+                   AND k.human_source_fact IS NOT NULL \
+                   AND NOT EXISTS (SELECT 1 FROM realm_commits later JOIN canonical_events le ON le.pk=later.event_pk \
+                       WHERE later.stream_key=c.stream_key AND later.stream_position>jc.stream_position \
+                         AND later.stream_position<c.stream_position AND le.state='committed' \
+                         AND le.envelope->>'kind' IN ('ak.member.state','ak.invite.accept') \
+                         AND ((le.envelope->>'kind'='ak.invite.accept' AND le.envelope->'actor_id'=$8) \
+                           OR (le.envelope->>'kind'='ak.member.state' AND le.envelope->'payload'->'member_id'=$8)))"
+            ).bind::<Binary,_>(event.event_id.token_bytes().to_vec())
+             .bind::<Text,_>(actor.to_string()).bind::<Text,_>(commit.commit_id.as_str())
+             .bind::<Text,_>(event.realm_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(&stream).map_err(PersistenceError::database)?)
+             .bind::<BigInt,_>(i64::try_from(commit.stream_position).map_err(PersistenceError::database)?)
+             .bind::<Jsonb,_>(serde_json::to_value(account).map_err(PersistenceError::database)?)
+             .bind::<Jsonb,_>(serde_json::to_value(&actor).map_err(PersistenceError::database)?)
+             .get_result::<BoundLeaveRow>(&mut *conn).await.optional()?;
+            let Some(row) = row else { return Ok(false); };
+            let held_event: arkret_wire::Event = decode_json(row.envelope, "bound leave Event")?;
+            let held_commit: arkret_wire::RealmCommit = decode_json(row.commit_json, "bound leave Commit")?;
+            let accepted: arkret_wire::RealmCommit = decode_json(row.accepted_json, "bound leave accepted witness")?;
+            let submission: SelfAuthoritySubmitRequest = decode_json(row.submission_json, "bound leave original intent")?;
+            let fact: HumanHistoricalSignerFact = decode_json(row.fact_json, "bound leave original fact")?;
+            let member: MembershipPayload = decode_json(row.member_value, "bound leave effective membership")?;
+            let join_event: arkret_wire::Event = decode_json(row.join_envelope, "bound leave opening Event")?;
+            let join_commit: arkret_wire::RealmCommit = decode_json(row.join_commit_json, "bound leave opening Commit")?;
+            let SelfAuthoritySubmitRequest::Event(submitted) = submission else { return Ok(false); };
+            if held_event != *event || held_commit != *commit || accepted != *commit || submitted.event != *event
+                || member != payload
+                || join_event.actor_id != actor || join_event.realm_id != event.realm_id
+                || join_event.scope_ref != event.scope_ref || join_commit.event_ref != join_event.event_id
+            { return Ok(false); }
+            let own_join = match join_event.kind {
+                arkret_wire::EventKind::InviteAccept => true,
+                arkret_wire::EventKind::MemberState => {
+                    let value: MembershipPayload = serde_json::from_value(serde_json::to_value(&join_event.payload)
+                        .map_err(PersistenceError::database)?).map_err(invalid)?;
+                    value.membership == MembershipPayloadState::Join && value.member_id == actor
+                        && value.realm_id.as_ref().is_none_or(|realm| realm == &event.realm_id)
+                }
+                _ => false,
+            };
+            if !own_join { return Ok(false); }
+            join_event.verify_event_id_matches_content_with_digest_suite(join_event.event_id.digest_suite_code().digest_suite()).map_err(invalid)?;
+            join_commit.validate_shape().map_err(invalid)?;
+            join_commit.verify_commit_id_matches_content().map_err(invalid)?;
+            fact.validate_commit_binding(&arkret_wire::CommittedEventFullView { event: held_event, commit: held_commit },
+                event.event_id.digest_suite_code().digest_suite()).map_err(invalid)?;
+            Ok(true)
+        }).await.map_err(PgTransactionError::into_persistence)
+    }
+
     async fn circle_views_for_actor(
         &self,
         realm_id: &arkret_wire::RealmId,

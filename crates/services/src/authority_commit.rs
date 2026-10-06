@@ -1502,6 +1502,19 @@ impl AuthorityCommitApplication {
         Ok(self.store().replica_anchor_for_stream(stream).await?)
     }
 
+    pub async fn accepted_own_leave_bound_result(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        account: &arkret_wire::AccountId,
+        local_service: &arkret_wire::DidCoreId,
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .store()
+            .accepted_own_leave_bound_result(event, commit, account, local_service)
+            .await?)
+    }
+
     pub async fn circle_views_for_actor(
         &self,
         realm_id: &arkret_wire::RealmId,

@@ -640,7 +640,14 @@ pub(crate) async fn ensure_forwarded_target(
             .await
             .map_err(temporary)?;
             require_forward_source(state, session, event, located).await?;
-            require_forward_visibility(state, event, &original.commit).await?;
+            require_forward_bound_result_visibility(
+                state,
+                event,
+                &original.commit,
+                expected,
+                session,
+            )
+            .await?;
             require_forward_source(state, session, event, located).await?;
             return Ok(Some(original.commit));
         }
@@ -716,7 +723,8 @@ pub(crate) async fn ensure_forwarded_target(
             require_forward_source(state, session, event, located).await?;
             held = commit.clone();
             if is_target {
-                require_forward_visibility(state, event, commit).await?;
+                require_forward_bound_result_visibility(state, event, commit, expected, session)
+                    .await?;
                 require_forward_source(state, session, event, located).await?;
                 return Ok(Some(commit.clone()));
             }
@@ -975,6 +983,40 @@ async fn require_forward_authority(
         return Err("forward recovery governing tenure changed".into());
     }
     Ok(())
+}
+
+/// A terminal own submission remains a bound write outcome. Installing its
+/// leave must not demand the ordinary joined-member read it just terminated.
+/// This is not a scan/get/key-query authorization exception.
+async fn require_forward_bound_result_visibility(
+    state: &AppState,
+    event: &arkret_wire::Event,
+    commit: &RealmCommit,
+    expected: Option<&RealmCommit>,
+    session: &soland_services::identity::SessionIdentityState,
+) -> Result<(), String> {
+    super::authority_forward::validate_recovery_caller(state, session, event)
+        .await
+        .map_err(|error| error.message)?;
+    if expected == Some(commit) {
+        let account = &session
+            .session_grant
+            .as_ref()
+            .ok_or("bound leave recovery lacks an authenticated grant")?
+            .account_id;
+        if state
+            .authority_commits()
+            .accepted_own_leave_bound_result(event, commit, account, &state.service_core_id())
+            .await
+            .map_err(temporary)?
+        {
+            super::authority_forward::validate_recovery_caller(state, session, event)
+                .await
+                .map_err(|error| error.message)?;
+            return Ok(());
+        }
+    }
+    require_forward_visibility(state, event, commit).await
 }
 
 async fn require_forward_visibility(
