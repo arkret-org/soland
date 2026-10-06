@@ -743,3 +743,123 @@ async fn management_join_rechecks_current_ban_and_explicit_lifting_without_membe
     assert!(untouched.present);
     sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
 }
+
+#[tokio::test]
+async fn management_member_event_read_uses_current_and_never_assumes_missing_projection_is_allow() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    seed_genesis(&mut conn).await;
+    let controller = arkret_wire::AccountId::new(
+        "ak:did_core:web:controller.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    );
+    let agent = arkret_wire::AccountId::new(
+        "ak:did_core:web:agent.example".parse().unwrap(),
+        controller.station_id.clone(),
+    );
+    let at = chrono::Utc::now();
+    crate::agent_management_admission::require_member_event_read_in_connection(
+        &mut conn,
+        &realm(),
+        None,
+        &controller,
+        &agent,
+        at,
+    )
+    .await
+    .unwrap();
+    let mut payload = management_policy(None, "deny");
+    let PolicySetValue::Governance(document) = &mut payload.value else {
+        unreachable!()
+    };
+    document.rules[0].agent_operations = Some(vec![
+        arkret_models_collaboration::governance::operation_wire::AgentPolicyOperation::Read,
+    ]);
+    let accepted = event(EventKind::PolicySet, json!(payload), 1);
+    let basis = commit(&accepted, 1);
+    insert_history(&mut conn, &accepted, &basis).await;
+    commit_in_connection(&mut conn, &accepted, &basis)
+        .await
+        .unwrap();
+    let error = crate::agent_management_admission::require_member_event_read_in_connection(
+        &mut conn,
+        &realm(),
+        None,
+        &controller,
+        &agent,
+        at,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("forbids Event reading"),
+        "{error}"
+    );
+    sql_query("DELETE FROM policy_current_results")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(
+        crate::agent_management_admission::require_member_event_read_in_connection(
+            &mut conn,
+            &realm(),
+            None,
+            &controller,
+            &agent,
+            at,
+        )
+        .await
+        .is_err()
+    );
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}
+
+#[tokio::test]
+async fn management_member_event_read_checks_accepted_policy_in_a_read_only_snapshot() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    seed_genesis(&mut conn).await;
+    let mut payload = management_policy(None, "deny");
+    let PolicySetValue::Governance(document) = &mut payload.value else {
+        unreachable!()
+    };
+    document.rules[0].agent_operations = Some(vec![
+        arkret_models_collaboration::governance::operation_wire::AgentPolicyOperation::Read,
+    ]);
+    let accepted = event(EventKind::PolicySet, json!(payload), 1);
+    let basis = commit(&accepted, 1);
+    insert_history(&mut conn, &accepted, &basis).await;
+    commit_in_connection(&mut conn, &accepted, &basis)
+        .await
+        .unwrap();
+    sql_query("COMMIT").execute(&mut conn).await.unwrap();
+    sql_query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let controller = arkret_wire::AccountId::new(
+        "ak:did_core:web:controller.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    );
+    let agent = arkret_wire::AccountId::new(
+        "ak:did_core:web:agent.example".parse().unwrap(),
+        controller.station_id.clone(),
+    );
+    let error = crate::agent_management_admission::require_member_event_read_in_connection(
+        &mut conn,
+        &realm(),
+        None,
+        &controller,
+        &agent,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("forbids Event reading"),
+        "{error}"
+    );
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}

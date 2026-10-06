@@ -48,7 +48,27 @@ pub(crate) async fn controller_in_connection(
     agent: &AccountId,
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<Option<AccountId>> {
-    let row = sql_query("SELECT e.envelope->'payload'->'agent_controller_binding' AS value FROM member_state_current_results a JOIN realm_commits c ON c.commit_id=a.current_commit_id AND c.stream_position=a.current_stream_position AND c.realm_id=a.realm_id JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' WHERE a.realm_id=$1 AND a.member_id=$2 AND a.membership='join' AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',$1) FOR SHARE OF a")
+    read_controller_in_connection(conn, realm, agent, at, true).await
+}
+
+/// The enclosing repeatable-read transaction fixes this visibility cut.
+pub(crate) async fn controller_snapshot_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &RealmId,
+    agent: &AccountId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Option<AccountId>> {
+    read_controller_in_connection(conn, realm, agent, at, false).await
+}
+
+async fn read_controller_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &RealmId,
+    agent: &AccountId,
+    at: chrono::DateTime<chrono::Utc>,
+    lock: bool,
+) -> PersistenceResult<Option<AccountId>> {
+    let row = sql_query(format!("SELECT e.envelope->'payload'->'agent_controller_binding' AS value FROM member_state_current_results a JOIN realm_commits c ON c.commit_id=a.current_commit_id AND c.stream_position=a.current_stream_position AND c.realm_id=a.realm_id JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' WHERE a.realm_id=$1 AND a.member_id=$2 AND a.membership='join' AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',$1){}", if lock { " FOR SHARE OF a" } else { "" }))
         .bind::<Text,_>(realm.as_str()).bind::<Text,_>(ActorId::account(agent.clone()).to_string()).get_result::<ValueRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
     let Some(row) = row else {
         return Ok(None);
@@ -75,7 +95,7 @@ pub(crate) async fn controller_in_connection(
     if !current {
         return Ok(None);
     }
-    let provision = sql_query("SELECT p.value FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id WHERE p.agent_id=$1 AND g.principal_id=$2 AND g.station_id=$3 FOR SHARE OF p")
+    let provision = sql_query(format!("SELECT p.value FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id WHERE p.agent_id=$1 AND g.principal_id=$2 AND g.station_id=$3{}", if lock { " FOR SHARE OF p" } else { "" }))
         .bind::<Text,_>(agent.principal_id.as_str()).bind::<Text,_>(controller.principal_id.as_str()).bind::<Text,_>(controller.station_id.as_str()).get_result::<ValueRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
     let Some(provision) = provision else {
         return Ok(None);
@@ -85,18 +105,20 @@ pub(crate) async fn controller_in_connection(
     if provision.controller_principal_id != controller.principal_id {
         return Ok(None);
     }
-    crate::agent_current_results::lock_agent_producer_current(
-        conn,
-        &provision.principal_control_realm_id,
-        &agent.principal_id,
-    )
-    .await?;
+    if lock {
+        crate::agent_current_results::lock_agent_producer_current(
+            conn,
+            &provision.principal_control_realm_id,
+            &agent.principal_id,
+        )
+        .await?;
+    }
     let active = sql_query("SELECT EXISTS(SELECT 1 FROM agent_status_current_results WHERE realm_id=$1 AND agent_id=$2 AND value='\"active\"'::jsonb) AS present")
         .bind::<Text,_>(provision.principal_control_realm_id.as_str()).bind::<Text,_>(agent.principal_id.as_str()).get_result::<PresentRow>(&mut *conn).await.map_err(PersistenceError::database)?.present;
     if !active {
         return Ok(None);
     }
-    let rows = sql_query("SELECT value FROM identity_accountability_current_results WHERE subject_id=$1 AND issuer_id=$2 ORDER BY realm_id,scope_set_digest FOR SHARE")
+    let rows = sql_query(format!("SELECT value FROM identity_accountability_current_results WHERE subject_id=$1 AND issuer_id=$2 ORDER BY realm_id,scope_set_digest{}", if lock { " FOR SHARE" } else { "" }))
         .bind::<Text,_>(agent.principal_id.as_str()).bind::<Text,_>(controller.principal_id.as_str()).get_results::<ValueRow>(&mut *conn).await.map_err(PersistenceError::database)?;
     let mut accountable = false;
     for row in rows {

@@ -66,6 +66,7 @@ async fn accepted_controller(
     station_did: arkret_wire::Did,
 ) -> pcr_genesis::PcrGenesisFixture {
     use diesel_async::RunQueryDsl;
+    use soland_storage::IdentityStoreRegistry;
     let principal = pcr_genesis::PcrGenesisFixture::new(station_did);
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
@@ -74,10 +75,22 @@ async fn accepted_controller(
         .await
         .unwrap();
     drop(conn);
-    principal
-        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+    let persistence = PgPersistenceStore::new(pool.clone());
+    persistence
+        .accounts()
+        .put(&soland_storage::AccountRecord {
+            pk: soland_storage::AccountPk(0),
+            principal_id: principal.history.account.principal_id.clone(),
+            station_id: principal.history.account.station_id.clone(),
+            localpart: String::new(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: chrono::Utc::now(),
+        })
         .await
         .unwrap();
+    principal.admit_founding_device(&persistence).await.unwrap();
     ordinary_realm::human_profile::register_fixture_signer(
         &principal.history.account,
         principal.history.device_verification_method.clone(),
@@ -666,6 +679,18 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         joined.participant_authority_digest,
         not_joined.participant_authority_digest
     );
+    let member_reader = PgAuthorityCommitStore { pool: pool.clone() };
+    assert!(matches!(
+        member_reader
+            .committed_event_for_member(
+                &join.authority_commit.event.event_id,
+                &arkret_wire::ActorId::account(agent.clone()),
+                &controller.station_id,
+            )
+            .await
+            .unwrap(),
+        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(_))
+    ));
     let controller_leave = ordinary_realm::next_request(
         &join.authority_commit,
         EventKind::MemberState,
@@ -675,6 +700,20 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
     );
     let mut controller_leave = ordinary_realm::source_request(&pool, controller_leave).await;
     uow.commit_event(controller_leave.clone()).await.unwrap();
+    let read_error = member_reader
+        .committed_event_for_member(
+            &join.authority_commit.event.event_id,
+            &arkret_wire::ActorId::account(agent.clone()),
+            &controller.station_id,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        read_error
+            .to_string()
+            .contains("controller binding is unavailable"),
+        "{read_error}"
+    );
     assert!(
         read(&pool, realm_id, &sidecar, controller)
             .await
@@ -690,6 +729,20 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
     );
     let mut controller_rejoin = ordinary_realm::source_request(&pool, controller_rejoin).await;
     uow.commit_event(controller_rejoin.clone()).await.unwrap();
+    let read_error = member_reader
+        .committed_event_for_member(
+            &join.authority_commit.event.event_id,
+            &arkret_wire::ActorId::account(agent.clone()),
+            &controller.station_id,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        read_error
+            .to_string()
+            .contains("controller binding is unavailable"),
+        "{read_error}"
+    );
     let stale_generation = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()

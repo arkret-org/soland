@@ -374,6 +374,7 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
         ("invite_directed_invitee_current_results", "invite_id", format!("'invite-' || {key}"), "jsonb_build_object('invitee_account_id',jsonb_build_object('account',m))".to_owned()),
         ("capability_grant_current_results", "grant_id,status,current_event_id,current_stream_ref", format!("'grant-' || {key},'active','event-' || {key},'{{}}'::jsonb"), format!("jsonb_build_object('id','grant-' || {key},'schema','ak.schema.capability.v1','status','active')")),
         ("mimi_room_binding_current_results", "mimi_room_uri,current_event_id", format!("'mimi-' || {key},'event-' || {key}"), format!("jsonb_build_object('mimi_room_uri','mimi-' || {key},'binding_scope',jsonb_build_object('realm_id',{realm}))")),
+        ("agent_interaction_current_results", "current_key,agent_account_id", format!("'interaction-' || {key},jsonb_build_object('principal_id','agent-' || {key},'station_id','station')"), "jsonb_build_object('interaction_mode','private')".to_owned()),
         ("agent_status_current_results", "current_key,agent_id,actor_id", format!("'agent-' || {key},'agent-' || {key},'{{}}'::jsonb"), "'\"active\"'::jsonb".to_owned()),
         ("agent_key_current_results", "current_key,agent_id,agent_key_id", format!("'key-' || {key},'agent-' || {key},'key-' || {key}"), "jsonb_build_object('authorizations','[]'::jsonb)".to_owned()),
     ] {
@@ -533,15 +534,15 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
                 .map(str::to_owned)
                 .collect::<std::collections::BTreeSet<_>>();
             assert_eq!(observed, expected);
-            // The union has 35 width-sized families: member, message and
-            // moderation plus the 32 seed_snapshot_families loop entries.
+            // The union has 36 width-sized families: member, message and
+            // moderation plus the 33 seed_snapshot_families loop entries.
             // Relation is seeded for the exact self-read matrix only and is
             // absent from this union. StrandWatch contributes one family,
             // not another row for each accepted replacement in its history.
             // The other five tables emit eight bootstrap facets and four
             // singleton rows per Realm.
-            assert_eq!(observed.len(), 40);
-            let output = 35.0 * width + 12.0;
+            assert_eq!(observed.len(), 41);
+            let output = 36.0 * width + 12.0;
             assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(output));
             // Up to four visited rows per output permits the planner's
             // low-selectivity current-table scan, but never a history scan

@@ -10,6 +10,79 @@ fn unavailable(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {detail}"))
 }
 
+/// Canonical Event reads use the content event.read action, independently of
+/// the member/history source that admits the read. This is not a delivery gate.
+pub(crate) async fn require_member_event_read_in_connection(
+    conn: &mut diesel_async::AsyncPgConnection,
+    realm: &RealmId,
+    circle: Option<&arkret_wire::CircleId>,
+    controller: &AccountId,
+    agent: &AccountId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let policies =
+        crate::policy_current_results::read_scoped_agent_management_policy_snapshot_in_connection(
+            conn, realm, circle,
+        )
+        .await?;
+    require_member_event_read(&policies, realm, controller, agent, at)
+}
+
+fn require_member_event_read(
+    policies: &[Policy],
+    realm: &RealmId,
+    controller: &AccountId,
+    agent: &AccountId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    // Reading an Event can disclose referenced objects and private preimages.
+    // Until those scopes are resolved, narrower rules cannot prove a nonmatch.
+    if policies
+        .iter()
+        .flat_map(|policy| &policy.rules)
+        .any(|rule| {
+            rule.resources.as_ref().is_some_and(|resources| {
+                resources
+                    .iter()
+                    .any(|resource| resource.kind != PolicyResourceKind::Realm)
+            })
+        })
+    {
+        return Err(unavailable(
+            "Agent Event read resource evidence is unavailable",
+        ));
+    }
+    let resources = [PolicyResourceSelector {
+        kind: PolicyResourceKind::Realm,
+        realm_id: Some(realm.clone()),
+        resource_ref: Some(realm.to_string()),
+    }];
+    let effect = evaluate_agent_management(
+        Some(policies),
+        &AgentManagementContext {
+            realm_id: realm,
+            ownership: Some((controller, agent)),
+            operation: AgentPolicyOperation::Read,
+            content_action: Some(
+                CapabilityActionId::from_wire("ak.event.read")
+                    .ok_or_else(|| unavailable("Event read action is unregistered"))?,
+            ),
+            resources: Some(&resources),
+            at,
+        },
+    )
+    .map_err(unavailable)?;
+    match effect {
+        PolicyEffect::Allow => Ok(()),
+        PolicyEffect::Deny => Err(PersistenceError::Conflict(
+            "capability_denied: Agent management forbids Event reading".to_owned(),
+        )),
+        PolicyEffect::Quarantine | PolicyEffect::RequireReview => Err(unavailable(
+            "Agent Event read requires unresolved quarantine or review evidence",
+        )),
+    }
+}
+
 /// The caller has verified the prospective member's ownership. Do not read
 /// an existing Agent join here: this gate precedes its first membership write.
 pub(crate) async fn require_join_in_connection(

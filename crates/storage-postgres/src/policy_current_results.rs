@@ -92,9 +92,40 @@ pub(crate) async fn read_scoped_agent_management_policies_in_connection(
     realm: &arkret_wire::RealmId,
     circle: Option<&arkret_wire::CircleId>,
 ) -> PersistenceResult<Vec<arkret_models_collaboration::governance::operation_wire::Policy>> {
+    read_scoped_agent_management_policies_at_cut(conn, realm, circle, true).await
+}
+
+/// Governing visibility only, from an enclosing repeatable-read snapshot.
+/// This does not prove authorization at a later network delivery point.
+pub(crate) async fn read_scoped_agent_management_policy_snapshot_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    circle: Option<&arkret_wire::CircleId>,
+) -> PersistenceResult<Vec<arkret_models_collaboration::governance::operation_wire::Policy>> {
+    read_scoped_agent_management_policies_at_cut(conn, realm, circle, false).await
+}
+
+async fn read_scoped_agent_management_policies_at_cut(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    circle: Option<&arkret_wire::CircleId>,
+    lock: bool,
+) -> PersistenceResult<Vec<arkret_models_collaboration::governance::operation_wire::Policy>> {
     use std::collections::{BTreeMap, BTreeSet};
 
-    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, realm).await?;
+    if lock {
+        crate::realm_authorization_cut::lock_realm_authorization_cut(conn, realm).await?;
+    } else if !sql_query(
+        "SELECT EXISTS(SELECT 1 FROM realm_authorities WHERE realm_id=$1) AS present",
+    )
+    .bind::<Text, _>(realm.as_str())
+    .get_result::<Present>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?
+    .present
+    {
+        return Err(refused("the Realm has no current governance authority"));
+    }
     let circle_source = circle
         .map(|circle_id| {
             serde_json::to_value(CommitStreamRef::Circle {
@@ -164,11 +195,11 @@ pub(crate) async fn read_scoped_agent_management_policies_in_connection(
             .push(row);
     }
     let ids = agent_ids.iter().cloned().collect::<Vec<_>>();
-    let rows = sql_query(
+    let rows = sql_query(format!(
         "SELECT policy_id,realm_id,current_commit_id,current_stream_position,current_event_id,value \
          FROM policy_current_results WHERE realm_id=$1 OR value->>'realm_id'=$1 OR policy_id=ANY($2) \
-         ORDER BY policy_id FOR SHARE",
-    )
+         ORDER BY policy_id{}", if lock { " FOR SHARE" } else { "" },
+    ))
     .bind::<Text,_>(realm.as_str()).bind::<diesel::sql_types::Array<Text>,_>(&ids)
     .load::<ManagementPolicyRow>(&mut *conn).await.map_err(PersistenceError::database)?;
     let mut current = BTreeMap::new();

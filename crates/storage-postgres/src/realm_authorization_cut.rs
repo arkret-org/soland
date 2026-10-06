@@ -100,6 +100,101 @@ fn capability_denied(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("capability_denied: {detail}"))
 }
 
+/// Verified current ownership shared by action and member-read admission.
+/// The caller holds the Realm lock or one repeatable-read visibility cut.
+pub(crate) async fn owned_controller_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    actor: &ActorId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Option<ActorId>> {
+    read_owned_controller_in_connection(conn, realm_id, actor, at, true).await
+}
+
+/// Read ownership without admission locks from one repeatable-read snapshot.
+pub(crate) async fn owned_controller_snapshot_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    actor: &ActorId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<Option<ActorId>> {
+    read_owned_controller_in_connection(conn, realm_id, actor, at, false).await
+}
+
+async fn read_owned_controller_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    actor: &ActorId,
+    at: chrono::DateTime<chrono::Utc>,
+    lock: bool,
+) -> PersistenceResult<Option<ActorId>> {
+    let Some(agent) = actor.as_account_id() else {
+        return Ok(None);
+    };
+    #[derive(QueryableByName)]
+    struct Present {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        present: bool,
+    }
+    // Classification is accepted ownership material, never a profile label.
+    // A broken/removed binding must not turn a known Agent into a human.
+    let known = sql_query("SELECT EXISTS(SELECT 1 FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id JOIN realm_commits c ON c.commit_id=p.current_commit_id AND c.realm_id=p.realm_id AND c.stream_position=p.current_stream_position WHERE p.agent_id=$1 AND g.station_id=$2) OR EXISTS(SELECT 1 FROM member_state_current_results m JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' WHERE m.realm_id=$3 AND m.member_id=$4 AND e.envelope->'payload' ? 'agent_controller_binding') AS present")
+        .bind::<Text,_>(agent.principal_id.as_str())
+        .bind::<Text,_>(agent.station_id.as_str())
+        .bind::<Text,_>(realm_id.as_str())
+        .bind::<Text,_>(actor.to_string())
+        .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+    if !known {
+        return Ok(None);
+    }
+    let controller = if lock {
+        crate::agent_interaction_current_results::controller_in_connection(
+            conn, realm_id, agent, at,
+        )
+        .await?
+    } else {
+        crate::agent_interaction_current_results::controller_snapshot_in_connection(
+            conn, realm_id, agent, at,
+        )
+        .await?
+    }
+    .ok_or_else(|| capability_denied("owned Agent current controller binding is unavailable"))?;
+    let nested = sql_query("SELECT EXISTS(SELECT 1 FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id WHERE p.agent_id=$1 AND g.station_id=$2) AS present")
+        .bind::<Text,_>(controller.principal_id.as_str())
+        .bind::<Text,_>(controller.station_id.as_str())
+        .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
+    if nested {
+        return Err(capability_denied(
+            "an Agent cannot supply another Agent's controller authority",
+        ));
+    }
+    let account = sql_query(format!(
+        "SELECT 'active' AS membership FROM accounts WHERE principal_id=$1 AND station_id=$2{}",
+        if lock { " FOR SHARE" } else { "" }
+    ))
+    .bind::<Text, _>(controller.principal_id.as_str())
+    .bind::<Text, _>(controller.station_id.as_str())
+    .get_result::<MembershipRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if account.is_none() {
+        return Err(capability_denied(
+            "owned Agent controller account is unavailable",
+        ));
+    }
+    let lifecycle = sql_query("SELECT l.state AS membership FROM account_lifecycle l JOIN accounts a ON a.pk=l.account_pk WHERE a.principal_id=$1 AND a.station_id=$2")
+        .bind::<Text,_>(controller.principal_id.as_str())
+        .bind::<Text,_>(controller.station_id.as_str())
+        .get_result::<MembershipRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    if lifecycle.is_some_and(|row| row.membership != "active") {
+        return Err(capability_denied(
+            "owned Agent controller account is not active",
+        ));
+    }
+    Ok(Some(ActorId::account(controller)))
+}
+
 /// The four authorization inputs of one actor in one Realm, read at one cut.
 pub(crate) struct RealmAuthorizationCut {
     realm_id: RealmId,
@@ -304,63 +399,7 @@ impl RealmAuthorizationCut {
         conn: &mut AsyncPgConnection,
         at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<Option<ActorId>> {
-        let Some(agent) = self.actor.as_account_id() else {
-            return Ok(None);
-        };
-        #[derive(QueryableByName)]
-        struct Present {
-            #[diesel(sql_type = diesel::sql_types::Bool)]
-            present: bool,
-        }
-        // Classification is accepted ownership material, never a profile label.
-        // A broken/removed binding must not turn a known Agent into a human.
-        let known = sql_query("SELECT EXISTS(SELECT 1 FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id JOIN realm_commits c ON c.commit_id=p.current_commit_id AND c.realm_id=p.realm_id AND c.stream_position=p.current_stream_position WHERE p.agent_id=$1 AND g.station_id=$2) OR EXISTS(SELECT 1 FROM member_state_current_results m JOIN realm_commits c ON c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id AND c.stream_position=m.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' WHERE m.realm_id=$3 AND m.member_id=$4 AND e.envelope->'payload' ? 'agent_controller_binding') AS present")
-            .bind::<Text,_>(agent.principal_id.as_str())
-            .bind::<Text,_>(agent.station_id.as_str())
-            .bind::<Text,_>(self.realm_id.as_str())
-            .bind::<Text,_>(self.actor.to_string())
-            .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
-        if !known {
-            return Ok(None);
-        }
-        let controller = crate::agent_interaction_current_results::controller_in_connection(
-            conn,
-            &self.realm_id,
-            agent,
-            at,
-        )
-        .await?
-        .ok_or_else(|| {
-            capability_denied("owned Agent current controller binding is unavailable")
-        })?;
-        let nested = sql_query("SELECT EXISTS(SELECT 1 FROM agent_provisioning_current_results p JOIN pcr_genesis_units g ON g.realm_id=p.realm_id WHERE p.agent_id=$1 AND g.station_id=$2) AS present")
-            .bind::<Text,_>(controller.principal_id.as_str())
-            .bind::<Text,_>(controller.station_id.as_str())
-            .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
-        if nested {
-            return Err(capability_denied(
-                "an Agent cannot supply another Agent's controller authority",
-            ));
-        }
-        let account = sql_query("SELECT 'active' AS membership FROM accounts WHERE principal_id=$1 AND station_id=$2 FOR SHARE")
-            .bind::<Text,_>(controller.principal_id.as_str())
-            .bind::<Text,_>(controller.station_id.as_str())
-            .get_result::<MembershipRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
-        if account.is_none() {
-            return Err(capability_denied(
-                "owned Agent controller account is unavailable",
-            ));
-        }
-        let lifecycle = sql_query("SELECT l.state AS membership FROM account_lifecycle l JOIN accounts a ON a.pk=l.account_pk WHERE a.principal_id=$1 AND a.station_id=$2")
-            .bind::<Text,_>(controller.principal_id.as_str())
-            .bind::<Text,_>(controller.station_id.as_str())
-            .get_result::<MembershipRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
-        if lifecycle.is_some_and(|row| row.membership != "active") {
-            return Err(capability_denied(
-                "owned Agent controller account is not active",
-            ));
-        }
-        Ok(Some(ActorId::account(controller)))
+        owned_controller_in_connection(conn, &self.realm_id, &self.actor, at).await
     }
 
     async fn admit_evaluation_in_connection(

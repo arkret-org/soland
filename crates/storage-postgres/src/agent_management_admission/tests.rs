@@ -466,3 +466,68 @@ fn join_refuses_unmapped_content_scopes_and_unresolved_approval() {
         .is_err()
     );
 }
+
+#[test]
+fn member_event_read_obeys_read_ban_without_turning_join_or_execute_into_read_bans() {
+    let read = |policies: &[Policy]| {
+        require_member_event_read(
+            policies,
+            &realm(),
+            &account("controller"),
+            &account("agent"),
+            chrono::Utc::now(),
+        )
+    };
+    assert!(read(&[]).is_ok());
+    assert!(read(&[policy(None, vec!["read"], "deny")]).is_err());
+    assert!(
+        read(&[policy(
+            None,
+            vec!["join", "authorize", "execute", "deliver"],
+            "deny"
+        )])
+        .is_ok()
+    );
+    assert!(read(&[policy(Some(vec!["ak.event.read"]), vec!["read"], "deny")]).is_err());
+    assert!(
+        read(&[policy(
+            Some(vec!["ak.message.create"]),
+            vec!["read"],
+            "deny"
+        )])
+        .is_ok()
+    );
+    for effect in ["quarantine", "require_review"] {
+        assert!(read(&[policy(None, vec!["read"], effect)]).is_err());
+    }
+}
+
+#[test]
+fn member_event_read_preserves_full_controller_identity_and_refuses_unresolved_scopes() {
+    let at = chrono::Utc::now();
+    let policies = [policy(None, vec!["read"], "deny")];
+    let mut foreign = account("controller");
+    foreign.station_id = "ak:did_core:web:other-station.example".parse().unwrap();
+    assert!(
+        require_member_event_read(&policies, &realm(), &foreign, &account("agent"), at).is_ok()
+    );
+    assert!(
+        require_member_event_read(&[], &realm(), &account("agent"), &account("agent"), at).is_err()
+    );
+    let mut scoped = policy(None, vec!["read"], "deny");
+    scoped.rules[0].resources = Some(vec![PolicyResourceSelector {
+        kind: PolicyResourceKind::Strand,
+        realm_id: Some(realm()),
+        resource_ref: Some("ak:strand:AT47eNekH0_aKZyIMsXq_s1FAWdYXC71_CUxQ5O478t-".to_owned()),
+    }]);
+    assert!(
+        require_member_event_read(
+            &[scoped],
+            &realm(),
+            &account("controller"),
+            &account("agent"),
+            at
+        )
+        .is_err()
+    );
+}

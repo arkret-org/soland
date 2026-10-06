@@ -241,7 +241,7 @@ async fn realm_history_access(
     .and_then(|row| row.value.as_str().map(ToOwned::to_owned)))
 }
 
-async fn realm_purpose(
+pub(crate) async fn realm_purpose(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
 ) -> PersistenceResult<Option<arkret_models_collaboration::events_payloads::realm::RealmPurpose>> {
