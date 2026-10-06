@@ -1772,23 +1772,12 @@ pub(super) fn agent_pairing_handle_is_open(agent_record: &AgentPrincipalRecord) 
 
 pub(super) fn agent_record_reserves_selector_slug(
     agent_record: &AgentPrincipalRecord,
-    now: &chrono::DateTime<chrono::Utc>,
+    _now: &chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    // A deactivated agent releases its slug. A keyed agent (ever completed a
-    // first pairing) always reserves it. A never-keyed agent reserves the slug
-    // only while its bootstrap window is still live; once it lapses the slug is
-    // released for a fresh provision (key-management.md §3.6.1).
-    if agent_record.state == AgentLifecycleState::Deactivated {
-        return false;
-    }
-    if agent_record.authorized_event_ref.is_some() {
-        return true;
-    }
-    agent_pairing_handle_is_open(agent_record)
-        && agent_record
-            .pairing_expires_at
-            .map(|expires_at| expires_at > *now)
-            .unwrap_or(false)
+    // Pairing expiry, unbinding and missing keys do not end the identity:
+    // active/paused Agents can still renew pairing. Only terminal lifecycle
+    // releases the name; retained key/handle history must not keep it reserved.
+    agent_record.state != AgentLifecycleState::Deactivated
 }
 
 pub(super) fn ensure_pairing_request_id_matches(

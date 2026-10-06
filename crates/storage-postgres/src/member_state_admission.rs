@@ -670,7 +670,20 @@ async fn admit_member_state(
         }
         return check_agent_controller_join(conn, event, commit, &payload).await;
     }
-    require_ordinary_member(conn, &event.realm_id, &payload.member_id).await?;
+    // Agent entry still requires its exact controller binding. An
+    // administrator's terminal transition uses the ordinary FSM instead:
+    // it removes an existing membership and grants no Agent admission.
+    // Keep unsupported Agent self-cleanup separate from this admin path.
+    if event.actor_id != payload.member_id
+        && matches!(
+            payload.membership,
+            MembershipPayloadState::Leave | MembershipPayloadState::Ban
+        )
+    {
+        require_ordinary_realm(conn, &event.realm_id).await?;
+    } else {
+        require_ordinary_member(conn, &event.realm_id, &payload.member_id).await?;
+    }
     let from = locked_membership(conn, &event.realm_id, &payload.member_id).await?;
     let to = state_name(payload.membership);
     let writer = edge_writer(&from, to).ok_or_else(|| {

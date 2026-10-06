@@ -635,7 +635,7 @@ fn agent_view_projects_spec_shape_dropping_internal_columns() {
 }
 
 #[test]
-fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
+fn selector_slug_reservation_releases_only_terminal_agents() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-07-07T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
@@ -651,8 +651,7 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
     paused.state = AgentLifecycleState::Paused;
     assert!(agent_record_reserves_selector_slug(&paused, &now));
 
-    // A never-keyed agent reserves the slug only while its bootstrap handle
-    // is still live.
+    // A never-keyed Agent is recoverable even after its handle expires.
     let pending_future = pending_pairing_record(
         AGENT_CORE,
         CONTROLLER_CORE,
@@ -669,21 +668,27 @@ fn selector_slug_reservation_ignores_expired_and_terminal_agents() {
         "01234567",
         "2026-07-06T00:00:00.000Z",
     );
-    assert!(!agent_record_reserves_selector_slug(&pending_expired, &now));
+    assert!(agent_record_reserves_selector_slug(&pending_expired, &now));
 
-    // A never-keyed agent whose bootstrap window lapsed (active intent, no
-    // key, no live handle) releases the slug for a fresh provision.
+    // Readiness and a missing/consumed handle cannot release a live identity.
     let mut bootstrap_lapsed = agent_record(AGENT_CORE, CONTROLLER_CORE);
     bootstrap_lapsed.state = AgentLifecycleState::Active;
-    assert!(!agent_record_reserves_selector_slug(
-        &bootstrap_lapsed,
-        &now
-    ));
+    assert!(agent_record_reserves_selector_slug(&bootstrap_lapsed, &now));
 
     // Deactivation is terminal.
     let mut deactivated = active;
     deactivated.state = AgentLifecycleState::Deactivated;
     assert!(!agent_record_reserves_selector_slug(&deactivated, &now));
+    let mut expired_paused = pending_expired.clone();
+    expired_paused.state = AgentLifecycleState::Paused;
+    assert!(agent_record_reserves_selector_slug(&expired_paused, &now));
+    // Even retained future/open pairing fields must not reserve a terminal name.
+    let mut terminal_pending = pending_future;
+    terminal_pending.state = AgentLifecycleState::Deactivated;
+    assert!(!agent_record_reserves_selector_slug(
+        &terminal_pending,
+        &now
+    ));
 }
 
 #[test]

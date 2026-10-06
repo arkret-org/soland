@@ -293,13 +293,24 @@ pub(super) async fn provision_agent(
                 })?;
             for record in &mut existing {
                 *record = lazily_expire_pairing(state, record.clone()).await?;
+                if record.agent_slug.as_deref() == Some(slug.as_str())
+                    && agent_record_is_materialized(record)
+                {
+                    let (_, _, lifecycle) =
+                        accepted_agent_key_authorization_snapshot(state, record).await?;
+                    // Name availability follows accepted terminal state, not a
+                    // possibly stale private lifecycle intent.
+                    record.state = lifecycle.ok_or_else(|| {
+                        pairing_failed_precondition("Agent accepted lifecycle is unavailable")
+                    })?;
+                }
             }
             if existing.iter().any(|record| {
                 record.agent_slug.as_deref() == Some(slug.as_str())
                     && agent_record_reserves_selector_slug(record, &now_utc)
             }) {
                 return Err(AppError::param_invalid(
-                    "slug is already bound to an active or open agent for this controller",
+                    "slug is already bound to a recoverable agent for this controller",
                 ));
             }
 
@@ -528,6 +539,17 @@ pub(super) async fn provision_agent(
                 .map_err(|error| AppError::internal(format!("agent lookup failed: {error}")))?;
             for record in &mut existing {
                 *record = lazily_expire_pairing(state, record.clone()).await?;
+                if record.agent_slug.as_deref() == Some(slug.as_str())
+                    && agent_record_is_materialized(record)
+                {
+                    let (_, _, lifecycle) =
+                        accepted_agent_key_authorization_snapshot(state, record).await?;
+                    // Name availability follows accepted terminal state, not a
+                    // possibly stale private lifecycle intent.
+                    record.state = lifecycle.ok_or_else(|| {
+                        pairing_failed_precondition("Agent accepted lifecycle is unavailable")
+                    })?;
+                }
             }
             let existing_record = existing
                 .iter()
@@ -563,7 +585,7 @@ pub(super) async fn provision_agent(
                 })
             {
                 return Err(AppError::param_invalid(
-                    "slug is already bound to an active or open agent for this controller",
+                    "slug is already bound to a recoverable agent for this controller",
                 ));
             }
 
@@ -825,13 +847,15 @@ pub(super) async fn renew_agent_pairing(
     let record = require_agent_controller(state, &session, &agent_id).await?;
     // Lazy-expire first so a stale pending record renews through the same
     // state path as an observed-expired one.
-    let record = lazily_expire_pairing(state, record).await?;
+    let mut record = lazily_expire_pairing(state, record).await?;
     crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,
         &record,
         chrono::Utc::now(),
     )
     .await?;
+    let (_, _, lifecycle) = accepted_agent_key_authorization_snapshot(state, &record).await?;
+    record.state = projected_agent_lifecycle(record.state, lifecycle)?;
     if record.state == AgentLifecycleState::Deactivated {
         return Err(
             pairing_failed_precondition("agent is deactivated; deactivation is terminal")
