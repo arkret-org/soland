@@ -37,6 +37,11 @@ const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const CALLER: &str = "did:web:alice.example";
 const REQUEST_CANONICAL_LIMIT: usize = 64 * 1024;
 
+// Construct large scenario Futures outside the test harness poll frame.
+fn boxed_scenario<F: std::future::Future>(body: impl FnOnce() -> F) -> std::pin::Pin<Box<F>> {
+    Box::pin(body())
+}
+
 fn problem_type(code: &str) -> String {
     format!("https://arkret.org/problems/{code}")
 }
@@ -178,9 +183,9 @@ async fn assert_all_unavailable(app: &salvo::Service, token: &str, body: &Value,
     }
 }
 
-#[test]
-fn signer_keys_query_rejects_foreign_recipients_with_one_not_found_shape() {
-    run_on_deep_stack("signer_keys_query_recipient", recipient_body);
+#[tokio::test]
+async fn signer_keys_query_rejects_foreign_recipients_with_one_not_found_shape() {
+    boxed_scenario(recipient_body).await;
 }
 
 async fn recipient_body() {
@@ -244,9 +249,9 @@ async fn recipient_body() {
     );
 }
 
-#[test]
-fn signer_keys_query_scopes_selectors_to_the_request_realm() {
-    run_on_deep_stack("signer_keys_query_realm", realm_body);
+#[tokio::test]
+async fn signer_keys_query_scopes_selectors_to_the_request_realm() {
+    boxed_scenario(realm_body).await;
 }
 
 async fn realm_body() {
@@ -297,9 +302,9 @@ async fn realm_body() {
     }
 }
 
-#[test]
-fn signer_keys_query_enforces_the_closed_selector_union() {
-    run_on_deep_stack("signer_keys_query_selector_union", selector_union_body);
+#[tokio::test]
+async fn signer_keys_query_enforces_the_closed_selector_union() {
+    boxed_scenario(selector_union_body).await;
 }
 
 async fn selector_union_body() {
@@ -479,9 +484,9 @@ async fn selector_union_body() {
     .await;
 }
 
-#[test]
-fn signer_keys_query_enforces_selector_count_uniqueness_and_byte_budget() {
-    run_on_deep_stack("signer_keys_query_budget", budget_body);
+#[tokio::test]
+async fn signer_keys_query_enforces_selector_count_uniqueness_and_byte_budget() {
+    boxed_scenario(budget_body).await;
 }
 
 async fn budget_body() {
@@ -602,9 +607,9 @@ async fn budget_body() {
 #[path = "../../../storage-postgres/tests/support/historical_human.rs"]
 mod historical_human;
 
-#[test]
-fn signer_keys_query_resolves_frozen_human_and_rejects_unproven_foreign_coordinates() {
-    run_on_deep_stack("signer_keys_query_human_frozen", human_frozen_body);
+#[tokio::test]
+async fn signer_keys_query_resolves_frozen_human_and_rejects_unproven_foreign_coordinates() {
+    boxed_scenario(human_frozen_body).await;
 }
 
 async fn human_frozen_body() {
