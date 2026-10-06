@@ -888,13 +888,63 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
     );
 }
 
+fn station_with_webvh(
+    url: String,
+) -> (AppState, PgPool, Arc<dyn soland_storage::PersistenceStore>) {
+    let mut external = soland_test_support::app_config();
+    external.public_base_url = url.clone();
+    external.notary_signing_key_seed = Some([83; 32]);
+    external.seed_demo_data = false;
+    external.development_mode = true;
+    external.did_resolver_allow_methods.push("webvh".into());
+    let (leased, pool) = soland_test_support::app_state_with_pool(external.clone());
+    let local = crate::config::AppConfig {
+        public_base_url: url,
+        notary_signing_key_seed: Some([83; 32]),
+        seed_demo_data: false,
+        development_mode: true,
+        did_resolver_allow_methods: external.did_resolver_allow_methods.clone(),
+        ..crate::config::AppConfig::test_default()
+    };
+    assert_eq!(local.trust_domain, external.trust_domain);
+    let state = AppState::new_with_service_identity(
+        local,
+        soland_storage_postgres::Db {
+            pool: Some(pool.clone()),
+        },
+        Arc::new(PgPersistenceStore::new(pool.clone())),
+        soland_test_support::fixture_service_identity(&external),
+        leased.service_resolution_commitment().as_ref().clone(),
+        [83; 32],
+    );
+    use soland_test_support::AppStateTestExt as _;
+    let keep_lease = leased.test_persistence();
+    (state, pool, keep_lease)
+}
+
+fn seal_service_commit(commit: &mut arkret_wire::RealmCommit, governor: &AppState) {
+    let body =
+        arkret_canonical::canonical::unsigned_value(commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        &arkret_canonical::canonical_json_bytes(&body).unwrap(),
+    ));
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &arkret_canonical::canonical::unsigned_value(commit, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        governor.service_verification_method("notary-key").unwrap(),
+        commit.committed_at,
+        &ed25519_dalek::SigningKey::from_bytes(&historical_human::station_authority_seed()),
+    )
+    .unwrap();
+    commit.verify_commit_id_matches_content().unwrap();
+}
 #[tokio::test]
 async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_signed_bootstrap() {
     let listener = registered_tls_peer();
     let base = format!("https://{}/", listener.listener.local_addr().unwrap());
-    let (governor_state, governor_pool, _governor_lease) = station(base.clone());
+    let (governor_state, governor_pool, _governor_lease) = station_with_webvh(base.clone());
     let (origin, origin_pool, _origin_lease) =
-        station("https://forward-recovery-origin.internal/".into());
+        station_with_webvh("https://forward-recovery-origin.internal/".into());
     let mut governor =
         historical_human::HumanFixture::new(&governor_pool, governor_state.service_did()).await;
     // The existing closed bootstrap facet must explicitly authorize the Origin
@@ -961,7 +1011,7 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
             .as_ref()
             .map(|fact| fact.digest().unwrap());
         transaction.commit.previous_commit_ref = previous_commit;
-        historical_human::seal_commit(&mut transaction.commit, &governor.pcr.history.station_did);
+        seal_service_commit(&mut transaction.commit, &governor_state);
         previous_commit = Some(transaction.commit.commit_id.clone());
         governor.unit.submission.events[index] =
             EventAdmissionSubmission::new(transaction.event.clone());
@@ -995,7 +1045,8 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
         }}),
         at,
     );
-    let strand = historical_human::request_for_event(&governor, previous, strand_event, at);
+    let mut strand = historical_human::request_for_event(&governor, previous, strand_event, at);
+    seal_service_commit(&mut strand.authority_commit.commit, &governor_state);
     let uow = PgEventCommitUnitOfWork::new(governor_pool.clone());
     uow.commit_event(strand.clone()).await.unwrap();
     // Membership is not an action grant. Read the actual accepted root cut,
@@ -1064,14 +1115,12 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
     .unwrap();
     grant.authority_commit.commit.producer_signer_fact_digest = Some(grant_fact.digest().unwrap());
     grant.authority_commit.producer_signer_fact = Some(grant_fact);
-    historical_human::seal_commit(
-        &mut grant.authority_commit.commit,
-        &governor.pcr.history.station_did,
-    );
+    seal_service_commit(&mut grant.authority_commit.commit, &governor_state);
     uow.commit_event(grant.clone()).await.unwrap();
     let previous = &grant.authority_commit;
-    let join = foreign_request(&origin, &human, &governor, previous, EventKind::MemberState,
+    let mut join = foreign_request(&origin, &human, &governor, previous, EventKind::MemberState,
         serde_json::json!({"realm_id":previous.event.realm_id,"member_id":actor,"membership":"join","reason":"real forward recovery membership"})).await;
+    seal_service_commit(&mut join.authority_commit.commit, &governor_state);
     uow.commit_event(join.clone()).await.unwrap();
     let source = PgAuthorityCommitStore {
         pool: governor_pool.clone(),
@@ -1299,6 +1348,8 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
     let response_pool = governor_pool.clone();
     let response_account = human.pcr.history.account.clone();
     let response_commit = commit.clone();
+    let history_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let response_stop = history_stop.clone();
     let reply = tokio::spawn(async move {
         assert_eq!(
             tcp_scan(
@@ -1317,7 +1368,8 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
                 response_governor,
                 response_pool,
                 response_account,
-                response_commit
+                response_commit,
+                response_stop,
             )
             .await,
             1
@@ -1332,9 +1384,9 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
         &mut located,
         &session,
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await;
+    history_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    let original = original.unwrap().unwrap();
     assert_eq!(original, *commit);
     assert_eq!(reply.await.unwrap(), 2);
     let held = store
@@ -1377,7 +1429,38 @@ async fn tcp_opening_bootstrap(
     pool: PgPool,
     from: AccountId,
     expected: arkret_wire::RealmCommit,
+    history_stop: Arc<std::sync::atomic::AtomicBool>,
 ) -> usize {
+    use soland_storage::PersistenceStore as _;
+    let records = PgPersistenceStore::new(pool.clone())
+        .webvh()
+        .list_log_events(governor.service_did().as_str())
+        .await
+        .unwrap();
+    assert!(!records.is_empty());
+    let mut log = Vec::new();
+    for record in records {
+        log.extend(arkret_canonical::canonical_json_bytes(&record.operation).unwrap());
+        log.push(b'\n');
+    }
+    let verified = arkret_identity::verify_did_webvh_v1_chain_and_witness_bytes(
+        &governor.service_did(),
+        &log,
+        None,
+    )
+    .unwrap();
+    let document = arkret_canonical::canonical_json_bytes(&verified.log.head_state).unwrap();
+    let log_url = reqwest::Url::parse(
+        &arkret_identity::DidWebvhResolver::log_url(&governor.service_did()).unwrap(),
+    )
+    .unwrap();
+    let doc_url = reqwest::Url::parse(
+        &arkret_identity::DidWebvhResolver::document_url(&governor.service_did()).unwrap(),
+    )
+    .unwrap();
+    let base = reqwest::Url::parse(&governor.config().public_base_url).unwrap();
+    assert_eq!(log_url.origin(), base.origin());
+    assert_eq!(doc_url.origin(), base.origin());
     tokio::task::spawn_blocking(move || {
     let (stream, _) = listener.listener.accept().unwrap();
     stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
@@ -1434,7 +1517,7 @@ async fn tcp_opening_bootstrap(
         ).await.unwrap().unwrap();
         let key = ed25519_dalek::SigningKey::from_bytes(&historical_human::station_authority_seed());
         let snapshot = soland_services::authority_commit::build_signed_realm_state_snapshot(
-            &material, DidUrl::new(format!("{}#authority", governor.service_did())).unwrap(),
+            &material, governor.service_verification_method("notary-key").unwrap(),
             &key, Utc::now(),
         ).unwrap();
         let nonce = crate::routing::realm_join::nonce_for_request(&actual.request_id).unwrap();
@@ -1454,6 +1537,48 @@ async fn tcp_opening_bootstrap(
     stream.write_all(&body).unwrap();
     stream.flush().unwrap();
     assert!(!stream.conn.is_handshaking());
+    drop(stream);
+    listener.listener.set_nonblocking(true).unwrap();
+    let mut history_requests = 0;
+    while !history_stop.load(std::sync::atomic::Ordering::SeqCst) {
+        let socket = match listener.listener.accept() {
+            Ok((socket, _)) => socket,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            }
+            Err(error) => panic!("history listener: {error}"),
+        };
+        socket.set_nonblocking(false).unwrap();
+        socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        socket.set_write_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        let mut stream = rustls::StreamOwned::new(
+            rustls::ServerConnection::new(listener.tls.clone()).unwrap(), socket);
+        let mut request = Vec::new();
+        loop {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0);
+            request.extend_from_slice(&buf[..n]);
+            assert!(request.len() < 1024 * 1024);
+            if request.windows(4).any(|v| v == b"\r\n\r\n") { break; }
+        }
+        let request = std::str::from_utf8(&request).unwrap();
+        let line = request.lines().next().unwrap();
+        let body = if line == format!("GET {} HTTP/1.1", log_url.path()) {
+            &log
+        } else {
+            assert_eq!(line, format!("GET {} HTTP/1.1", doc_url.path()));
+            &document
+        };
+        let header = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+        stream.write_all(header.as_bytes()).unwrap();
+        stream.write_all(body).unwrap();
+        stream.flush().unwrap();
+        assert!(!stream.conn.is_handshaking());
+        history_requests += 1;
+    }
+    assert!(history_requests > 0);
+    listener.listener.set_nonblocking(false).unwrap();
     1
     }).await.unwrap()
 }
