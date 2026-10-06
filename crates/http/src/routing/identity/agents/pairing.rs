@@ -946,20 +946,21 @@ pub(super) async fn agent_key_pair(
         .with_wire_code("duplicate_conflict"));
     }
     let session = if service_authorized {
-        let controller_principal_id =
+        let controller_account =
             body.authorize_event
                 .event
                 .executed_by
                 .as_ref()
+                .and_then(arkret_wire::ActorId::as_account_id)
                 .ok_or_else(|| {
                     AppError::capability_denied(
-                        "authorize_event.executed_by is required for delegated pairing",
+                        "authorize_event.executed_by must be a controller Account for delegated pairing",
                     )
                 })?;
-        let controller_principal_id = controller_principal_id.signing_principal_id().as_str();
+        let controller_principal_id = controller_account.principal_id.as_str();
         let controller_device_id =
             service_pairing_controller_device_id(&body, controller_principal_id)?;
-        controller_service_session(controller_principal_id, &controller_device_id, state)
+        controller_service_session(controller_account, &controller_device_id, state).await?
     } else {
         aa.authenticated_session(state, req).await?
     };

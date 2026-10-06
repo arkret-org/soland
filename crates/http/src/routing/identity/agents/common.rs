@@ -4,17 +4,35 @@ use arkret_wire::CapabilityActionId;
 use super::*;
 
 /// Narrow internal execution context used only after the caller has authenticated
-/// the deployment S2S credential and the handler has re-validated the claimed
-/// controller against the authoritative Agent record.
-pub(super) fn controller_service_session(
-    controller_principal_id: &str,
+/// the deployment S2S credential. Bind the exact controller Account here; the
+/// handler still validates its ownership against the authoritative Agent record.
+pub(super) async fn controller_service_session(
+    controller_account: &arkret_wire::AccountId,
     device_id: &str,
     state: &AppState,
-) -> SessionRecord {
-    SessionRecord {
-        token_hash: format!("agent-pair-commit:{controller_principal_id}"),
-        account_pk: None,
-        actor: controller_principal_id.to_owned(),
+) -> Result<SessionRecord, AppError> {
+    if controller_account.station_id != state.service_core_id() {
+        return Err(AppError::capability_denied(
+            "delegated pairing controller must belong to this Station",
+        ));
+    }
+    let account = state
+        .identities()
+        .account(controller_account)
+        .await
+        .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
+        .ok_or_else(|| AppError::unauthenticated("controller account no longer exists"))?;
+    if &account.account_id != controller_account
+        || account.principal_id != controller_account.principal_id
+    {
+        return Err(AppError::unauthenticated(
+            "delegated pairing must bind the exact stored controller Account",
+        ));
+    }
+    Ok(SessionRecord {
+        token_hash: format!("agent-pair-commit:{}", controller_account.principal_id),
+        account_pk: Some(account.pk),
+        actor: controller_account.principal_id.to_string(),
         endpoint: soland_services::identity::SessionEndpointState::HumanDevice {
             device_id: device_id.to_owned(),
         },
@@ -24,7 +42,7 @@ pub(super) fn controller_service_session(
         expires_at: now() + chrono::Duration::minutes(5),
         created_at: now(),
         revoked_at: None,
-    }
+    })
 }
 
 pub(super) fn validate_agent_id(value: &str) -> Result<(), AppError> {

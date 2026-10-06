@@ -5,6 +5,92 @@ const AGENT_DID: &str = "did:web:agent.example";
 const CONTROLLER_CORE: &str = "ak:did_core:web:controller.example";
 const SERVICE_CORE: &str = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
 
+fn service_pairing_test_state() -> AppState {
+    AppState::new(
+        crate::config::AppConfig::test_default(),
+        soland_storage_postgres::Db { pool: None },
+    )
+}
+
+async fn save_service_pairing_controller(state: &AppState, account_id: arkret_wire::AccountId) {
+    state
+        .identities()
+        .save_account(soland_services::identity::AccountProfileState {
+            pk: soland_storage::AccountPk(0),
+            principal_id: account_id.principal_id.clone(),
+            localpart: format!("controller-{}", account_id.station_id),
+            account_id,
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn service_pairing_session_binds_the_exact_stored_controller_account() {
+    let state = service_pairing_test_state();
+    let controller_account = arkret_wire::AccountId::new(
+        DidCoreId::new(CONTROLLER_CORE).unwrap(),
+        state.service_core_id(),
+    );
+    let other_account = arkret_wire::AccountId::new(
+        controller_account.principal_id.clone(),
+        DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+    );
+    save_service_pairing_controller(&state, other_account).await;
+    save_service_pairing_controller(&state, controller_account.clone()).await;
+    let device_id = "ak:device:01904100-0000-7000-8000-000000000002";
+    let session = controller_service_session(&controller_account, device_id, &state)
+        .await
+        .expect("delegated pairing binds its controller Account");
+    let account = state
+        .identities()
+        .account(&controller_account)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.account_pk, Some(account.pk));
+    assert_eq!(session.human_device_id().map(String::as_str), Some(device_id));
+    assert_eq!(
+        crate::routing::identity::session_actor::validated_session_actor(&state, &session)
+            .await
+            .expect("delegated context passes the ordinary exact Account gate"),
+        arkret_wire::ActorId::account(controller_account),
+    );
+}
+
+#[tokio::test]
+async fn service_pairing_session_rejects_a_missing_controller_account() {
+    let state = service_pairing_test_state();
+    let controller_account = arkret_wire::AccountId::new(
+        DidCoreId::new(CONTROLLER_CORE).unwrap(),
+        state.service_core_id(),
+    );
+    assert!(
+        controller_service_session(&controller_account, "device", &state)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn service_pairing_session_rejects_the_same_controller_at_another_station() {
+    let state = service_pairing_test_state();
+    let controller_account = arkret_wire::AccountId::new(
+        DidCoreId::new(CONTROLLER_CORE).unwrap(),
+        DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+    );
+    save_service_pairing_controller(&state, controller_account.clone()).await;
+    assert!(
+        controller_service_session(&controller_account, "device", &state)
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn deployment_bearer_does_not_select_agent_service_auth() {
     let mut request = Request::new();
