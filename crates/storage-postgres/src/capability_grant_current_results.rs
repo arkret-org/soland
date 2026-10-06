@@ -714,6 +714,34 @@ async fn materialize_capability_grant(
         return Err(conflict("grant requires a finite global expiry"));
     }
 
+    if let CapabilitySubject::Actor(subject) = &body.subject {
+        let subject_cut = crate::realm_authorization_cut::RealmAuthorizationCut::read(
+            conn,
+            &event.realm_id,
+            subject,
+        )
+        .await?;
+        if let Some(controller) = subject_cut
+            .owned_controller_in_connection(conn, commit.committed_at)
+            .await?
+        {
+            crate::agent_management_admission::require_authorization_in_connection(
+                conn,
+                &event.realm_id,
+                controller
+                    .as_account_id()
+                    .ok_or_else(|| conflict("Agent authorization controller is not an account"))?,
+                subject
+                    .as_account_id()
+                    .ok_or_else(|| conflict("Agent authorization subject is not an account"))?,
+                &body.actions,
+                &body.resources,
+                commit.committed_at,
+            )
+            .await?;
+        }
+    }
+
     // The Realm authority row already serializes commits, while this ordered
     // lock snapshot gives every grant dependency one deterministic database
     // basis. No process-local projection participates in admission.

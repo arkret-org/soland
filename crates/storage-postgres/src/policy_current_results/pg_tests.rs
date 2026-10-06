@@ -565,3 +565,82 @@ async fn concurrent_stale_editor_observes_the_winners_revision_after_the_lock() 
         .get_result::<PolicyRevisionRow>(&mut winner).await.unwrap();
     assert_eq!(latest.current_commit_id, next_commit.commit_id.as_str());
 }
+
+#[tokio::test]
+async fn management_authorization_uses_accepted_current_and_refuses_missing_projection() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    seed_genesis(&mut conn).await;
+    let controller = arkret_wire::AccountId::new(
+        "ak:did_core:web:controller.example".parse().unwrap(),
+        "ak:did_core:web:station.example".parse().unwrap(),
+    );
+    let agent = arkret_wire::AccountId::new(
+        "ak:did_core:web:agent.example".parse().unwrap(),
+        controller.station_id.clone(),
+    );
+    let actions = ["ak.message.create".to_owned()];
+    let resources = [arkret_wire::WireResourceSelector::realm(realm())];
+    crate::agent_management_admission::require_authorization_in_connection(
+        &mut conn,
+        &realm(),
+        &controller,
+        &agent,
+        &actions,
+        &resources,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap();
+    let mut payload = json!(policy(None, true));
+    payload["value"]["rules"] = json!([{
+        "rule_id":"ban", "kind":"agent", "agent_target":{"kind":"controller","controller_account_id":controller},
+        "agent_operations":["authorize"], "effect":"deny"
+    }]);
+    let accepted = event(EventKind::PolicySet, payload, 1);
+    let basis = commit(&accepted, 1);
+    insert_history(&mut conn, &accepted, &basis).await;
+    commit_in_connection(&mut conn, &accepted, &basis)
+        .await
+        .unwrap();
+    let error = crate::agent_management_admission::require_authorization_in_connection(
+        &mut conn,
+        &realm(),
+        &controller,
+        &agent,
+        &actions,
+        &resources,
+        chrono::Utc::now(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("forbids authorization"),
+        "{error}"
+    );
+    sql_query("DELETE FROM policy_current_results")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(
+        crate::agent_management_admission::require_authorization_in_connection(
+            &mut conn,
+            &realm(),
+            &controller,
+            &agent,
+            &actions,
+            &resources,
+            chrono::Utc::now(),
+        )
+        .await
+        .is_err()
+    );
+    let empty =
+        sql_query("SELECT NOT EXISTS(SELECT 1 FROM capability_grant_current_results) AS present")
+            .get_result::<Present>(&mut conn)
+            .await
+            .unwrap();
+    assert!(empty.present);
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}

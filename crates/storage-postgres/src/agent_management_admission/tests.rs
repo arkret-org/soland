@@ -261,3 +261,77 @@ fn wrong_account_or_realm_and_conflicting_facts_are_rejected() {
         .is_err()
     );
 }
+
+fn authorize(policies: &[Policy], actions: &[&str]) -> PersistenceResult<()> {
+    require_authorization(
+        policies,
+        &realm(),
+        &account("controller"),
+        &account("agent"),
+        &actions
+            .iter()
+            .map(|action| (*action).to_owned())
+            .collect::<Vec<_>>(),
+        &[WireResourceSelector::realm(realm())],
+        chrono::Utc::now(),
+    )
+}
+
+#[test]
+fn authorization_requires_every_requested_action_not_one_alternative() {
+    let policies = [policy(
+        Some(vec!["ak.message.create"]),
+        vec!["authorize"],
+        "deny",
+    )];
+    assert!(authorize(&policies, &["ak.reaction.add"]).is_ok());
+    assert!(authorize(&policies, &["ak.reaction.add", "ak.message.create"]).is_err());
+    assert!(authorize(&policies, &["ak.realm.owner"]).is_err());
+    assert!(authorize(&[], &["ak.realm.owner"]).is_ok());
+}
+
+#[test]
+fn authorize_ban_is_independent_of_issuer_and_execute_or_join_bans() {
+    assert!(
+        authorize(
+            &[policy(None, vec!["authorize"], "deny")],
+            &["ak.message.create"]
+        )
+        .is_err()
+    );
+    assert!(
+        authorize(
+            &[policy(None, vec!["execute", "join"], "deny")],
+            &["ak.message.create"]
+        )
+        .is_ok()
+    );
+    let mut sibling = policy(None, vec!["authorize"], "deny");
+    sibling.rules[0].agent_target = Some(
+        serde_json::from_value(json!({"kind":"agent","agent_account_id":account("sibling")}))
+            .unwrap(),
+    );
+    assert!(authorize(&[sibling], &["ak.message.create"]).is_ok());
+    for effect in ["require_review", "quarantine"] {
+        assert!(
+            authorize(
+                &[policy(None, vec!["authorize"], effect)],
+                &["ak.message.create"]
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn broad_authorization_cannot_hide_a_narrow_management_restriction() {
+    let mut scoped = policy(None, vec!["authorize"], "deny");
+    scoped.rules[0].resources = Some(vec![PolicyResourceSelector {
+        kind: PolicyResourceKind::Strand,
+        realm_id: Some(realm()),
+        resource_ref: Some("ak:strand:AT47eNekH0_aKZyIMsXq_s1FAWdYXC71_CUxQ5O478t-".to_owned()),
+    }]);
+    assert!(authorize(&[scoped], &["ak.message.create"]).is_err());
+    assert!(authorize(&[], &[]).is_err());
+    assert!(authorize(&[], &["not-a-registered-action"]).is_err());
+}

@@ -10,6 +10,109 @@ fn unavailable(detail: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {detail}"))
 }
 
+/// Every requested action must pass: grant admission has no alternative-action
+/// semantics. The issuer's own grant/root authority is checked separately.
+pub(crate) async fn require_authorization_in_connection(
+    conn: &mut diesel_async::AsyncPgConnection,
+    realm: &RealmId,
+    controller: &AccountId,
+    agent: &AccountId,
+    actions: &[String],
+    resources: &[arkret_wire::WireResourceSelector],
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    let policies =
+        crate::policy_current_results::read_scoped_agent_management_policies_in_connection(
+            conn, realm, None,
+        )
+        .await?;
+    require_authorization(&policies, realm, controller, agent, actions, resources, at)
+}
+
+fn require_authorization(
+    policies: &[Policy],
+    realm: &RealmId,
+    controller: &AccountId,
+    agent: &AccountId,
+    actions: &[String],
+    resources: &[arkret_wire::WireResourceSelector],
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    if actions.is_empty() || resources.is_empty() {
+        return Err(unavailable("Agent authorization coverage is empty"));
+    }
+    // A broad grant selector is a coverage promise, not an actual resource.
+    // Until containment/intersection is established, never let a narrower
+    // management restriction disappear by testing only the grant's Realm.
+    if policies.iter().flat_map(|p| &p.rules).any(|rule| {
+        rule.resources.as_ref().is_some_and(|selectors| {
+            selectors
+                .iter()
+                .any(|selector| selector.kind != PolicyResourceKind::Realm)
+        })
+    }) || (!policies.is_empty()
+        && resources.iter().any(|resource| {
+            resource.kind != arkret_wire::ResourceSelectorKind::Realm
+                || resource.realm_id.as_ref() != Some(realm)
+                || resource.match_scope.is_some()
+        }))
+    {
+        return Err(unavailable(
+            "Agent authorization resource coverage is unavailable",
+        ));
+    }
+    let actual_resources = [PolicyResourceSelector {
+        kind: PolicyResourceKind::Realm,
+        realm_id: Some(realm.clone()),
+        resource_ref: Some(realm.to_string()),
+    }];
+    for action in actions {
+        let descriptor = arkret_schema::capability_action(action)
+            .ok_or_else(|| unavailable("Agent authorization action is unknown"))?;
+        let content_action = if descriptor.event_mapping_kind == "aggregate_admin"
+            || ServiceOperationId::from_wire(action).is_some()
+        {
+            if !policies.is_empty() {
+                return Err(unavailable(
+                    "Agent authorization action coverage is unavailable",
+                ));
+            }
+            None
+        } else {
+            Some(
+                CapabilityActionId::from_wire(action)
+                    .ok_or_else(|| unavailable("Agent authorization content action is unknown"))?,
+            )
+        };
+        let effect = evaluate_agent_management(
+            Some(policies),
+            &AgentManagementContext {
+                realm_id: realm,
+                ownership: Some((controller, agent)),
+                operation: AgentPolicyOperation::Authorize,
+                content_action,
+                resources: Some(&actual_resources),
+                at,
+            },
+        )
+        .map_err(unavailable)?;
+        match effect {
+            PolicyEffect::Allow => {}
+            PolicyEffect::Deny => {
+                return Err(PersistenceError::Conflict(
+                    "capability_denied: Agent management forbids authorization".to_owned(),
+                ));
+            }
+            PolicyEffect::Quarantine | PolicyEffect::RequireReview => {
+                return Err(unavailable(
+                    "Agent authorization requires unresolved quarantine or review evidence",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Ownership and operation facts have already been resolved at the accepting cut.
 /// This is not a read/delivery gate and never establishes ownership itself.
 /// An empty result holds no permission path; the caller may try a separately

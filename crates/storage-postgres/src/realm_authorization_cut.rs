@@ -299,7 +299,7 @@ impl RealmAuthorizationCut {
         .await
     }
 
-    async fn owned_controller_in_connection(
+    pub(crate) async fn owned_controller_in_connection(
         &self,
         conn: &mut AsyncPgConnection,
         at: chrono::DateTime<chrono::Utc>,
