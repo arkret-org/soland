@@ -3072,7 +3072,8 @@ async fn commit_batch_in_connection(
 
     let mut outcome = EventCommitOutcome::default();
     for event in request.events {
-        commit_one_in_connection(
+        // Keep the per-Event admission state out of the enclosing batch future.
+        Box::pin(commit_one_in_connection(
             conn,
             event,
             request.applet_record.as_ref(),
@@ -3080,7 +3081,7 @@ async fn commit_batch_in_connection(
             request.invite_claim_proof.as_ref(),
             request.event_approvals.as_ref(),
             &mut outcome,
-        )
+        ))
         .await?;
     }
 
@@ -3141,7 +3142,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
     ) -> PersistenceResult<EventCommitOutcome> {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            commit_batch_in_connection(conn, request).await
+            Box::pin(commit_batch_in_connection(conn, request)).await
         })
         .await
         .map_err(PgTransactionError::into_persistence)
