@@ -1599,6 +1599,55 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
         assert_eq!(row.commit(), &transaction.commit);
         assert_eq!(row.reducer_input(), Some(&transaction.event));
     }
+    // The exact GET and historical signer query must share the proven unit
+    // floor: the foreign founder's join at 1 precedes this member's join at 2.
+    let founder_join = &unit.transactions[1];
+    assert_eq!(founder_join.commit.stream_position, 1);
+    assert_eq!(unit.transactions[2].commit.stream_position, 2);
+    assert!(founder_join.commit.stream_position < unit.transactions[2].commit.stream_position);
+    let soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(
+        exact_founder_join,
+    )) = peer_store
+        .committed_event_for_member(&founder_join.event.event_id, &pair.peer, &peer_station)
+        .await
+        .unwrap()
+    else {
+        panic!("the founding peer must hold the exact foreign founder join below its own join");
+    };
+    assert_eq!(exact_founder_join.event, founder_join.event);
+    assert_eq!(exact_founder_join.commit, founder_join.commit);
+    let human = founder_join.event.human_device_producer().unwrap().unwrap();
+    let historical_selector = arkret_models_identity::SignerKeyQuerySelector::HistoricalEvent {
+        sender: arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice {
+            actor: founder_join.event.actual_signer().clone(),
+            device_id: human.device_id,
+            verification_method: founder_join
+                .event
+                .producer_proof
+                .as_ref()
+                .unwrap()
+                .verification_method
+                .clone(),
+            committed_event_ref: arkret_wire::CommittedEventRef {
+                event_id: founder_join.event.event_id.clone(),
+                commit_id: founder_join.commit.commit_id.clone(),
+                stream_ref: founder_join.commit.stream_ref.clone(),
+                stream_position: founder_join.commit.stream_position,
+            },
+        },
+    };
+    let historical = peer_store
+        .historical_producer_signer_key(&realm_id, &historical_selector)
+        .await
+        .unwrap()
+        .expect("the same accepted foreign founding original retains its historical signer");
+    assert_eq!(historical.selector(), &historical_selector);
+    assert!(matches!(
+        historical,
+        arkret_models_identity::SignerKeyQueryResult::HistoricalResolved { .. }
+    ));
+    historical.validate(&realm_id).unwrap();
+
     let snapshot =
         soland_storage_postgres::account_snapshot_material(&peer_pool, &realm_id, &pair.peer)
             .await
@@ -1731,6 +1780,15 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
         floor.floor_reason,
         arkret_wire::ReadableFloorReason::MembershipJoin
     );
+    // Missing the actual genesis invalidates the atomic floor exception; a
+    // retained slot or historical fact alone must not disclose position 1.
+    assert!(matches!(
+        peer_store
+            .committed_event_for_member(&founder_join.event.event_id, &pair.peer, &peer_station)
+            .await
+            .unwrap(),
+        soland_storage::MemberCommittedEventRead::NotVisible
+    ));
 }
 
 #[tokio::test]
@@ -3648,6 +3706,19 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     let rejoin_floor = rejoin_history.readable_floor.unwrap();
     assert_eq!(rejoin_floor.oldest_position, head.commit.stream_position);
     assert_eq!(rejoin_floor.floor_commit_id, head.commit.commit_id);
+    // Rejoining does not recover the old atomic unit's below-current-join
+    // foreign originals through the exact GET path.
+    assert!(matches!(
+        store
+            .committed_event_for_member(
+                &unit.transactions[1].event.event_id,
+                &pair.peer,
+                &pair.station
+            )
+            .await
+            .unwrap(),
+        soland_storage::MemberCommittedEventRead::NotVisible
+    ));
     assert_eq!(
         rejoin_floor.floor_reason,
         arkret_wire::ReadableFloorReason::MembershipJoin

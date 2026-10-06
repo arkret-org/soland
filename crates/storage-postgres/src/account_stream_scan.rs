@@ -1486,14 +1486,10 @@ pub(crate) async fn committed_event_for_member(
                 match history.as_str() {
                     "all_history_for_current_members" => 0,
                     "since_join" => {
-                        let Some(join) = current_join(conn, &realm_id, caller).await? else {
-                            return Ok(Read::NotVisible);
-                        };
-                        u64::try_from(join.current_stream_position).map_err(|_| {
-                            PersistenceError::Internal(
-                                "stored join position is negative".to_owned(),
-                            )
-                        })?
+                        match replica_realm_floor_in_connection(conn, &realm_id, caller).await? {
+                            Ok(floor) => floor.oldest_position,
+                            Err(_) => return Ok(Read::NotVisible),
+                        }
                     }
                     _ => return Ok(Read::NotVisible),
                 }
