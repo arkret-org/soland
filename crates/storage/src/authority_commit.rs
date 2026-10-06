@@ -1669,6 +1669,22 @@ pub trait AuthorityCommitStore: Send + Sync {
         }
     }
 
+    /// Private write-recovery eligibility for an original accepted Human own
+    /// leave. This grants no ordinary scan/get/historical-key read permission.
+    /// Caller already verifies the original Gov/producer/Fact and held prefix;
+    /// this read checks the same stored bound intent, effective terminal cut
+    /// and the hosted member's original opening anchor in one read cut.
+    async fn accepted_own_leave_bound_result(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        account: &arkret_wire::AccountId,
+        local_service: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<bool> {
+        let _ = (event, commit, account, local_service);
+        Ok(false)
+    }
+
     async fn circle_views_for_actor(
         &self,
         realm_id: &arkret_wire::RealmId,
