@@ -1431,7 +1431,7 @@ async fn tcp_opening_bootstrap(
     expected: arkret_wire::RealmCommit,
     history_stop: Arc<std::sync::atomic::AtomicBool>,
 ) -> usize {
-    use soland_storage::PersistenceStore as _;
+    use soland_storage::DeliveryPolicyStoreRegistry as _;
     let records = PgPersistenceStore::new(pool.clone())
         .webvh()
         .list_log_events(governor.service_did().as_str())
