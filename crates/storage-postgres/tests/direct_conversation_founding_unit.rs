@@ -1608,7 +1608,11 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     let soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(
         exact_founder_join,
     )) = peer_store
-        .committed_event_for_member(&founder_join.event.event_id, &pair.peer, &peer_station)
+        .committed_event_for_member(
+            &founder_join.event.event_id,
+            &pair.peer_actor(),
+            &peer_station,
+        )
         .await
         .unwrap()
     else {
@@ -1784,7 +1788,11 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     // retained slot or historical fact alone must not disclose position 1.
     assert!(matches!(
         peer_store
-            .committed_event_for_member(&founder_join.event.event_id, &pair.peer, &peer_station)
+            .committed_event_for_member(
+                &founder_join.event.event_id,
+                &pair.peer_actor(),
+                &peer_station
+            )
             .await
             .unwrap(),
         soland_storage::MemberCommittedEventRead::NotVisible
@@ -3712,7 +3720,7 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         store
             .committed_event_for_member(
                 &unit.transactions[1].event.event_id,
-                &pair.peer,
+                &pair.peer_actor(),
                 &pair.station
             )
             .await
