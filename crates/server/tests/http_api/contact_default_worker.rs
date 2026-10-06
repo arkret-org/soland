@@ -96,8 +96,16 @@ async fn scenario() {
         "Contact worker device",
     ))
     .await;
-    // Bob's account binding is genuinely projected by its accepted PCR. No
-    // caller-controlled contact row or producer permission is inserted.
+    // PCR admission freezes the control source; the existing registered
+    // development login separately creates the complete local Account/session
+    // binding, as it did for Alice above. No direct account/contact SQL is used.
+    let _bob_token = Box::pin(dev_token_for_device(
+        state.clone(),
+        bob.history.did.as_str(),
+        bob.history.founding_device_id.as_str(),
+        "Contact worker peer device",
+    ))
+    .await;
     assert!(
         state
             .test_persistence()
