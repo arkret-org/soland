@@ -1,4 +1,5 @@
 target*/
+artifacts/
 
 # Local development overrides — copy from `.env.example`. Real secrets must
 # never be committed.
