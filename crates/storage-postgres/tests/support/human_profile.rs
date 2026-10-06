@@ -25,13 +25,17 @@ fn fixture_signers()
     > = std::sync::OnceLock::new();
     SIGNERS.get_or_init(Default::default)
 }
-fn retain_signing_material(fixture: &pcr_genesis::PcrGenesisFixture) {
+pub fn register_fixture_signer(account: &AccountId, method: DidUrl, seed: [u8; 32]) {
     fixture_signers().lock().unwrap().insert(
-        ActorId::account(fixture.history.account.clone()).to_string(),
-        (
-            fixture.history.device_verification_method.clone(),
-            fixture.history.founding_device_signing_seed,
-        ),
+        ActorId::account(account.clone()).to_string(),
+        (method, seed),
+    );
+}
+fn retain_signing_material(fixture: &pcr_genesis::PcrGenesisFixture) {
+    register_fixture_signer(
+        &fixture.history.account,
+        fixture.history.device_verification_method.clone(),
+        fixture.history.founding_device_signing_seed,
     );
 }
 pub fn sign_fixture_event(event: arkret_wire::Event) -> Option<arkret_wire::Event> {

@@ -5017,9 +5017,12 @@ async fn source_if_human(
     if request
         .authority_commit
         .event
-        .human_device_producer()
-        .unwrap()
-        .is_none()
+        .producer_proof
+        .as_ref()
+        .is_some_and(|proof| {
+            proof.jws
+                == arkret_wire::test_support::structural_only_detached_jws(&proof.event_digest)
+        })
     {
         if let Some(event) =
             human_profile::sign_fixture_event(request.authority_commit.event.clone())
@@ -5682,7 +5685,13 @@ async fn relation_snapshot_carrier_keeps_circle_and_cross_realm_reference_disclo
         assert!(!bytes.contains(&secret));
     }
 
-    let foreign = ordinary_realm::open_discussion(&pool, "relation-snapshot-foreign").await;
+    let foreign = ordinary_realm::open_discussion_for_station(
+        &pool,
+        "relation-snapshot-foreign",
+        &creator.station_id,
+        &human_profile::station_did(&creator.station_id),
+    )
+    .await;
     let cross_domain = serde_json::json!({"domain_kind":"tuple","relation_kind":"references","from_ref":public_id,"to_ref":foreign.strand_id});
     let cross = realm_event_request_as(
         &circle,
@@ -5716,6 +5725,12 @@ async fn relation_snapshot_carrier_keeps_circle_and_cross_realm_reference_disclo
             _
         ))
     ));
+    // The shared ordinary-Realm helper owns a separate fixture signing registry.
+    // Reuse the actually accepted foreign founder PCR/Profile in this module's
+    // registry before its new invite, without treating inherited Fact as source.
+    let foreign_founder =
+        human_profile::admit(&pool, &creator.station_id, "ordinary-founder").await;
+    assert_eq!(foreign_founder, creator_account(&foreign.unit));
     let (_, foreign_join) = admit_joined_account(
         &pool,
         &uow,

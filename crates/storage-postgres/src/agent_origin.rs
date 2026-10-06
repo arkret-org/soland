@@ -3,7 +3,7 @@
 use arkret_models_identity::AgentProducerEvidence;
 use arkret_wire::{Event, RequestId};
 use chrono::{DateTime, Utc};
-use diesel::sql_types::{BigInt, Jsonb, Text};
+use diesel::sql_types::{BigInt, Binary, Jsonb, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
 use serde_json::Value;
@@ -106,8 +106,8 @@ pub(crate) async fn check_origin_cut(
         &state.key_authorization_event,
         &state.agent_lifecycle_witness.accepted_status_event,
     ] {
-        let row = sql_query("SELECT envelope AS value FROM canonical_events WHERE event_id=$1 AND state='committed' FOR SHARE")
-            .bind::<Text,_>(original.event_id.as_str()).get_result::<JsonRow>(&mut *conn).await.optional()
+        let row = sql_query("SELECT envelope AS value FROM canonical_events WHERE id=$1 AND state='committed' FOR SHARE")
+            .bind::<Binary,_>(original.event_id.token_bytes().to_vec()).get_result::<JsonRow>(&mut *conn).await.optional()
             .map_err(PersistenceError::database)?.ok_or_else(|| missing("Origin accepted Event unavailable"))?;
         let stored: Event = serde_json::from_value(row.value).map_err(invalid)?;
         if stored != *original {
@@ -492,8 +492,8 @@ async fn original_event(
     conn: &mut AsyncPgConnection,
     commit: &arkret_wire::RealmCommit,
 ) -> PersistenceResult<Event> {
-    let row=sql_query("SELECT e.envelope AS value FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk WHERE c.commit_id=$1 AND e.event_id=$2 AND e.state='committed' FOR SHARE OF c,e")
-        .bind::<Text,_>(commit.commit_id.as_str()).bind::<Text,_>(commit.event_ref.as_str()).get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+    let row=sql_query("SELECT e.envelope AS value FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk WHERE c.commit_id=$1 AND e.id=$2 AND e.state='committed' FOR SHARE OF c,e")
+        .bind::<Text,_>(commit.commit_id.as_str()).bind::<Binary,_>(commit.event_ref.token_bytes().to_vec()).get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(|| missing("Agent original accepted Event unavailable"))?;
     let event: Event = serde_json::from_value(row.value).map_err(invalid)?;
     if arkret_canonical::canonical_json_bytes(&event)
@@ -568,10 +568,12 @@ pub(crate) async fn assemble_state_in_connection(
         commits.push(commit);
     }
     let genesis_commit = commits
+        .as_slice()
         .first()
         .ok_or_else(|| missing("Agent accepted Genesis missing"))?
         .clone();
     let source = commits
+        .as_slice()
         .last()
         .ok_or_else(|| missing("Agent source Commit missing"))?
         .clone();
@@ -674,12 +676,6 @@ pub(crate) async fn assemble_state_in_connection(
     let mut dependencies = std::collections::BTreeMap::new();
     let mut bindings = Vec::new();
     for original in [&genesis, &authorized, &lifecycle] {
-        if bindings
-            .iter()
-            .any(|b: &AgentProducerBinding| b.event_ref == original.0.event_id)
-        {
-            continue;
-        }
         let frozen = sql_query("SELECT source_json AS value FROM agent_origin_control_sources WHERE event_id=$1 AND commit_id=$2 FOR SHARE")
             .bind::<Text,_>(original.0.event_id.as_str()).bind::<Text,_>(original.1.commit_id.as_str())
             .get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
@@ -697,12 +693,25 @@ pub(crate) async fn assemble_state_in_connection(
                 return Err(invalid("same dependency ref has conflicting content"));
             }
         }
-        bindings.push(AgentProducerBinding {
+        let binding = AgentProducerBinding {
             event_ref: original.0.event_id.clone(),
             accepted_commit_id: original.1.commit_id.clone(),
             signer_resolution_evidence_ref: reference,
-        });
+        };
+        if let Some(previous) = bindings
+            .iter()
+            .find(|previous: &&AgentProducerBinding| previous.event_ref == binding.event_ref)
+        {
+            if previous != &binding {
+                return Err(invalid(
+                    "same producer Event has conflicting accepted binding",
+                ));
+            }
+        } else {
+            bindings.push(binding);
+        }
     }
+    bindings.sort_by(|left, right| left.event_ref.cmp(&right.event_ref));
     // Select only an immutable history captured before an actual control
     // acceptance. It must independently verify every Commit at that Commit's
     // signature time. This never discovers today's DID to repair old material.

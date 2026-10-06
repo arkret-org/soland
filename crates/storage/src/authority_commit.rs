@@ -1345,7 +1345,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         _dependency: &arkret_models_identity::AgentSignerDependency,
         _history: &arkret_models_identity::AuthenticatedServiceResolution,
     ) -> PersistenceResult<()> {
-        Err(PersistenceError::Conflict(
+        Err(crate::PersistenceError::Conflict(
             "dependency_missing: Origin source storage unavailable".into(),
         ))
     }

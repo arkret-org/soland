@@ -44,6 +44,9 @@ pub(super) async fn submit_self_agent_key_revoke(
             "an Agent key revocation is executed by the authenticated controller".to_owned(),
         ));
     }
+    if let Some(original) = super::authority_self_event_unit::exact_replay(state, event).await? {
+        return Ok(original);
+    }
     let origin_source = super::authority_forward::prepare_control_source(state, event).await?;
     let committed_at = Utc::now();
     let method = arkret_wire::DidUrl::new(
@@ -81,3 +84,7 @@ pub(super) async fn submit_self_agent_key_revoke(
         },
     })
 }
+
+#[cfg(test)]
+#[path = "authority_control_exact_replay_tests.rs"]
+mod exact_replay_tests;

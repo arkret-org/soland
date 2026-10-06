@@ -3462,6 +3462,11 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
     )
     .await;
     fixture.admit(&governance_pool).await;
+    ordinary_realm::human_profile::register_fixture_signer(
+        &fixture.pcr.history.account,
+        fixture.pcr.history.device_verification_method.clone(),
+        fixture.pcr.history.founding_device_signing_seed,
+    );
     let unit = fixture.unit.clone();
     let founder = || fixture.pcr.history.account.principal_id.clone();
     let founder_actor = || arkret_wire::ActorId::account(fixture.pcr.history.account.clone());
@@ -3496,6 +3501,7 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         }}),
         at,
     ));
+    let strand = ordinary_realm::source_request(&governance_pool, strand).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let default = sourced(next_request(
@@ -3509,6 +3515,7 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         }),
         at,
     ));
+    let default = ordinary_realm::source_request(&governance_pool, default).await;
     uow.commit_event(default.clone()).await.unwrap();
     let message = sourced(next_request(
         &default.authority_commit,
@@ -3517,6 +3524,7 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
         message_payload(&strand_id, "plaintext kept on the governing Station"),
         at,
     ));
+    let message = ordinary_realm::source_request(&governance_pool, message).await;
     uow.commit_event(message.clone()).await.unwrap();
 
     // The join opens the held stream pending anchor.

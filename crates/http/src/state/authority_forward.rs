@@ -989,3 +989,36 @@ pub(super) async fn stage_control_source(
     }
     Ok(())
 }
+
+// Routing's dedicated Agent key/lifecycle ingress uses the same authenticated
+// producer source as self-events, without a second lookup or private carrier.
+impl AppState {
+    pub(crate) async fn exact_accepted_agent_control_original(
+        &self,
+        event: &Event,
+    ) -> ServiceResult<Option<arkret_wire::AuthoritySubmitOutcome>> {
+        super::authority_self_event_unit::exact_replay(self, event).await
+    }
+
+    pub(crate) async fn prepare_agent_control_original_source(
+        &self,
+        event: &Event,
+    ) -> ServiceResult<
+        Option<(
+            arkret_models_identity::AgentSignerDependency,
+            arkret_models_identity::AuthenticatedServiceResolution,
+        )>,
+    > {
+        prepare_control_source(self, event).await
+    }
+    pub(crate) async fn stage_agent_control_original_source(
+        &self,
+        transaction: &soland_storage::AuthorityCommitTransaction,
+        original: Option<(
+            arkret_models_identity::AgentSignerDependency,
+            arkret_models_identity::AuthenticatedServiceResolution,
+        )>,
+    ) -> ServiceResult<()> {
+        stage_control_source(self, transaction, original).await
+    }
+}

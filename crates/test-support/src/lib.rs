@@ -714,3 +714,19 @@ impl RuntimeHealthPort for MemoryRuntimeHealth {
 /// Real PostgreSQL Human source/admission fixture shared by transport regressions.
 #[path = "../../storage-postgres/tests/support/historical_human.rs"]
 pub mod historical_human;
+
+/// Counts only: actual native-control accepted/staging/history/outbox footprint.
+/// No identity, key, payload or protocol material is returned.
+pub async fn native_control_source_footprint(
+    pool: &soland_storage_postgres::PgPool,
+) -> serde_json::Value {
+    use diesel_async::RunQueryDsl;
+    #[derive(diesel::QueryableByName)]
+    struct Counts {
+        #[diesel(sql_type=diesel::sql_types::Jsonb)]
+        value: serde_json::Value,
+    }
+    let mut conn = pool.get().await.expect("fixture PG connection");
+    diesel::sql_query("SELECT jsonb_build_object('events',(SELECT count(*) FROM canonical_events),'commits',(SELECT count(*) FROM realm_commits),'sources',(SELECT count(*) FROM agent_origin_control_sources),'histories',(SELECT count(*) FROM agent_origin_commit_histories),'staging',(SELECT count(*) FROM agent_origin_control_source_candidates),'facts',(SELECT count(*) FROM agent_producer_signer_keys),'outbox',(SELECT count(*) FROM event_federation_outbox),'roots',(SELECT count(*) FROM account_device_signer_evidence),'gates',(SELECT count(*) FROM agent_origin_gate_intents),'forward',(SELECT count(*) FROM agent_origin_forward_evidence)) AS value")
+        .get_result::<Counts>(&mut conn).await.expect("actual source footprint").value
+}

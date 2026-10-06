@@ -1,5 +1,7 @@
 #[path = "../../test-support/src/device_authorization_history.rs"]
 mod device_history_fixture;
+#[path = "support/historical_control_source.rs"]
+mod historical_control_source;
 mod support;
 
 use arkret_models_collaboration::events_payloads::{
@@ -5439,9 +5441,31 @@ async fn agent_pcr_genesis_requires_its_provision_declaration() {
         AgentProvisionAdmissionOutcome, AgentProvisionAdmissionWrite,
     };
 
-    let (pool, station) = contract_store().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let historical_station =
+        historical_control_source::HistoricalControlStation::new("pcr-native-control", [83; 32]);
+    let station = historical_station.core.clone();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+        .bind::<Text, _>(station.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
     let store = PgAuthorityCommitStore { pool: pool.clone() };
-    let controller_fixture = fixture(&station);
+    let controller_fixture = DeviceHistoryFixture::new_with(
+        historical_station.did.clone(),
+        DeviceHistoryFixtureOptions {
+            local_id: format!("pcr-{}", uuid::Uuid::now_v7().simple()),
+            ..Default::default()
+        },
+    );
+    historical_control_source::register_device(
+        &controller_fixture.account,
+        &controller_fixture.founding_device_id,
+        &controller_fixture.events[1].event_id,
+    );
     let controller = controller_fixture.account.clone();
     let controller_realm = RealmId::new(controller_fixture.events[0].realm_id.to_string()).unwrap();
     let method = controller_fixture.device_verification_method.clone();
@@ -5513,23 +5537,25 @@ async fn agent_pcr_genesis_requires_its_provision_declaration() {
     };
     let admit = async |event: &arkret_wire::Event| {
         let commit = station_genesis_commit(&head, event, &station_did, genesis_at);
+        let transaction = AuthorityCommitTransaction {
+            expected_authority: soland_storage::CurrentRealmAuthority {
+                realm_id: RealmId::from_event_id(&event.event_id),
+                authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                    event.event_id.clone(),
+                ),
+                ..authority.clone()
+            },
+            event: event.clone(),
+            commit,
+            producer_signer_fact: None,
+            mls_state: None,
+            welcomes: Vec::new(),
+            recipient_queue_capacity: 0,
+        };
+        historical_control_source::stage_registered_signed_candidate(&pool, &transaction).await;
         profiles
             .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {
-                commit: AuthorityCommitTransaction {
-                    expected_authority: soland_storage::CurrentRealmAuthority {
-                        realm_id: RealmId::from_event_id(&event.event_id),
-                        authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
-                            event.event_id.clone(),
-                        ),
-                        ..authority.clone()
-                    },
-                    event: event.clone(),
-                    commit,
-                    producer_signer_fact: None,
-                    mls_state: None,
-                    welcomes: Vec::new(),
-                    recipient_queue_capacity: 0,
-                },
+                commit: transaction,
                 queued_at: genesis_at,
             })
             .await
@@ -5741,7 +5767,18 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
         AgentPcrGenesisAdmissionWrite, AgentProvisionAdmissionWrite,
     };
 
-    let (pool, station) = contract_store().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let historical_station =
+        historical_control_source::HistoricalControlStation::new("pcr-native-control", [83; 32]);
+    let station = historical_station.core.clone();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+        .bind::<Text, _>(station.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let admit_genesis = async |fixture: DeviceHistoryFixture| {
         let genesis = assemble(station.clone(), fixture);
@@ -5751,7 +5788,18 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
             .unwrap();
         genesis
     };
-    let controller_fixture = fixture(&station);
+    let controller_fixture = DeviceHistoryFixture::new_with(
+        historical_station.did.clone(),
+        DeviceHistoryFixtureOptions {
+            local_id: format!("pcr-{}", uuid::Uuid::now_v7().simple()),
+            ..Default::default()
+        },
+    );
+    historical_control_source::register_device(
+        &controller_fixture.account,
+        &controller_fixture.founding_device_id,
+        &controller_fixture.events[1].event_id,
+    );
     let controller = controller_fixture.account.clone();
     let controller_realm = RealmId::new(controller_fixture.events[0].realm_id.to_string()).unwrap();
     let method = controller_fixture.device_verification_method.clone();
@@ -5759,7 +5807,18 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
     let station_did = controller_fixture.station_did.clone();
     let controller_device = controller_fixture.founding_device_id.clone();
     let controller_genesis = admit_genesis(controller_fixture).await;
-    let stranger_fixture = fixture(&station);
+    let stranger_fixture = DeviceHistoryFixture::new_with(
+        historical_station.did.clone(),
+        DeviceHistoryFixtureOptions {
+            local_id: format!("pcr-{}", uuid::Uuid::now_v7().simple()),
+            ..Default::default()
+        },
+    );
+    historical_control_source::register_device(
+        &stranger_fixture.account,
+        &stranger_fixture.founding_device_id,
+        &stranger_fixture.events[1].event_id,
+    );
     let stranger = stranger_fixture.account.clone();
     let stranger_method = stranger_fixture.device_verification_method.clone();
     let stranger_seed = stranger_fixture.founding_device_signing_seed;
@@ -5856,13 +5915,16 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
         &station_did,
         head.committed_at + chrono::TimeDelta::seconds(2),
     );
-    profiles
-        .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {
+    historical_control_source::admit_genesis(
+        &profiles,
+        &pool,
+        AgentPcrGenesisAdmissionWrite {
             commit: tx(genesis.clone(), genesis_commit.clone()),
             queued_at: genesis_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     let historical_store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
     let producer_selector = |event: &arkret_wire::Event, commit: &arkret_wire::RealmCommit| {
@@ -6018,12 +6080,14 @@ async fn agent_key_and_lifecycle_commit_only_through_the_control_unit() {
         )
     };
     let admit = async |event: &arkret_wire::Event, previous: &arkret_wire::RealmCommit| {
+        let transaction = tx(
+            event.clone(),
+            station_successor(previous, event, &station_did, 1),
+        );
+        historical_control_source::stage_registered_signed_candidate(&pool, &transaction).await;
         profiles
             .admit_agent_control_event(AgentControlAdmissionWrite {
-                commit: tx(
-                    event.clone(),
-                    station_successor(previous, event, &station_did, 1),
-                ),
+                commit: transaction,
                 queued_at: previous.committed_at,
             })
             .await

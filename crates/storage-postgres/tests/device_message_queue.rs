@@ -29,6 +29,9 @@ use soland_storage::{
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{Db, PgDeviceMessageStore, PgPool};
 
+#[path = "support/historical_control_source.rs"]
+mod historical_control_source;
+
 const STATION: &str = "ak:did_core:web:device-message-queue.example";
 
 /// Two devices of one account, both accepted by the Station: the founding
@@ -49,18 +52,20 @@ struct TwoDeviceHistory {
     second: DeviceRevocationGateSelector,
 }
 
-async fn two_device_history(pool: &PgPool) -> TwoDeviceHistory {
+async fn two_device_history_for_station(
+    pool: &PgPool,
+    station_did: arkret_wire::Did,
+) -> TwoDeviceHistory {
+    let station = arkret_wire::project_did_to_core_id(&station_did).unwrap();
     let mut conn = pool.get().await.unwrap();
     sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
-        .bind::<Text, _>(STATION)
+        .bind::<Text, _>(station.as_str())
         .execute(&mut *conn)
         .await
         .unwrap();
     drop(conn);
     let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
-    let mut fixture = pcr_genesis::PcrGenesisFixture::new(
-        device_authorization_history::did_web_station(&STATION.parse().unwrap()),
-    );
+    let mut fixture = pcr_genesis::PcrGenesisFixture::new(station_did);
     let founding = fixture
         .admit_founding_device(&persistence)
         .await
@@ -75,6 +80,14 @@ async fn two_device_history(pool: &PgPool) -> TwoDeviceHistory {
         founding,
         second,
     }
+}
+
+async fn two_device_history(pool: &PgPool) -> TwoDeviceHistory {
+    two_device_history_for_station(
+        pool,
+        device_authorization_history::did_web_station(&STATION.parse().unwrap()),
+    )
+    .await
 }
 
 fn message(
@@ -498,7 +511,7 @@ async fn postgres_agent_sender_without_current_authorization_writes_nothing() {
 }
 
 const AGENT_DID: &str = "did:web:queue-agent.example";
-const STATION_AUTHORITY_SEED: [u8; 32] = [90; 32];
+const STATION_AUTHORITY_SEED: [u8; 32] = [83; 32];
 const AGENT_RUNTIME_SEED: [u8; 32] = [91; 32];
 
 /// An Agent whose PCR genesis and `ak.agent.key.authorize` are signed by the
@@ -525,11 +538,20 @@ impl CommittedAgent {
         };
         use soland_storage::ActorProfileStore as _;
 
+        let historical_station = historical_control_source::HistoricalControlStation::new(
+            "device-queue-native-agent",
+            STATION_AUTHORITY_SEED,
+        );
         let TwoDeviceHistory {
             history: controller,
             second: recipient,
             ..
-        } = two_device_history(pool).await;
+        } = two_device_history_for_station(pool, historical_station.did.clone()).await;
+        historical_control_source::register_device(
+            &controller.account,
+            &controller.founding_device_id,
+            &controller.events[1].event_id,
+        );
         let authority = soland_services::authority_commit::AuthorityCommitApplication::new(
             soland_services::persistence::PersistenceHandle::new(std::sync::Arc::new(
                 soland_storage_postgres::PgPersistenceStore::new(pool.clone()),
@@ -537,7 +559,7 @@ impl CommittedAgent {
             100,
         );
         let store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
-        let station: arkret_wire::DidCoreId = STATION.parse().unwrap();
+        let station = historical_station.core.clone();
         let agent_did = arkret_wire::Did::new(AGENT_DID).unwrap();
         let agent_id = arkret_wire::project_did_to_core_id(&agent_did).unwrap();
         let agent_account = arkret_wire::AccountId::new(agent_id.clone(), station.clone());
@@ -619,8 +641,10 @@ impl CommittedAgent {
             .await
             .unwrap();
         let committed_at = Utc::now();
-        profiles
-            .admit_agent_pcr_genesis(soland_storage::AgentPcrGenesisAdmissionWrite {
+        historical_control_source::admit_genesis(
+            &profiles,
+            pool,
+            soland_storage::AgentPcrGenesisAdmissionWrite {
                 commit: authority
                     .prepare_genesis_transaction(
                         &genesis,
@@ -631,9 +655,10 @@ impl CommittedAgent {
                     )
                     .unwrap(),
                 queued_at: committed_at,
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
 
         let runtime = ed25519_dalek::SigningKey::from_bytes(&AGENT_RUNTIME_SEED);
         let verification_method =
@@ -834,7 +859,7 @@ fn controller_signed(
 fn station_method(station: &arkret_wire::DidCoreId) -> arkret_wire::DidUrl {
     arkret_wire::DidUrl::new(format!(
         "{}#authority",
-        device_authorization_history::did_web_station(station)
+        historical_control_source::did_for_core(station)
     ))
     .unwrap()
 }
@@ -860,6 +885,7 @@ async fn admit(
         )
         .await
         .unwrap();
+    historical_control_source::stage_registered(&store.pool, &transaction).await;
     let outcome = soland_storage_postgres::PgActorProfileStore {
         pool: store.pool.clone(),
     }
@@ -1335,7 +1361,13 @@ async fn postgres_historical_agent_key_survives_revocation_at_exact_coordinate()
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let (agent, _recipient) = CommittedAgent::provision(&pool).await;
-    let discussion = ordinary_realm::open_discussion(&pool, "agent-historical-key").await;
+    let discussion = ordinary_realm::open_discussion_for_station(
+        &pool,
+        "agent-historical-key",
+        &agent.agent_account.station_id,
+        &historical_control_source::did_for_core(&agent.agent_account.station_id),
+    )
+    .await;
     let realm_id = discussion.realm_id();
     let at = discussion.committed_at();
     let mut accepted = ordinary_realm::next_request_for_actor(

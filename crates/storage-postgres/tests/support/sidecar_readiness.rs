@@ -42,6 +42,7 @@ pub(super) fn attestor_resolution() -> arkret_models_identity::AuthenticatedServ
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn claim_outcome(
+    station_did: &arkret_wire::Did,
     package: &arkret_models_crypto::MlsKeyPackageRecord,
     claim_id: &arkret_wire::KeypackageClaimId,
     request_id: &arkret_wire::Base64UrlString,
@@ -84,7 +85,7 @@ pub(super) fn claim_outcome(
     let signer = ed25519_dalek::SigningKey::from_bytes(&[83; 32]);
     let multibase =
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
-    let kid = format!("did:key:{multibase}#{multibase}");
+    let kid = format!("{station_did}#authority");
     let mut receipt = PeerKeyPackageClaimReceipt {
         claim_request_id: request_id.clone(),
         request_digest: arkret_wire::Hash::new(format!("sha256:{}", "6".repeat(64))).unwrap(),

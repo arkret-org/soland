@@ -2,6 +2,7 @@
 //! These fixtures require PostgreSQL; no memory/skip fallback exists.
 #[path = "../../test-support/src/device_authorization_history.rs"]
 mod device_history_fixture;
+use device_history_fixture as device_authorization_history;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 mod pcr_genesis_fixture;
 use arkret_wire::{
@@ -573,7 +574,10 @@ async fn agent_origin_rejected_candidate_never_becomes_accepted_history_and_succ
     state.validate_binding(&f.agent).unwrap();
     assert_eq!(state.pcr_genesis_event, f.genesis.event);
     assert_eq!(state.key_authorization_event, key.event);
-    assert_eq!(state.commits, vec![f.genesis.commit, key.commit]);
+    assert_eq!(
+        state.commits,
+        vec![f.genesis.commit.clone(), key.commit.clone()]
+    );
     assert_eq!(f.count("source").await, 2);
     assert_eq!(f.count("history").await, 2);
 }
@@ -797,10 +801,12 @@ fn complete_carrier(
     state: arkret_models_identity::AgentAuthorityState,
     at: chrono::DateTime<Utc>,
 ) -> arkret_models_identity::AgentProducerEvidence {
-    use arkret_models_identity::agent_signer_evidence::AgentDetachedJws;
+    use arkret_models_identity::agent_signer_evidence::{
+        AgentDetachedJws, ControllerAccountGateAttestation,
+    };
     use arkret_models_identity::{
         AccountBindingReceipt, AgentAuthorityStateAttestation, AgentAuthorityStateEvidence,
-        AgentProducerEvidence, ControllerAccountGateAttestation,
+        AgentProducerEvidence,
     };
     let principal = &f.controller.history;
     let registration =

@@ -399,6 +399,42 @@ impl AuthorityProtocolPort for AppState {
             )
             .await;
         }
+        // Native controller submissions keep authentication and shape checks,
+        // but an exact accepted original must not refresh today's device or
+        // Directory state. New submissions still run the producer gate below.
+        if matches!(
+            event.kind,
+            arkret_wire::EventKind::AgentKeyAuthorize
+                | arkret_wire::EventKind::SelfAgentPause
+                | arkret_wire::EventKind::SelfAgentResume
+                | arkret_wire::EventKind::SelfAgentDeactivate
+        ) {
+            arkret_schema::validate_event_for_submit(event)
+                .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+            if request.approval_signatures.is_some() {
+                return Err(ServiceError::SchemaViolation(
+                    "an Agent control Event carries no approval signatures".to_owned(),
+                ));
+            }
+            let controller =
+                crate::routing::identity::session_actor::validated_session_actor(self, session)
+                    .await
+                    .map_err(|error| {
+                        ServiceError::Conflict(format!(
+                            "authenticated Account unavailable: {error}"
+                        ))
+                    })?;
+            if event.executed_by.as_ref() != Some(&controller) {
+                return Err(ServiceError::Conflict(
+                    "an Agent control Event is executed by the authenticated controller".to_owned(),
+                ));
+            }
+            if let Some(original) =
+                super::authority_self_event_unit::exact_replay(self, event).await?
+            {
+                return Ok(original);
+            }
+        }
         let (producer_guard, producer_key) =
             super::authority_producer_validation::verify_self_event_producer_key(
                 self, session, event,

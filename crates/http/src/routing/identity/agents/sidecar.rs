@@ -1246,6 +1246,7 @@ mod tests {
         };
         first.authority_commit.commit.stream_position = 0;
         first.authority_commit.commit.previous_commit_ref = None;
+        let first = source_context_test_realm::source_request(&pool, first).await;
         uow.commit_event(first.clone()).await.unwrap();
         let (accepted_genesis, current) = store
             .sidecar_context_prepare_current(&realm, &controller, &context)
@@ -1322,6 +1323,7 @@ mod tests {
         second.authority_commit.commit.stream_position = 1;
         second.authority_commit.commit.previous_commit_ref =
             Some(first.authority_commit.commit.commit_id.clone());
+        let second = source_context_test_realm::source_request(&pool, second).await;
         let mut stale = second.clone();
         stale.authority_commit.event.created_at += chrono::Duration::seconds(1);
         source_context_test_realm::reseal(&mut stale.authority_commit.event);
@@ -1334,6 +1336,7 @@ mod tests {
         stale.authority_commit.commit.stream_position = 2;
         stale.authority_commit.commit.previous_commit_ref =
             Some(second.authority_commit.commit.commit_id.clone());
+        let stale = source_context_test_realm::source_request(&pool, stale).await;
         uow.commit_event(second.clone()).await.unwrap();
         #[derive(diesel::QueryableByName)]
         struct Count {
@@ -1375,6 +1378,7 @@ mod tests {
         wrong_previous.authority_commit.commit.stream_position = 2;
         wrong_previous.authority_commit.commit.previous_commit_ref =
             Some(second.authority_commit.commit.commit_id.clone());
+        let wrong_previous = source_context_test_realm::source_request(&pool, wrong_previous).await;
         let predecessor_error = uow.commit_event(wrong_previous).await.unwrap_err();
         assert!(
             predecessor_error.to_string().contains("cas_conflict"),

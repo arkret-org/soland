@@ -58,6 +58,10 @@ pub fn event(
 /// A human storage fixture uses the closed device producer grammar. Signature
 /// verification and current-device admission remain the ingress suite's job.
 pub fn bind_structural_human_device(event: &mut arkret_wire::Event) {
+    if let Some(signed) = human_profile::sign_fixture_event(event.clone()) {
+        *event = signed;
+        return;
+    }
     let device =
         arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap();
     let proof = event.producer_proof.as_mut().unwrap();
@@ -627,18 +631,105 @@ impl Discussion {
     }
 }
 
+/// Prepare each new Human fixture source from the real PG cut before signing
+/// its final Commit. This is not acceptance, nor a cached authority result.
+pub async fn source_request(pool: &PgPool, mut request: EventCommitRequest) -> EventCommitRequest {
+    if let Some(event) = human_profile::sign_fixture_event(request.authority_commit.event.clone()) {
+        request.event.event_id = event.event_id.to_string();
+        request.event.actor_id = event.actor_id.to_string();
+        request.event.envelope = serde_json::to_value(&event).unwrap();
+        let suite = event.event_id.digest_suite_code().digest_suite();
+        request.event.digest_suite = suite;
+        request.event.canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        request.event.canonical_digest = event.event_digest_with_digest_suite(suite).unwrap();
+        for projection in &mut request.projections {
+            projection.event_id = event.event_id.to_string();
+        }
+        if request.realm_fanout_source.is_some() {
+            request.realm_fanout_source =
+                Some(arkret_wire::EventAdmissionSubmission::new(event.clone()));
+        }
+        request.authority_commit.commit.event_ref = event.event_id.clone();
+        request.authority_commit.event = event;
+    }
+    let tx = &mut request.authority_commit;
+    tx.producer_signer_fact = PgAuthorityCommitStore { pool: pool.clone() }
+        .prepare_human_signer_fact(&tx.event, tx.commit.committed_at)
+        .await
+        .unwrap();
+    if tx.event.human_device_producer().unwrap().is_some() {
+        assert!(tx.producer_signer_fact.is_some());
+    } else {
+        assert!(tx.producer_signer_fact.is_none());
+    }
+    tx.commit.producer_signer_fact_digest = tx
+        .producer_signer_fact
+        .as_ref()
+        .map(|fact| fact.digest().unwrap());
+    seal_final_commit(&mut tx.commit);
+    request
+}
+pub fn seal_final_commit(commit: &mut arkret_wire::RealmCommit) {
+    commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        arkret_canonical::canonical_json_bytes(
+            &arkret_canonical::canonical::unsigned_value(commit, &["commit_id", "signature"])
+                .unwrap(),
+        )
+        .unwrap(),
+    ));
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &arkret_canonical::canonical::unsigned_value(commit, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        commit.signature.verification_method.clone(),
+        commit.committed_at,
+        &ed25519_dalek::SigningKey::from_bytes(&[83; 32]),
+    )
+    .unwrap();
+    commit.verify_commit_id_matches_content().unwrap();
+}
+pub async fn source_bootstrap(
+    pool: &PgPool,
+    mut unit: OrdinaryRealmBootstrapCommitUnit,
+) -> OrdinaryRealmBootstrapCommitUnit {
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let mut previous = None;
+    for (index, tx) in unit.transactions.iter_mut().enumerate() {
+        tx.event = human_profile::sign_fixture_event(tx.event.clone())
+            .expect("bootstrap author has an actual accepted PCR fixture device");
+        tx.commit.event_ref = tx.event.event_id.clone();
+        tx.producer_signer_fact = store
+            .prepare_human_signer_fact(&tx.event, tx.commit.committed_at)
+            .await
+            .unwrap();
+        assert!(tx.producer_signer_fact.is_some());
+        tx.commit.producer_signer_fact_digest = tx
+            .producer_signer_fact
+            .as_ref()
+            .map(|fact| fact.digest().unwrap());
+        tx.commit.previous_commit_ref = previous;
+        seal_final_commit(&mut tx.commit);
+        previous = Some(tx.commit.commit_id.clone());
+        unit.submission.events[index] =
+            arkret_wire::EventAdmissionSubmission::new(tx.event.clone());
+    }
+    unit.exact_request_body = serde_json::to_vec(&arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(unit.submission.clone())).unwrap();
+    unit
+}
+
 /// Admit an ordinary Realm, create its discussion Strand and make it the
 /// default -- the confirmed cut a local Message or self report needs.
 pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
-    open_discussion_unit(pool, bootstrap_unit(seed)).await
+    open_human_discussion(pool, seed).await
 }
 
 pub async fn open_discussion_with_history(pool: &PgPool, seed: &str, history: &str) -> Discussion {
-    let unit = bootstrap_unit_with_history_for_station(
+    let account = human_profile::admit(pool, &station(), "ordinary-founder").await;
+    let unit = bootstrap_unit_with_history_for_account(
         seed,
         "public",
         history,
-        &station(),
+        &account,
         &arkret_wire::Did::new("did:web:ordinary-station.example").unwrap(),
     );
     open_discussion_unit(pool, unit).await
@@ -650,7 +741,9 @@ pub async fn open_discussion_for_station(
     station: &arkret_wire::DidCoreId,
     did: &arkret_wire::Did,
 ) -> Discussion {
-    open_discussion_unit(pool, bootstrap_unit_for_station(seed, station, did)).await
+    let account = human_profile::admit_for_station_did(pool, did.clone(), "ordinary-founder").await;
+    assert_eq!(&account.station_id, station);
+    open_discussion_unit(pool, bootstrap_unit_for_account(seed, &account, did)).await
 }
 
 /// Admit the founder's real PCR and Human Profile before opening discussion.
@@ -661,6 +754,7 @@ pub async fn open_human_discussion(pool: &PgPool, seed: &str) -> Discussion {
 }
 
 async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitUnit) -> Discussion {
+    let unit = source_bootstrap(pool, unit).await;
     unit.validate().unwrap();
     PgAuthorityCommitStore { pool: pool.clone() }
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
@@ -686,6 +780,7 @@ async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitU
         }}),
         at,
     );
+    let strand = source_request(pool, strand).await;
     uow.commit_event(strand.clone())
         .await
         .expect("create the discussion Strand");
@@ -701,6 +796,7 @@ async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitU
         }),
         at,
     );
+    let default = source_request(pool, default).await;
     uow.commit_event(default.clone())
         .await
         .expect("make the discussion Strand the Realm default");

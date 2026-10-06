@@ -1,5 +1,8 @@
 //! Native Sidecar cut preserves exact controller identity and parent authority.
 
+#[path = "support/historical_control_source.rs"]
+mod historical_control_source;
+
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
@@ -75,6 +78,16 @@ async fn accepted_controller(
         .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
         .await
         .unwrap();
+    ordinary_realm::human_profile::register_fixture_signer(
+        &principal.history.account,
+        principal.history.device_verification_method.clone(),
+        principal.history.founding_device_signing_seed,
+    );
+    historical_control_source::register_device(
+        &principal.history.account,
+        &principal.history.founding_device_id,
+        &principal.history.events[1].event_id,
+    );
     principal
 }
 
@@ -228,6 +241,7 @@ async fn pending_agent_handshake_reads(
         .unwrap()
         .public_blobs = vec![public_blob(&info), public_blob(&tree)];
     source_candidate(pool, &mut genesis).await;
+    let mut genesis = ordinary_realm::source_request(&pool, genesis).await;
     uow.commit_event(genesis.clone()).await.unwrap();
     let envelope = group
         .self_update_commit_with_governance_binding(&binding(
@@ -271,6 +285,7 @@ async fn pending_agent_handshake_reads(
         .unwrap()
         .value;
     source_candidate(pool, &mut commit).await;
+    let mut commit = ordinary_realm::source_request(&pool, commit).await;
     uow.commit_event(commit.clone()).await.unwrap();
     group
         .install_accepted_commit(
@@ -291,6 +306,7 @@ async fn pending_agent_handshake_reads(
             "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
     );
+    let mut strand = ordinary_realm::source_request(&pool, strand).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let mut context = make_request(
         EventKind::SidecarContextAttach,
@@ -302,6 +318,7 @@ async fn pending_agent_handshake_reads(
         &commit.authority_commit,
     );
     source_candidate(pool, &mut context).await;
+    let mut context = ordinary_realm::source_request(&pool, context).await;
     uow.commit_event(context.clone()).await.unwrap();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let request = arkret_wire::StreamScanRequest {
@@ -394,8 +411,12 @@ async fn pending_agent_handshake_reads(
 async fn sidecar_cut_requires_exact_controller_and_current_parent_join() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let station = ordinary_realm::station();
-    let station_did = device_authorization_history::did_web_station(&station);
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-native-control",
+        [83; 32],
+    );
+    let station = historical_station.core.clone();
+    let station_did = historical_station.did.clone();
     let principal = accepted_controller(&pool, station_did.clone()).await;
     let controller = principal.history.account.clone();
     let realm = ordinary_realm::bootstrap_unit_for_account(
@@ -403,6 +424,7 @@ async fn sidecar_cut_requires_exact_controller_and_current_parent_join() {
         &controller,
         &station_did,
     );
+    let realm = ordinary_realm::source_bootstrap(&pool, realm).await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
@@ -417,6 +439,7 @@ async fn sidecar_cut_requires_exact_controller_and_current_parent_join() {
         last.commit.committed_at,
     );
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let realm_id = &create.authority_commit.event.realm_id;
     let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
@@ -483,6 +506,7 @@ async fn sidecar_cut_requires_exact_controller_and_current_parent_join() {
             "membership":"leave","reason":"Sidecar authority current matrix"}),
         create.authority_commit.commit.committed_at,
     );
+    let mut leave = ordinary_realm::source_request(&pool, leave).await;
     uow.commit_event(leave).await.unwrap();
     assert!(
         read(&pool, realm_id, &sidecar, &controller)
@@ -497,8 +521,12 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
     use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let station = ordinary_realm::station();
-    let station_did = device_authorization_history::did_web_station(&station);
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-native-control",
+        [83; 32],
+    );
+    let station = historical_station.core.clone();
+    let station_did = historical_station.did.clone();
     let principal = accepted_controller(&pool, station_did.clone()).await;
     let controller = &principal.history.account;
     let realm = ordinary_realm::bootstrap_unit_for_account(
@@ -506,6 +534,7 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         controller,
         &station_did,
     );
+    let realm = ordinary_realm::source_bootstrap(&pool, realm).await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
@@ -520,6 +549,7 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         parent.commit.committed_at,
     );
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let realm_id = &create.authority_commit.event.realm_id;
     let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
@@ -530,15 +560,9 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         .unwrap();
     assert!(no_key.desired_agent_ids.is_empty());
     assert!(no_key.authority_stream_head.contains(&provision_ref));
-    let agent_did = arkret_wire::Did::new(format!(
-        "did:{}",
-        agent
-            .principal_id
-            .as_str()
-            .strip_prefix("ak:did_core:")
-            .unwrap()
-    ))
-    .unwrap();
+    let original_genesis: arkret_models_collaboration::events_payloads::RealmCreatePayload =
+        serde_json::from_value(serde_json::to_value(&genesis.event.payload).unwrap()).unwrap();
+    let agent_did = original_genesis.object.initial_resolution.unwrap().did;
     let delegation = format!("{agent_did}#managed-controller");
     let key_event = sidecar_agent::agent_control_event(
         &principal.history.device_verification_method,
@@ -556,8 +580,10 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
     );
     let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
     let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: genesis.expected_authority.clone(),
                 event: key_event.clone(),
@@ -568,9 +594,10 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
                 recipient_queue_capacity: 0,
             },
             queued_at: key_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let not_joined = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()
@@ -590,6 +617,7 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
                 "controller_membership_generation_ref":parent.event.event_id}}),
         key_commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
+    let mut join = ordinary_realm::source_request(&pool, join).await;
     uow.commit_event(join.clone()).await.unwrap();
     let joined = read(&pool, realm_id, &sidecar, controller)
         .await
@@ -612,6 +640,7 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         serde_json::json!({"member_id":arkret_wire::ActorId::account(controller.clone()),"membership":"leave"}),
         join.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
+    let mut controller_leave = ordinary_realm::source_request(&pool, controller_leave).await;
     uow.commit_event(controller_leave.clone()).await.unwrap();
     assert!(
         read(&pool, realm_id, &sidecar, controller)
@@ -626,6 +655,7 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
         serde_json::json!({"member_id":arkret_wire::ActorId::account(controller.clone()),"membership":"join"}),
         controller_leave.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
+    let mut controller_rejoin = ordinary_realm::source_request(&pool, controller_rejoin).await;
     uow.commit_event(controller_rejoin.clone()).await.unwrap();
     let stale_generation = read(&pool, realm_id, &sidecar, controller)
         .await
@@ -709,8 +739,12 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
     use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let station = ordinary_realm::station();
-    let station_did = device_authorization_history::did_web_station(&station);
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-native-control",
+        [83; 32],
+    );
+    let station = historical_station.core.clone();
+    let station_did = historical_station.did.clone();
     let principal = accepted_controller(&pool, station_did.clone()).await;
     let controller = &principal.history.account;
     let realm = ordinary_realm::bootstrap_unit_for_account(
@@ -718,6 +752,7 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
         controller,
         &station_did,
     );
+    let realm = ordinary_realm::source_bootstrap(&pool, realm).await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
@@ -732,6 +767,7 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
         parent.commit.committed_at,
     );
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let realm_id = &create.authority_commit.event.realm_id;
     let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
@@ -742,15 +778,9 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
         .unwrap();
     assert!(no_key.desired_agent_ids.is_empty());
     assert!(no_key.authority_stream_head.contains(&provision_ref));
-    let agent_did = arkret_wire::Did::new(format!(
-        "did:{}",
-        agent
-            .principal_id
-            .as_str()
-            .strip_prefix("ak:did_core:")
-            .unwrap()
-    ))
-    .unwrap();
+    let original_genesis: arkret_models_collaboration::events_payloads::RealmCreatePayload =
+        serde_json::from_value(serde_json::to_value(&genesis.event.payload).unwrap()).unwrap();
+    let agent_did = original_genesis.object.initial_resolution.unwrap().did;
     let delegation = format!("{agent_did}#managed-controller");
     let key_event = sidecar_agent::agent_control_event(
         &principal.history.device_verification_method,
@@ -768,8 +798,10 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
     );
     let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
     let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: genesis.expected_authority.clone(),
                 event: key_event.clone(),
@@ -780,9 +812,10 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
                 recipient_queue_capacity: 0,
             },
             queued_at: key_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let not_joined = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()
@@ -802,6 +835,7 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
                 "controller_membership_generation_ref":parent.event.event_id}}),
         key_commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
+    let mut join = ordinary_realm::source_request(&pool, join).await;
     uow.commit_event(join.clone()).await.unwrap();
     pending_agent_handshake_reads(
         &pool,
@@ -830,8 +864,10 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
         renewed_at,
     );
     let renewal_commit = sidecar_agent::station_successor(&key_commit, &renewal, &station_did, 2);
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: genesis.expected_authority.clone(),
                 event: renewal,
@@ -842,9 +878,10 @@ async fn pending_sidecar_handshake_reads_keep_content_private_and_reject_stale_a
                 recipient_queue_capacity: 0,
             },
             queued_at: renewal_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let current_cut = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()
@@ -897,8 +934,12 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
     use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let resolution = sidecar_readiness::attestor_resolution();
-    let station_did = resolution.normalized_did_document.id.clone();
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-consumed-control",
+        [83; 32],
+    );
+    let resolution = historical_station.history.clone();
+    let station_did = historical_station.did.clone();
     let principal = accepted_controller(&pool, station_did.clone()).await;
     let controller = &principal.history.account;
     let realm = ordinary_realm::bootstrap_unit_for_account(
@@ -906,6 +947,7 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
         controller,
         &station_did,
     );
+    let realm = ordinary_realm::source_bootstrap(&pool, realm).await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
@@ -920,6 +962,7 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
         parent.commit.committed_at,
     );
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let realm_id = &create.authority_commit.event.realm_id;
     let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
@@ -953,8 +996,10 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
     );
     let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
     let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: genesis.expected_authority.clone(),
                 event: key_event.clone(),
@@ -965,9 +1010,10 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
                 recipient_queue_capacity: 0,
             },
             queued_at: key_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let not_joined = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()
@@ -987,6 +1033,7 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
                 "controller_membership_generation_ref":parent.event.event_id}}),
         key_commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
+    let mut join = ordinary_realm::source_request(&pool, join).await;
     uow.commit_event(join.clone()).await.unwrap();
     let (head, mut group, mut tracker) = pending_agent_handshake_reads(
         &pool,
@@ -1105,6 +1152,7 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
     let request_id =
         arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode([39; 32])).unwrap();
     let claim_outcome = sidecar_readiness::claim_outcome(
+        &station_did,
         &package,
         &claim_id,
         &request_id,
@@ -1300,6 +1348,7 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
     }];
     request.authority_commit.recipient_queue_capacity = 8;
     source_candidate(&pool, &mut request).await;
+    let mut request = ordinary_realm::source_request(&pool, request).await;
     uow.commit_event(request.clone()).await.unwrap();
     let accepted = arkret_wire::CommittedEventFullView {
         event: request.authority_commit.event.clone(),
@@ -1409,11 +1458,7 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
         recipient_durable_receipt: durable,
         consumed_at: now,
         signature: KeyOperationSignature {
-            kid: arkret_wire::NonEmptyString::new(format!(
-                "{station_did}#{}",
-                station_did.as_str().strip_prefix("did:key:").unwrap()
-            ))
-            .unwrap(),
+            kid: arkret_wire::NonEmptyString::new(format!("{station_did}#authority")).unwrap(),
             signature_algorithm: None,
             sig: arkret_wire::Base64UrlString::new("AA").unwrap(),
         },
@@ -1516,12 +1561,17 @@ async fn sidecar_snapshot_lists_and_scans_keep_private_stream_coordinates() {
     use soland_storage::{AccountRealmStreamList, AccountStreamScan};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let station = ordinary_realm::station();
-    let did = device_authorization_history::did_web_station(&station);
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-native-control",
+        [83; 32],
+    );
+    let station = historical_station.core.clone();
+    let did = historical_station.did.clone();
     let principal = accepted_controller(&pool, did.clone()).await;
     let controller = &principal.history.account;
     let unit =
         ordinary_realm::bootstrap_unit_for_account("sidecar-stream-disclosure", controller, &did);
+    let unit = ordinary_realm::source_bootstrap(&pool, unit).await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
@@ -1540,6 +1590,7 @@ async fn sidecar_snapshot_lists_and_scans_keep_private_stream_coordinates() {
             "state":"active","created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(parent.commit.committed_at)}}),
         parent.commit.committed_at,
     );
+    let mut strand = ordinary_realm::source_request(&pool, strand).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let source = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let create = ordinary_realm::next_request(
@@ -1549,6 +1600,7 @@ async fn sidecar_snapshot_lists_and_scans_keep_private_stream_coordinates() {
         serde_json::json!({}),
         parent.commit.committed_at,
     );
+    let mut create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
     let stream = CommitStreamRef::Sidecar {
@@ -1578,6 +1630,7 @@ async fn sidecar_snapshot_lists_and_scans_keep_private_stream_coordinates() {
     attach.authority_commit.commit.stream_ref = stream.clone();
     attach.authority_commit.commit.stream_position = 0;
     attach.authority_commit.commit.previous_commit_ref = None;
+    let mut attach = ordinary_realm::source_request(&pool, attach).await;
     uow.commit_event(attach.clone()).await.unwrap();
     let foreign = AccountId::new(
         controller.principal_id.clone(),
@@ -1593,6 +1646,7 @@ async fn sidecar_snapshot_lists_and_scans_keep_private_stream_coordinates() {
     join.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
         join.authority_commit.event.clone(),
     ));
+    let mut join = ordinary_realm::source_request(&pool, join).await;
     uow.commit_event(join.clone()).await.unwrap();
     let snapshot = store
         .realm_state_snapshot_material_for_account(&realm, controller)
@@ -1711,11 +1765,11 @@ async fn provision_owned_agent(
     soland_storage::AuthorityCommitTransaction,
     arkret_wire::EventId,
 ) {
-    let agent_did = arkret_wire::Did::new(format!(
-        "did:web:dc-agent-{}.example",
-        uuid::Uuid::now_v7().simple()
-    ))
-    .unwrap();
+    let agent_did = historical_control_source::managed_agent_did(
+        &principal.history.account.principal_id,
+        "sidecar-agent",
+        principal.unit.transactions[1].commit.committed_at,
+    );
     provision_owned_agent_with_did(pool, principal, agent_did).await
 }
 
@@ -1818,8 +1872,10 @@ async fn provision_owned_agent_with_did(
         &station_did,
         provision_commit.committed_at + chrono::TimeDelta::seconds(1),
     );
-    profiles
-        .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {
+    historical_control_source::admit_genesis(
+        &profiles,
+        &pool,
+        AgentPcrGenesisAdmissionWrite {
             commit: transaction(
                 CurrentRealmAuthority {
                     realm_id: agent_pcr.clone(),
@@ -1832,9 +1888,10 @@ async fn provision_owned_agent_with_did(
                 genesis_commit.clone(),
             ),
             queued_at: genesis_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     (
         agent,
@@ -1862,8 +1919,12 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
     use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite, MlsKeyPackageStore};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let station = ordinary_realm::station();
-    let station_did = device_authorization_history::did_web_station(&station);
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-native-control",
+        [83; 32],
+    );
+    let station = historical_station.core.clone();
+    let station_did = historical_station.did.clone();
     let principal = accepted_controller(&pool, station_did.clone()).await;
     let controller = &principal.history.account;
     let realm = ordinary_realm::bootstrap_unit_with_history_for_account(
@@ -1873,6 +1934,7 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
         controller,
         &station_did,
     );
+    let realm = ordinary_realm::source_bootstrap(&pool, realm).await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
@@ -1881,15 +1943,9 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
     let parent = realm.transactions.last().unwrap();
     let realm_id = &parent.event.realm_id;
     let (agent, genesis, _) = provision_owned_agent(&pool, &principal).await;
-    let agent_did = arkret_wire::Did::new(format!(
-        "did:{}",
-        agent
-            .principal_id
-            .as_str()
-            .strip_prefix("ak:did_core:")
-            .unwrap()
-    ))
-    .unwrap();
+    let original_genesis: arkret_models_collaboration::events_payloads::RealmCreatePayload =
+        serde_json::from_value(serde_json::to_value(&genesis.event.payload).unwrap()).unwrap();
+    let agent_did = original_genesis.object.initial_resolution.unwrap().did;
     let delegation = format!("{agent_did}#managed-controller");
     let key_event = sidecar_agent::agent_control_event(
         &principal.history.device_verification_method,
@@ -1907,8 +1963,10 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
     );
     let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
     let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: genesis.expected_authority.clone(),
                 event: key_event.clone(),
@@ -1919,9 +1977,10 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
                 recipient_queue_capacity: 0,
             },
             queued_at: key_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     let at = key_commit.committed_at + chrono::TimeDelta::milliseconds(1);
     let mut group = ordinary_realm::next_request(
@@ -1957,6 +2016,7 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
         public_blobs: Vec::new(),
     });
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut group = ordinary_realm::source_request(&pool, group).await;
     uow.commit_event(group.clone()).await.unwrap();
     let join = ordinary_realm::next_request(
         &group.authority_commit,
@@ -2104,6 +2164,7 @@ async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusa
     let before = footprint(&pool, realm_id).await;
     assert!(uow.commit_event(stale).await.is_err());
     assert_eq!(footprint(&pool, realm_id).await, before);
+    let mut join = ordinary_realm::source_request(&pool, join).await;
     uow.commit_event(join.clone()).await.unwrap();
     let after = footprint(&pool, realm_id).await;
     assert_eq!(after.events, before.events + 1);
@@ -2150,12 +2211,17 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
     use soland_storage::{ActorProfileStore, AgentControlAdmissionWrite};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let station = ordinary_realm::station();
-    let station_did = device_authorization_history::did_web_station(&station);
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-native-control",
+        [83; 32],
+    );
+    let station = historical_station.core.clone();
+    let station_did = historical_station.did.clone();
     let principal = accepted_controller(&pool, station_did.clone()).await;
     let controller = &principal.history.account;
     let realm =
         ordinary_realm::bootstrap_unit_for_account("agent-mode-cas", controller, &station_did);
+    let realm = ordinary_realm::source_bootstrap(&pool, realm).await;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
@@ -2170,6 +2236,7 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
         parent.commit.committed_at,
     );
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let mut create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let realm_id = &create.authority_commit.event.realm_id;
     let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
@@ -2217,8 +2284,10 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
     );
     let key_commit = sidecar_agent::station_successor(&genesis.commit, &key_event, &station_did, 1);
     let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: genesis.expected_authority.clone(),
                 event: key_event.clone(),
@@ -2229,9 +2298,10 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
                 recipient_queue_capacity: 0,
             },
             queued_at: key_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let not_joined = read(&pool, realm_id, &sidecar, controller)
         .await
         .unwrap()
@@ -2251,6 +2321,7 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
                 "controller_membership_generation_ref":parent.event.event_id}}),
         key_commit.committed_at + chrono::TimeDelta::milliseconds(1),
     );
+    let mut join = ordinary_realm::source_request(&pool, join).await;
     uow.commit_event(join.clone()).await.unwrap();
     let joined = read(&pool, realm_id, &sidecar, controller)
         .await
@@ -2317,6 +2388,7 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
             .to_string()
             .contains("capability_denied")
     );
+    let mut public = ordinary_realm::source_request(&pool, public).await;
     uow.commit_event(public.clone()).await.unwrap();
     let selector = arkret_wire::CurrentSelector::AgentInteraction {
         agent_account_id: agent.clone(),
@@ -2350,6 +2422,7 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
     );
     let mut private = make_mode(&public.authority_commit, "private", Some(revision));
     source_candidate(&pool, &mut private).await;
+    let mut private = ordinary_realm::source_request(&pool, private).await;
     uow.commit_event(private.clone()).await.unwrap();
     let arkret_wire::TypedCurrentResult::Value { value, .. } = store
         .current_agent_result(realm_id, &selector)
@@ -2507,6 +2580,7 @@ async fn agent_mode_controller_cas_preserves_derived_sidecar_roster() {
         Some(private_revision.clone()),
     );
     source_candidate(&pool, &mut same_value).await;
+    let mut same_value = ordinary_realm::source_request(&pool, same_value).await;
     uow.commit_event(same_value.clone()).await.unwrap();
     let arkret_wire::TypedCurrentResult::Value {
         revision: advanced, ..
@@ -2608,8 +2682,10 @@ async fn sidecar_post_tree_rejects_stale_endpoint_and_paused_self_update(
     );
     let renewal_commit =
         sidecar_agent::station_successor(key_commit, &renewal, &principal.history.station_did, 10);
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: agent_genesis.expected_authority.clone(),
                 event: renewal.clone(),
@@ -2620,9 +2696,10 @@ async fn sidecar_post_tree_rejects_stale_endpoint_and_paused_self_update(
                 recipient_queue_capacity: 0,
             },
             queued_at: renewal_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let renewed_cut = read(pool, realm, sidecar, controller)
         .await
         .unwrap()
@@ -2774,6 +2851,7 @@ async fn sidecar_post_tree_rejects_stale_endpoint_and_paused_self_update(
         &tracker,
         consumed_proposals,
     );
+    let request = ordinary_realm::source_request(pool, request).await;
     let footprint = counts(pool).await;
     let error = uow.commit_event(request).await.unwrap_err();
     assert!(
@@ -2808,8 +2886,10 @@ async fn sidecar_post_tree_rejects_stale_endpoint_and_paused_self_update(
         &principal.history.station_did,
         1,
     );
-    profiles
-        .admit_agent_control_event(AgentControlAdmissionWrite {
+    historical_control_source::admit_control(
+        &profiles,
+        &pool,
+        AgentControlAdmissionWrite {
             commit: soland_storage::AuthorityCommitTransaction {
                 expected_authority: agent_genesis.expected_authority.clone(),
                 event: pause,
@@ -2820,9 +2900,10 @@ async fn sidecar_post_tree_rejects_stale_endpoint_and_paused_self_update(
                 recipient_queue_capacity: 0,
             },
             queued_at: pause_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let paused_cut = read(pool, realm, sidecar, controller)
         .await
         .unwrap()
@@ -2859,6 +2940,7 @@ async fn sidecar_post_tree_rejects_stale_endpoint_and_paused_self_update(
         &tracker,
         consumed_proposals,
     );
+    let request = ordinary_realm::source_request(pool, request).await;
     let footprint = counts(pool).await;
     let error = uow.commit_event(request).await.unwrap_err();
     assert!(
@@ -2909,6 +2991,7 @@ async fn sidecar_post_tree_rejects_stale_endpoint_and_paused_self_update(
         &tracker,
         consumed_proposals,
     );
+    let mut request = ordinary_realm::source_request(&pool, request).await;
     uow.commit_event(request.clone()).await.unwrap();
     let accepted = arkret_wire::CommittedEventFullView {
         event: request.authority_commit.event,

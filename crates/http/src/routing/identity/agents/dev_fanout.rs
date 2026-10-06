@@ -256,17 +256,40 @@ pub(super) async fn submit_signed_agent_event(
             "an Agent control Event carries no approval signatures",
         ));
     }
-    if event
-        .executed_by
-        .as_ref()
-        .and_then(arkret_wire::ActorId::as_account_id)
-        .map(|account| account.principal_id.as_str())
-        != Some(session.actor.as_str())
+    let account_pk = session
+        .account_pk
+        .ok_or_else(|| AppError::unauthenticated("session account binding is missing"))?;
+    let authenticated = state
+        .identities()
+        .account_by_id(account_pk)
+        .await
+        .map_err(|error| AppError::internal(format!("session account lookup failed: {error}")))?
+        .ok_or_else(|| AppError::unauthenticated("session account no longer exists"))?;
+    if authenticated.pk != account_pk
+        || authenticated.account_id.principal_id.as_str() != session.actor
+        || authenticated.account_id.station_id.as_str() != session.audience
+        || authenticated.account_id.station_id != state.service_core_id()
+        || event.executed_by.as_ref()
+            != Some(&arkret_wire::ActorId::account(authenticated.account_id))
     {
         return Err(AppError::capability_denied(
-            "an Agent control Event is executed by the authenticated controller",
+            "an Agent control Event is executed by the authenticated full Account",
         ));
     }
+    // Authentication and submission shape still precede the exact original
+    // witness; accepted retries never refresh today's Directory or issuer cut.
+    if state
+        .exact_accepted_agent_control_original(event)
+        .await
+        .map_err(|error| agent_control_admission_error(error.conflict_code(), error.detail()))?
+        .is_some()
+    {
+        return Ok(event.event_id.to_string());
+    }
+    let original_source = state
+        .prepare_agent_control_original_source(event)
+        .await
+        .map_err(|error| agent_control_admission_error(error.conflict_code(), error.detail()))?;
     let event_id = event.event_id.to_string();
     let committed_at = chrono::Utc::now();
     let method = arkret_wire::DidUrl::new(
@@ -284,6 +307,10 @@ pub(super) async fn submit_signed_agent_event(
             state.notary_signing_key().as_ref(),
             committed_at,
         )
+        .await
+        .map_err(|error| agent_control_admission_error(error.conflict_code(), error.detail()))?;
+    state
+        .stage_agent_control_original_source(&transaction, original_source)
         .await
         .map_err(|error| agent_control_admission_error(error.conflict_code(), error.detail()))?;
     state

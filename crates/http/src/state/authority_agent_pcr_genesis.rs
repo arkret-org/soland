@@ -59,6 +59,9 @@ pub(super) async fn submit_self_agent_pcr_genesis(
             "an Agent PCR genesis is executed by the authenticated controller".to_owned(),
         ));
     }
+    if let Some(original) = super::authority_self_event_unit::exact_replay(state, event).await? {
+        return Ok(original);
+    }
     let genesis = event
         .as_realm_create()
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?

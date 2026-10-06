@@ -169,11 +169,17 @@ mod tests {
             .admit_founding_device(&crate::PgPersistenceStore::new(pool.clone()))
             .await
             .unwrap();
+        recovery_fixture::human_profile::register_fixture_signer(
+            controller,
+            principal.history.device_verification_method.clone(),
+            principal.history.founding_device_signing_seed,
+        );
         let unit = recovery_fixture::bootstrap_unit_for_account(
             "sidecar-metadata-first-recovery",
             controller,
             &did,
         );
+        let unit = recovery_fixture::source_bootstrap(&pool, unit).await;
         let store = crate::PgAuthorityCommitStore { pool: pool.clone() };
         store
             .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
@@ -188,6 +194,7 @@ mod tests {
             serde_json::json!({"object":{"schema":"ak.schema.strand.v1","realm_id":parent.event.realm_id,"tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},"metadata":{"title":"Sidecar recovery source"},"created_by":ActorId::account(controller.clone()),"created_at":arkret_canonical::format_timestamp_canonical(parent.commit.committed_at),"state":"active"}}),
             parent.commit.committed_at,
         );
+        let strand = recovery_fixture::source_request(&pool, strand).await;
         uow.commit_event(strand.clone()).await.unwrap();
         let source = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
         let create = recovery_fixture::next_request(
@@ -197,6 +204,7 @@ mod tests {
             serde_json::json!({}),
             parent.commit.committed_at,
         );
+        let create = recovery_fixture::source_request(&pool, create).await;
         uow.commit_event(create.clone()).await.unwrap();
         let realm = &create.authority_commit.event.realm_id;
         let sidecar = SidecarId::from_event_id(&create.authority_commit.event.event_id);
@@ -228,6 +236,7 @@ mod tests {
         attach.authority_commit.commit.stream_ref = stream.clone();
         attach.authority_commit.commit.stream_position = 0;
         attach.authority_commit.commit.previous_commit_ref = None;
+        let attach = recovery_fixture::source_request(&pool, attach).await;
         let entry = TypedCurrentResult::Value {
             selector: CurrentSelector::SidecarContext {
                 sidecar_id: sidecar.clone(),

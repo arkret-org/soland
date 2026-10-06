@@ -11,6 +11,8 @@
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
+#[path = "support/historical_control_source.rs"]
+mod historical_control_source;
 #[path = "support/ordinary_realm.rs"]
 #[allow(dead_code)]
 mod ordinary_realm;
@@ -91,6 +93,7 @@ impl soland_services::hydration::HydrationProjectionAdapter for CanonicalHydrati
 struct Pair {
     pool: PgPool,
     station: DidCoreId,
+    station_did: arkret_wire::Did,
     founder: AccountId,
     founder_method: DidUrl,
     founder_signing_seed: [u8; 32],
@@ -100,6 +103,7 @@ struct Pair {
     peer: AccountId,
     peer_method: DidUrl,
     peer_signing_seed: [u8; 32],
+    peer_guard: Option<soland_storage::DeviceRevocationGateSelector>,
     contact_round_id: Hash,
 }
 
@@ -483,6 +487,11 @@ async fn pair(pool: &PgPool) -> Pair {
         .await
         .expect("accepted founder PCR genesis");
     let founder = pcr.history.account.clone();
+    ordinary_realm::human_profile::register_fixture_signer(
+        &pcr.history.account,
+        pcr.history.device_verification_method.clone(),
+        pcr.history.founding_device_signing_seed,
+    );
     let peer_pcr = pcr_genesis::PcrGenesisFixture::new_with(
         device_authorization_history::did_web_station(&station),
         device_authorization_history::DeviceHistoryFixtureOptions {
@@ -495,14 +504,20 @@ async fn pair(pool: &PgPool) -> Pair {
             ..Default::default()
         },
     );
-    peer_pcr
+    let peer_selector = peer_pcr
         .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
         .await
         .expect("accepted independent peer PCR genesis");
     let peer = peer_pcr.history.account.clone();
+    ordinary_realm::human_profile::register_fixture_signer(
+        &peer,
+        peer_pcr.history.device_verification_method.clone(),
+        peer_pcr.history.founding_device_signing_seed,
+    );
     let contact_round_id = accept_contact(pool, &peer, &founder, "accepted").await;
     Pair {
         pool: pool.clone(),
+        station_did: pcr.history.station_did.clone(),
         station,
         founder,
         founder_method: pcr.history.device_verification_method.clone(),
@@ -512,6 +527,7 @@ async fn pair(pool: &PgPool) -> Pair {
         peer,
         peer_method: peer_pcr.history.device_verification_method.clone(),
         peer_signing_seed: peer_pcr.history.founding_device_signing_seed,
+        peer_guard: Some(peer_selector),
         contact_round_id,
     }
 }
@@ -694,7 +710,7 @@ async fn founding_unit(
             governance_generation: 0,
             authority_ref: authority.authority_ref.clone(),
             committed_at: at,
-            signature: ordinary_realm::signature(&pair.station, at),
+            signature: ordinary_realm::signature_for_did(&pair.station_did, at),
         };
         let identity =
             arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"])
@@ -705,11 +721,7 @@ async fn founding_unit(
         commit.signature = arkret_signatures::detached_object::sign_detached_object(
             &arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap(),
             arkret_wire::DetachedSignatureContext::RealmCommit,
-            DidUrl::new(format!(
-                "{}#authority",
-                device_authorization_history::did_web_station(&pair.station)
-            ))
-            .unwrap(),
+            DidUrl::new(format!("{}#authority", pair.station_did.clone())).unwrap(),
             at,
             &ed25519_dalek::SigningKey::from_bytes(&[83; 32]),
         )
@@ -1645,30 +1657,32 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
         AgentPcrGenesisAdmissionWrite, AgentProvisionAdmissionWrite,
     };
 
-    let pool = contract_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let historical_station = historical_control_source::HistoricalControlStation::new(
+        "direct-agent-controller",
+        [83; 32],
+    );
+    let station = historical_station.core.clone();
+    let station_did = historical_station.did.clone();
     let mut conn = pool.get().await.unwrap();
-    diesel::sql_query(
-        "INSERT INTO device_inventory_station(singleton,station_id) \
-         VALUES(TRUE,'ak:did_core:web:direct-conversation-contract.example') \
-         ON CONFLICT(singleton) DO NOTHING",
-    )
-    .execute(&mut *conn)
-    .await
-    .unwrap();
-    let station =
-        diesel::sql_query("SELECT station_id FROM device_inventory_station WHERE singleton")
-            .get_result::<StationRow>(&mut *conn)
-            .await
-            .unwrap();
+    diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1)")
+        .bind::<Text, _>(station.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
     drop(conn);
-    let station = DidCoreId::new(station.station_id).unwrap();
-    let station_did = device_authorization_history::did_web_station(&station);
     let controller_fixture = pcr_genesis::PcrGenesisFixture::new(station_did.clone());
     let selector = controller_fixture
         .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
         .await
         .unwrap();
     let controller = controller_fixture.history.account.clone();
+    historical_control_source::register_device(
+        &controller,
+        &controller_fixture.history.founding_device_id,
+        &controller_fixture.history.events[1].event_id,
+    );
     let controller_realm = controller_fixture.unit.transactions[0]
         .commit
         .realm_id
@@ -1685,11 +1699,11 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     let profiles = soland_storage_postgres::PgActorProfileStore { pool: pool.clone() };
     let store = PgAuthorityCommitStore { pool: pool.clone() };
 
-    let agent_did = arkret_wire::Did::new(format!(
-        "did:web:dc-agent-{}.example",
-        uuid::Uuid::now_v7().simple()
-    ))
-    .unwrap();
+    let agent_did = historical_control_source::managed_agent_did(
+        &controller.principal_id,
+        "direct-owned-agent",
+        controller_head.committed_at,
+    );
     let agent_id = arkret_wire::project_did_to_core_id(&agent_did).unwrap();
     let agent = AccountId::new(agent_id.clone(), station.clone());
     let delegation = format!("{agent_did}#managed-controller");
@@ -1765,8 +1779,10 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
         &station_did,
         provision_commit.committed_at + chrono::TimeDelta::seconds(1),
     );
-    profiles
-        .admit_agent_pcr_genesis(AgentPcrGenesisAdmissionWrite {
+    historical_control_source::admit_genesis(
+        &profiles,
+        &pool,
+        AgentPcrGenesisAdmissionWrite {
             commit: transaction(
                 CurrentRealmAuthority {
                     realm_id: agent_pcr.clone(),
@@ -1779,13 +1795,15 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
                 genesis_commit.clone(),
             ),
             queued_at: genesis_commit.committed_at,
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     let pair = Pair {
         pool: pool.clone(),
         station: station.clone(),
+        station_did: station_did.clone(),
         founder: controller.clone(),
         founder_method: controller_method.clone(),
         founder_signing_seed: controller_seed,
@@ -1796,6 +1814,7 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
         // refused until the real Agent key-authorize is accepted below.
         peer_method: DidUrl::new(format!("{agent_did}#runtime-1")).unwrap(),
         peer_signing_seed: [0x61; 32],
+        peer_guard: None,
         contact_round_id: fixture_hash('a'),
     };
     let shape = UnitShape {
@@ -1839,8 +1858,10 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     );
     let key_commit = station_successor(&genesis_commit, &key_event, &station_did, 1);
     assert!(matches!(
-        profiles
-            .admit_agent_control_event(AgentControlAdmissionWrite {
+        historical_control_source::admit_control(
+            &profiles,
+            &pool,
+            AgentControlAdmissionWrite {
                 commit: transaction(
                     CurrentRealmAuthority {
                         realm_id: agent_pcr.clone(),
@@ -1853,9 +1874,10 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
                     key_commit.clone(),
                 ),
                 queued_at: key_commit.committed_at,
-            })
-            .await
-            .unwrap(),
+            }
+        )
+        .await
+        .unwrap(),
         AgentControlAdmissionOutcome::Committed(_)
     ));
 
@@ -2091,14 +2113,14 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     let facts = unit.facts().unwrap();
     let head = unit.transactions[3].clone();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let third = AccountId::new(
-        DidCoreId::new(format!(
-            "ak:did_core:web:dc-third-{}.example",
-            uuid::Uuid::now_v7().simple()
-        ))
-        .unwrap(),
-        pair.station.clone(),
-    );
+    // An unrelated, genuinely accepted Human device reaches the profile
+    // admission gate; it has no membership in the founding pair.
+    let third = ordinary_realm::human_profile::admit_without_profile(
+        &pool,
+        &pair.station,
+        &format!("dc-third-{}", uuid::Uuid::now_v7().simple()),
+    )
+    .await;
     let invite = |invitee: &AccountId| {
         serde_json::json!({
             "invitee_account_id":invitee,
@@ -2108,6 +2130,7 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     };
     let refused = async |kind: EventKind, actor: &AccountId, payload: serde_json::Value| {
         let request = ordinary_realm::next_request(&head, kind, &actor.principal_id, payload, at);
+        let request = ordinary_realm::source_request(&pool, request).await;
         let code = refusal_code(uow.commit_event(request).await);
         assert_eq!(footprint(&pool, &realm_id).await, [1, 4, 4, 1, 2]);
         code
@@ -2323,7 +2346,29 @@ async fn sourced_cited(
     payload: serde_json::Value,
     cites: Cites<'_>,
 ) -> soland_storage::EventCommitRequest {
-    let request = cited(previous, kind, actor.clone(), payload, cites);
+    sourced_cited_at(
+        pair,
+        previous,
+        kind,
+        actor,
+        payload,
+        cites,
+        previous.commit.committed_at,
+    )
+    .await
+}
+
+async fn sourced_cited_at(
+    pair: &Pair,
+    previous: &AuthorityCommitTransaction,
+    kind: EventKind,
+    actor: ActorId,
+    payload: serde_json::Value,
+    cites: Cites<'_>,
+    at: chrono::DateTime<chrono::Utc>,
+) -> soland_storage::EventCommitRequest {
+    let mut request = cited(previous, kind, actor.clone(), payload, cites);
+    request.authority_commit.event.created_at = at;
     let (method, seed) = if actor == pair.founder_actor() {
         (pair.founder_method.clone(), pair.founder_signing_seed)
     } else {
@@ -2332,8 +2377,7 @@ async fn sourced_cited(
     };
     let event =
         device_authorization_history::sign_event(request.authority_commit.event, method, seed);
-    let mut request =
-        ordinary_realm::request_for_event(previous, event, previous.commit.committed_at);
+    let mut request = ordinary_realm::request_for_event(previous, event, at);
     request.authority_commit.producer_signer_fact = pair
         .store()
         .prepare_human_signer_fact(
@@ -2875,12 +2919,17 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         ),
     )
     .unwrap();
+    let peer_package = claim_human_peer_package(
+        &pair,
+        &scope,
+        &facts.pair_key,
+        &facts.main_strand_id,
+        peer_identity.key_package_record().unwrap(),
+    )
+    .await;
     let add_binding = binding(Some(genesis_ref.clone()), 0, 1);
     let real_add = encryption_group
-        .add_member_with_governance_binding(
-            &peer_identity.key_package_record().unwrap(),
-            &add_binding,
-        )
+        .add_member_with_governance_binding(&peer_package, &add_binding)
         .unwrap();
     tracker
         .process_public_handshake(
@@ -3419,7 +3468,10 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
         arkret_wire::ReadableFloorReason::MembershipJoin
     );
 
-    // A withdrawn directional Contact stops sends and personal watch writes.
+    // A withdrawn directional Contact stops new sends and personal watch writes.
+    // Advance the candidate's own creation/commit time together so this is a
+    // distinct Event, not a retry of the accepted peer Message above. This
+    // storage-role ciphertext fixture does not prove a peer MLS decryption.
     let mut conn = pool.get().await.unwrap();
     diesel::sql_query(
         "UPDATE contacts SET tombstone_event_ref=request_event_ref \
@@ -3433,13 +3485,14 @@ async fn participant_authority_and_read_only_signal_scope_follow_the_group_and_b
     drop(conn);
     assert_eq!(
         refused(
-            &sourced_cited(
+            &sourced_cited_at(
                 &pair,
                 &head,
                 EventKind::MessageCreate,
                 peer.clone(),
                 ciphertext(&facts.main_strand_id, 1, &add_ref),
                 Cites::Participant(&binding_ref),
+                head.commit.committed_at + chrono::Duration::seconds(1),
             )
             .await
         )
@@ -4023,4 +4076,207 @@ async fn exercise_flat_topics(
         before_group
     );
     head
+}
+
+/// Real stored Human package and terminal claim, before SDK Add. The claimed
+/// SDK state is derived only from the exact durable successful CAS outcome.
+async fn claim_human_peer_package(
+    pair: &Pair,
+    scope: &arkret_wire::ScopeRef,
+    pair_key: &Hash,
+    strand_id: &arkret_wire::StrandId,
+    mut package: arkret_models_crypto::MlsKeyPackageRecord,
+) -> arkret_models_crypto::MlsKeyPackageRecord {
+    use arkret_models_crypto::{
+        KeyPackageClaimRecord, PeerKeyPackageClaimReceipt, PeerKeyPackageRequesterAuthorization,
+        PeerKeyPackagesClaimOutcome, PeerKeyPackagesClaimRequestBody,
+    };
+    use soland_storage::MlsKeyPackageStore;
+    let guard = pair
+        .peer_guard
+        .as_ref()
+        .expect("actual accepted Human peer selector");
+    let device = arkret_wire::DeviceId::new(guard.device_id.clone()).unwrap();
+    let at =
+        chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
+    let expires = at + chrono::Duration::minutes(30);
+    assert_eq!(package.actor_id, pair.peer_actor());
+    #[derive(diesel::QueryableByName)]
+    struct Owner {
+        #[diesel(sql_type=BigInt)]
+        pk: i64,
+    }
+    let mut conn = pair.pool.get().await.unwrap();
+    let owner = diesel::sql_query("INSERT INTO accounts(principal_id,station_id) VALUES($1,$2) ON CONFLICT(principal_id,station_id) DO UPDATE SET principal_id=EXCLUDED.principal_id RETURNING pk")
+        .bind::<Text,_>(pair.peer.principal_id.as_str()).bind::<Text,_>(pair.peer.station_id.as_str())
+        .get_result::<Owner>(&mut conn).await.unwrap().pk;
+    drop(conn);
+    let store = soland_storage_postgres::PgMlsKeyPackageStore {
+        pool: pair.pool.clone(),
+    };
+    assert!(
+        store
+            .put(&soland_storage::MlsKeyPackageRow {
+                id: package.keypackage_id.clone(),
+                keypackage_ref: package.keypackage_ref.to_string(),
+                keypackage_digest: package.keypackage_ref.to_string(),
+                owner_account_pk: soland_storage::AccountPk(owner),
+                actor_id: pair.peer.principal_id.to_string(),
+                device_id: Some(device.to_string()),
+                endpoint_verification_method: None,
+                intended_realm_id: None,
+                key_package_bytes: arkret_canonical::base64url_decode(&package.keypackage).unwrap(),
+                capabilities: package.capabilities.clone(),
+                capabilities_digest: arkret_canonical::canonical_sha256(&package.capabilities)
+                    .unwrap(),
+                last_resort: false,
+                last_resort_realm_id: None,
+                lifetime_not_before: package.created_at.timestamp(),
+                lifetime_not_after: package.expires_at.unwrap().timestamp(),
+                claimed_by_mls_group_id: None,
+                device_authorize_event_id: Some(guard.authorization_ref.event_id.to_string()),
+                agent_key_authorize_event_id: None,
+                claimed_at: None,
+                claim_expires_at_unix_ms: None,
+                consumed_at: None,
+                created_at: package.created_at.timestamp(),
+            })
+            .await
+            .unwrap()
+    );
+    let claim_id = arkret_wire::KeypackageClaimId::new(format!(
+        "ak:keypackage_claim:{}",
+        uuid::Uuid::now_v7()
+    ))
+    .unwrap();
+    let request_id = arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+        uuid::Uuid::now_v7().as_bytes(),
+    ))
+    .unwrap();
+    let SelfProducerCommitGuard::HumanDevice(requester_guard) = &pair.founder_guard else {
+        panic!("actual Human requester");
+    };
+    let mut request: PeerKeyPackagesClaimRequestBody = serde_json::from_value(serde_json::json!({
+        "claim_request_id":request_id, "target_account_id":pair.peer, "requester_account_id":pair.founder,
+        "intended_realm_id":scope.realm_id(), "mls_group_id":scope.canonical_mls_group_id().unwrap(),
+        "claim_purpose":"direct_conversation", "required_capabilities":package.capabilities,
+        "expires_at":arkret_canonical::format_timestamp_canonical(expires), "target_device_ids":[device],
+        "pair_key":pair_key, "strand_id":strand_id, "service_binding":{"source_id":pair.station,"destination_id":pair.station},
+        "requester_authorization":{"kind":"device", "verification_method":pair.founder_method,
+          "requester_device_id":requester_guard.device_id, "device_authorize_event_id":requester_guard.authorization_ref.event_id,
+          "signed_at":arkret_canonical::format_timestamp_canonical(at),
+          "signature":{"kid":pair.founder_method,"signature_algorithm":"Ed25519","sig":"AA"}}
+    })).unwrap();
+    let bytes = arkret_models_crypto::keypackage_claim_authorization_signing_bytes(
+        &request.unsigned_request(),
+        &request.service_binding,
+        &request.requester_authorization,
+    )
+    .unwrap();
+    let PeerKeyPackageRequesterAuthorization::Device { signature, .. } =
+        &mut request.requester_authorization
+    else {
+        unreachable!()
+    };
+    *signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+        &pair.founder_signing_seed,
+        pair.founder_method.as_str(),
+        &bytes,
+    )
+    .unwrap();
+    request.validate_shape().unwrap();
+    let digest = arkret_canonical::canonical_sha256(&request).unwrap();
+    let record = KeyPackageClaimRecord {
+        claim_id: claim_id.to_string(),
+        keypackage_ref: package.keypackage_ref.to_string(),
+        actor_id: pair.peer_actor(),
+        principal_id: pair.peer.principal_id.clone(),
+        device_id: Some(device),
+        agent_id: None,
+        agent_verification_method: None,
+        pairwise_verification_method: None,
+        keypackage: package.keypackage.clone(),
+        capabilities: package.capabilities.clone(),
+        device_authorize_event_id: Some(guard.authorization_ref.event_id.clone()),
+        agent_key_authorize_event_id: None,
+        expires_at: expires,
+        revocation_status: Some("active".into()),
+        last_resort: None,
+    };
+    record.validate_shape().unwrap();
+    let method = format!("{}#authority", pair.station_did.clone());
+    let mut receipt = PeerKeyPackageClaimReceipt {
+        claim_request_id: request_id.clone(),
+        request_digest: Hash::new(digest.clone()).unwrap(),
+        claims_digest: Hash::new(arkret_canonical::canonical_sha256(&[&record]).unwrap()).unwrap(),
+        source_id: pair.station.clone(),
+        destination_id: pair.station.clone(),
+        request: request.unsigned_request(),
+        claimed_at: at,
+        expires_at: expires,
+        signature: arkret_models_crypto::KeyOperationSignature {
+            kid: arkret_wire::NonEmptyString::new(method.clone()).unwrap(),
+            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+            sig: arkret_wire::Base64UrlString::new("AA").unwrap(),
+        },
+    };
+    receipt.signature = arkret_signatures::keypackages::sign_keypackage_signing_input(
+        &[83; 32],
+        &method,
+        &arkret_models_crypto::peer_keypackage_claim_receipt_signing_bytes(&receipt).unwrap(),
+    )
+    .unwrap();
+    let outcome = PeerKeyPackagesClaimOutcome {
+        claim_request_id: request_id.clone(),
+        claims: vec![record],
+        claim_receipt: receipt,
+    };
+    outcome.validate_shape().unwrap();
+    let ledger = soland_storage::PeerKeyPackageClaimLedgerRecord {
+        source_id: pair.station.to_string(),
+        claim_request_id: request_id.to_string(),
+        request_digest: digest,
+        key_package_use: "single_use".into(),
+        keypackage_id: Some(package.keypackage_id.clone()),
+        outcome: Some(serde_json::to_value(&outcome).unwrap()),
+        terminal_receipt: None,
+        consume_receipt: None,
+        claim_expires_at_unix_ms: Some(expires.timestamp_millis()),
+        expires_at: expires.timestamp() + 86400,
+        state: "claimed".into(),
+        updated_at: at.timestamp(),
+    };
+    let group = scope.canonical_mls_group_id().unwrap();
+    let result = store
+        .try_claim_peer(soland_storage::PeerKeyPackageClaimAttempt {
+            keypackage_id: &package.keypackage_id,
+            mls_group_id: group.as_str(),
+            device_authorize_event_id: Some(guard.authorization_ref.event_id.as_str()),
+            agent_key_authorize_event_id: None,
+            device_revocation_gate: Some(guard.clone()),
+            claimed_at_unix_ms: at.timestamp_millis(),
+            claim_expires_at_unix_ms: expires.timestamp_millis(),
+            ledger: &ledger,
+        })
+        .await
+        .unwrap();
+    let soland_storage::PeerKeyPackageClaimAttemptResult::Claimed(row) = result else {
+        panic!("actual claim must win");
+    };
+    assert_eq!(row.claimed_by_mls_group_id.as_deref(), Some(group.as_str()));
+    let retained = store
+        .get_peer_claim_by_claim_id(claim_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let retained_outcome: PeerKeyPackagesClaimOutcome =
+        serde_json::from_value(retained.outcome.unwrap()).unwrap();
+    assert_eq!(retained_outcome.claims[0].keypackage, package.keypackage);
+    assert_eq!(
+        retained_outcome.claims[0].keypackage_ref,
+        package.keypackage_ref.to_string()
+    );
+    package.state = arkret_models_crypto::MlsKeyPackageState::Claimed;
+    package.claim_id = Some(retained_outcome.claims[0].claim_id.clone());
+    package
 }
