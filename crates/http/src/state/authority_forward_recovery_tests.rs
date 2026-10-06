@@ -2117,7 +2117,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
             le,
             Some(lc),
             &mut located,
-            &wrong
+            &other_session
         )
         .await
         .is_err()
