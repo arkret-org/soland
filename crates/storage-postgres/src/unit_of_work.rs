@@ -2829,142 +2829,14 @@ async fn commit_one_in_connection(
             )
             .await?;
         }
-        commit_realm_authority_root_current_result_in_connection(conn, event, commit).await?;
-        crate::realm_bootstrap_current_results::commit_realm_history_access_authority_current_result_in_connection(conn, event, commit).await?;
-        crate::realm_bootstrap_current_results::commit_realm_profile_authority_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::realm_bootstrap_current_results::commit_read_receipt_policy_authority_current_result_in_connection(conn, event, commit).await?;
-        crate::organization_moderation_gate::commit_realm_organization_current_result_in_connection(conn, event, commit, realm_organization_proof).await?;
-        crate::call_state_current_results::commit_in_connection(conn, event, commit).await?;
-        crate::circle_current_results::commit_in_connection(conn, event, commit).await?;
-        crate::strand_watch_current_results::commit_in_connection(conn, event, commit).await?;
-        crate::agent_interaction_current_results::project_in_connection(conn, event, commit)
-            .await?;
-        crate::sidecar_current_results::commit_in_connection(conn, event, commit).await?;
-        crate::sidecar_exchange_controls::commit_in_connection(conn, event, commit, true).await?;
-        commit_relation_current_result_in_connection(conn, event, commit, true).await?;
-        commit_capability_grant_current_result_in_connection(conn, event, commit).await?;
-        // An accepted Invite decides its accepting actor's `leave -> join`
-        // edge against the member row before that row is written.
-        crate::invite_current_results::commit_invite_current_results_in_connection(
+        Box::pin(commit_event_current_results_in_connection(
             conn,
-            event,
-            commit,
+            &request,
+            realm_organization_proof,
             invite_claim_proof,
-        )
-        .await?;
-        if event.kind == arkret_wire::EventKind::RealmPolicyBundle {
-            crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
-                conn,
-                event,
-                commit.committed_at,
-            )
-            .await?;
-        }
-        commit_parent_membership_current_results(conn, event, commit).await?;
-        commit_schema_definition_in_connection(conn, event, commit, true).await?;
-        crate::mls_group_current_results::advance_key_access_revision_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::mls_group_current_results::commit_mls_group_current_result_in_connection(
-            conn,
-            &request.authority_commit,
-        )
-        .await?;
-        crate::direct_conversation_admission::commit_binding_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::authority_commit::commit_mimi_room_binding_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::strand_current_results::commit_strand_create_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::strand_current_results::commit_strand_update_authority_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::strand_current_results::commit_strand_tracks_update_authority_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::strand_current_results::commit_strand_transition_in_connection(
-            conn, event, commit, true,
-        )
-        .await?;
-        crate::strand_position_current_results::commit_authority_position_in_connection(
-            conn,
-            event,
-            commit,
             event_approvals,
-        )
+        ))
         .await?;
-        crate::space_current_results::commit_space_create_current_results_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::space_current_results::commit_space_transition_in_connection(
-            conn, event, commit, true,
-        )
-        .await?;
-        crate::space_current_results::commit_space_update_in_connection(conn, event, commit, true)
-            .await?;
-        crate::rsvp_current_results::commit_rsvp_current_result_in_connection(conn, event, commit)
-            .await?;
-        crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::mls_group_current_results::require_mls_send_gate_in_connection(conn, event).await?;
-        crate::member_identity_current_results::commit_in_connection(conn, event, commit).await?;
-        crate::message_revision_current_results::commit_message_create_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::message_revision_current_results::commit_message_revise_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::object_redaction_current_results::commit_message_redact_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::message_reactions_current_results::commit_reaction_current_result_in_connection(
-            conn, event, commit, true,
-        )
-        .await?;
-        crate::pin_current_results::commit_pin_in_connection(conn, event, commit, true).await?;
-        crate::moderation_report_current_results::commit_moderation_report_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::moderation_state_current_results::commit_moderation_state_current_result_in_connection(
-            conn, event, commit,
-        )
-        .await?;
-        crate::moderation_franking_proof_current_results::commit_franking_current_result_in_connection(conn, event, commit).await?;
-        crate::moderation_franking_proof_current_results::enqueue_franking_in_connection(
-            conn,
-            event,
-            &request.authority_commit.expected_authority.service_id,
-            request.event.received_at,
-        )
-        .await?;
-        if crate::account_summary::changes_account_summary_inputs(&event.kind) {
-            crate::account_summary::publish_realm_account_summary_in_connection(
-                conn,
-                &event.realm_id,
-            )
-            .await?;
-        }
-        crate::sidecar_authority_change_guard::after_current_writes_in_connection(conn, event)
-            .await?;
         outcome.outbox_inserted += crate::realm_fanout::plan_realm_fanout_in_connection(
             conn,
             event,
@@ -3028,6 +2900,237 @@ async fn commit_one_in_connection(
             record_idempotency_in_connection(conn, record).await?;
         }
     }
+    Ok(())
+}
+
+// This phase stays inside the caller's transaction and preserves writer order.
+async fn commit_event_current_results_in_connection(
+    conn: &mut AsyncPgConnection,
+    request: &EventCommitRequest,
+    realm_organization_proof: Option<&soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&soland_storage::InviteClaimProofCommit>,
+    event_approvals: Option<&soland_storage::EventApprovalCommit>,
+) -> Result<(), PgTransactionError> {
+    let event = &request.authority_commit.event;
+    let commit = &request.authority_commit.commit;
+    Box::pin(commit_realm_authority_root_current_result_in_connection(
+        conn, event, commit,
+    ))
+    .await?;
+    Box::pin(crate::realm_bootstrap_current_results::commit_realm_history_access_authority_current_result_in_connection(conn, event, commit)).await?;
+    Box::pin(crate::realm_bootstrap_current_results::commit_realm_profile_authority_current_result_in_connection(
+        conn, event, commit,
+    )).await?;
+    Box::pin(crate::realm_bootstrap_current_results::commit_read_receipt_policy_authority_current_result_in_connection(conn, event, commit)).await?;
+    Box::pin(
+        crate::organization_moderation_gate::commit_realm_organization_current_result_in_connection(
+            conn,
+            event,
+            commit,
+            realm_organization_proof,
+        ),
+    )
+    .await?;
+    Box::pin(crate::call_state_current_results::commit_in_connection(
+        conn, event, commit,
+    ))
+    .await?;
+    Box::pin(crate::circle_current_results::commit_in_connection(
+        conn, event, commit,
+    ))
+    .await?;
+    Box::pin(crate::strand_watch_current_results::commit_in_connection(
+        conn, event, commit,
+    ))
+    .await?;
+    Box::pin(crate::agent_interaction_current_results::project_in_connection(conn, event, commit))
+        .await?;
+    Box::pin(crate::sidecar_current_results::commit_in_connection(
+        conn, event, commit,
+    ))
+    .await?;
+    Box::pin(crate::sidecar_exchange_controls::commit_in_connection(
+        conn, event, commit, true,
+    ))
+    .await?;
+    Box::pin(commit_relation_current_result_in_connection(
+        conn, event, commit, true,
+    ))
+    .await?;
+    Box::pin(commit_capability_grant_current_result_in_connection(
+        conn, event, commit,
+    ))
+    .await?;
+    // An accepted Invite decides its accepting actor's `leave -> join`
+    // edge against the member row before that row is written.
+    Box::pin(
+        crate::invite_current_results::commit_invite_current_results_in_connection(
+            conn,
+            event,
+            commit,
+            invite_claim_proof,
+        ),
+    )
+    .await?;
+    if event.kind == arkret_wire::EventKind::RealmPolicyBundle {
+        Box::pin(
+            crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+                conn,
+                event,
+                commit.committed_at,
+            ),
+        )
+        .await?;
+    }
+    Box::pin(commit_parent_membership_current_results(
+        conn, event, commit,
+    ))
+    .await?;
+    Box::pin(commit_schema_definition_in_connection(
+        conn, event, commit, true,
+    ))
+    .await?;
+    Box::pin(
+        crate::mls_group_current_results::advance_key_access_revision_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::mls_group_current_results::commit_mls_group_current_result_in_connection(
+            conn,
+            &request.authority_commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::direct_conversation_admission::commit_binding_current_result_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::authority_commit::commit_mimi_room_binding_current_result_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::strand_current_results::commit_strand_create_current_result_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::strand_current_results::commit_strand_update_authority_current_result_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(crate::strand_current_results::commit_strand_tracks_update_authority_current_result_in_connection(
+        conn, event, commit,
+    )).await?;
+    Box::pin(
+        crate::strand_current_results::commit_strand_transition_in_connection(
+            conn, event, commit, true,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::strand_position_current_results::commit_authority_position_in_connection(
+            conn,
+            event,
+            commit,
+            event_approvals,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::space_current_results::commit_space_create_current_results_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::space_current_results::commit_space_transition_in_connection(
+            conn, event, commit, true,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::space_current_results::commit_space_update_in_connection(conn, event, commit, true),
+    )
+    .await?;
+    Box::pin(
+        crate::rsvp_current_results::commit_rsvp_current_result_in_connection(conn, event, commit),
+    )
+    .await?;
+    Box::pin(crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(
+        conn, event, commit,
+    )).await?;
+    Box::pin(crate::mls_group_current_results::require_mls_send_gate_in_connection(conn, event))
+        .await?;
+    Box::pin(crate::member_identity_current_results::commit_in_connection(conn, event, commit))
+        .await?;
+    Box::pin(
+        crate::message_revision_current_results::commit_message_create_current_result_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::message_revision_current_results::commit_message_revise_current_result_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::object_redaction_current_results::commit_message_redact_current_result_in_connection(
+            conn, event, commit,
+        ),
+    )
+    .await?;
+    Box::pin(
+        crate::message_reactions_current_results::commit_reaction_current_result_in_connection(
+            conn, event, commit, true,
+        ),
+    )
+    .await?;
+    Box::pin(crate::pin_current_results::commit_pin_in_connection(
+        conn, event, commit, true,
+    ))
+    .await?;
+    Box::pin(crate::moderation_report_current_results::commit_moderation_report_current_result_in_connection(
+        conn, event, commit,
+    )).await?;
+    Box::pin(crate::moderation_state_current_results::commit_moderation_state_current_result_in_connection(
+        conn, event, commit,
+    )).await?;
+    Box::pin(crate::moderation_franking_proof_current_results::commit_franking_current_result_in_connection(
+        conn, event, commit,
+    )).await?;
+    Box::pin(
+        crate::moderation_franking_proof_current_results::enqueue_franking_in_connection(
+            conn,
+            event,
+            &request.authority_commit.expected_authority.service_id,
+            request.event.received_at,
+        ),
+    )
+    .await?;
+    if crate::account_summary::changes_account_summary_inputs(&event.kind) {
+        Box::pin(
+            crate::account_summary::publish_realm_account_summary_in_connection(
+                conn,
+                &event.realm_id,
+            ),
+        )
+        .await?;
+    }
+    Box::pin(
+        crate::sidecar_authority_change_guard::after_current_writes_in_connection(conn, event),
+    )
+    .await?;
     Ok(())
 }
 
