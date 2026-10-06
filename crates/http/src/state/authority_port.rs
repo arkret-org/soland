@@ -224,6 +224,12 @@ impl AuthorityProtocolPort for AppState {
         request: OrdinaryRealmBootstrapUnitSubmission,
         exact_request_body: &[u8],
     ) -> ServiceResult<OrdinaryRealmBootstrapAcceptanceOutcome> {
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(
+            phase = "entered",
+            event_count = request.events.len(),
+            "ordinary bootstrap execution boundary"
+        );
         request
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
@@ -240,6 +246,11 @@ impl AuthorityProtocolPort for AppState {
                 existing.is_none(),
             )
             .await?;
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(
+            phase = "producer_verified",
+            "ordinary bootstrap execution boundary"
+        );
         let expected_authority = soland_storage::CurrentRealmAuthority {
             realm_id: genesis.realm_id.clone(),
             generation: 0,
@@ -267,10 +278,20 @@ impl AuthorityProtocolPort for AppState {
                 committed_at,
             )
             .await?;
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(
+            phase = "unit_prepared",
+            "ordinary bootstrap execution boundary"
+        );
         let result = self
             .authority_commits()
             .admit_self_ordinary_realm_bootstrap_unit(&unit, &producer_guards, committed_at)
             .await?;
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(
+            phase = "unit_admitted",
+            "ordinary bootstrap execution boundary"
+        );
         let (status, commits) = match result {
             soland_storage::OrdinaryRealmBootstrapCommitOutcome::Committed(commits) => {
                 (AggregateAcceptanceStatus::Committed, commits)

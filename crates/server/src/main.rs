@@ -16,8 +16,6 @@ pub(crate) mod object_storage;
 pub(crate) mod otel;
 pub(crate) mod runtime;
 
-const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
-
 fn main() -> anyhow::Result<()> {
     // The dependency graph includes rustls consumers that enable different
     // provider features. Select Soland's declared `ring` provider before any
@@ -27,13 +25,6 @@ fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("a different rustls CryptoProvider was already installed"))?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        // Current-v1 admission and Seal materialization are intentionally
-        // broad async state machines. The default 2 MiB Tokio worker stack is
-        // insufficient for the production binary on Windows (the same bound
-        // is already required by the lifecycle integration executor), so keep
-        // the runtime on an explicit, finite stack instead of relying on a
-        // platform default.
-        .thread_stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
         .build()?
         .block_on(run())
 }

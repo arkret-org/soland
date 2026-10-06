@@ -57,8 +57,15 @@ pub(crate) const MODERATION_CURRENT_SQL: &str = "SELECT s.current_commit_id, s.c
          WHERE s.realm_id=$1 AND s.target_ref=$2 AND c.realm_id=s.realm_id \
            AND c.stream_position=s.current_stream_position";
 
-pub(crate) const MEMBER_PRESENT_SQL: &str = "SELECT EXISTS(SELECT 1 FROM member_state_current_results \
-     WHERE realm_id=$1 AND member_id=$2 AND membership='join') AS present";
+// A scalar ordered probe preserves the Realm/member primary-key bound. Plain
+// EXISTS may choose a low-startup sequential scan and inspect unrelated rows
+// before reaching this member. Test the exact key and join state after LIMIT.
+pub(crate) const MEMBER_PRESENT_SQL: &str = "SELECT COALESCE(( \
+     SELECT realm_id=$1 AND member_id=$2 AND membership='join' \
+       FROM member_state_current_results \
+      WHERE (realm_id,member_id)>=($1,$2) \
+      ORDER BY realm_id,member_id LIMIT 1 \
+     ), FALSE) AS present";
 
 pub(crate) const WATCH_CURRENT_SQL: &str = "SELECT w.current_commit_id,w.current_stream_position,w.value,c.stream_ref FROM strand_watch_current_results w JOIN realm_commits c ON c.commit_id=w.current_commit_id WHERE w.realm_id=$1 AND w.strand_id=$2 AND w.watcher_actor_id=$3 AND c.realm_id=w.realm_id AND c.stream_position=w.current_stream_position";
 
