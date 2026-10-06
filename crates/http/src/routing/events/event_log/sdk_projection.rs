@@ -451,10 +451,13 @@ pub(crate) async fn event_visible_to_session(
         .committed_event_for_member(&event_id, &session_actor, &state.service_core_id())
         .await
     {
-        Ok(soland_storage::MemberCommittedEventRead::Read(_)) => return true,
+        Ok(soland_storage::MemberCommittedEventRead::Read(
+            arkret_wire::CommittedEventView::Full(_),
+        )) => return true,
         Ok(soland_storage::MemberCommittedEventRead::OutsideOrdinaryRealmStream) => {}
         Ok(
-            soland_storage::MemberCommittedEventRead::NotVisible
+            soland_storage::MemberCommittedEventRead::Read(_)
+            | soland_storage::MemberCommittedEventRead::NotVisible
             | soland_storage::MemberCommittedEventRead::PendingAnchor,
         )
         | Err(_) => return false,

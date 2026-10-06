@@ -1422,6 +1422,41 @@ pub(crate) async fn committed_event_for_member(
                 }),
             }));
         }
+        if let CommitStreamRef::Sidecar { sidecar_id, .. } = &commit.stream_ref {
+            let Some(tenure) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
+                .bind::<Text, _>(realm_id.as_str())
+                .get_result::<TenureRow>(&mut *conn)
+                .await
+                .optional()?
+            else {
+                return Ok(Read::NotVisible);
+            };
+            let floor = if tenure.service_id == issuer.as_str() {
+                crate::sidecar_authority_cut::public_material_floor_in_connection(
+                    conn, &realm_id, sidecar_id, caller,
+                ).await?
+            } else {
+                match crate::sidecar_replica_authority::handshake_floor_in_connection(
+                    conn, &realm_id, sidecar_id, caller,
+                ).await? {
+                    Ok(floor) => floor,
+                    Err(_) => None,
+                }
+            };
+            if floor.is_none_or(|floor| commit.stream_position < floor.oldest_position) {
+                return Ok(Read::NotVisible);
+            }
+            return Ok(Read::Read(match event {
+                Some(event) => single_row(crate::committed_disclosure::disclose_to_member_in_connection(
+                    conn, vec![arkret_wire::CommittedEventFullView { commit, event }], caller,
+                ).await?)?,
+                None => CommittedEventView::Withheld(arkret_wire::CommittedEventWithheldView {
+                    commit, event_disclosure: arkret_wire::EventDisclosure {
+                        status: arkret_wire::EventDisclosureStatus::Withheld,
+                    },
+                }),
+            }));
+        }
         if commit.stream_ref
             != (CommitStreamRef::Realm {
                 realm_id: realm_id.clone(),

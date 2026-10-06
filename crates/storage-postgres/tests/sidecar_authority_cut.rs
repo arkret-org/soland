@@ -344,6 +344,28 @@ async fn pending_agent_handshake_reads(
     assert!(
         matches!(&page.committed_events[2], CommittedEventView::Withheld(row) if row.commit == context.authority_commit.commit)
     );
+    // The exact Event read used by historical signer resolution must apply
+    // the same pending-recipient handshake disclosure as the native scan.
+    for original in [&genesis.authority_commit, &commit.authority_commit] {
+        assert!(matches!(
+            store.committed_event_for_member(
+                &original.event.event_id, &ActorId::account(agent.clone()), &controller.station_id,
+            ).await.unwrap(),
+            soland_storage::MemberCommittedEventRead::Read(CommittedEventView::Full(row))
+                if row.event == original.event && row.commit == original.commit
+        ));
+    }
+    assert!(matches!(
+        store
+            .committed_event_for_member(
+                &context.authority_commit.event.event_id,
+                &ActorId::account(agent.clone()),
+                &controller.station_id,
+            )
+            .await
+            .unwrap(),
+        soland_storage::MemberCommittedEventRead::Read(CommittedEventView::Withheld(_))
+    ));
     let material =
         arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody {
             realm_id: realm.clone(),
@@ -403,6 +425,17 @@ async fn pending_agent_handshake_reads(
             .await
             .unwrap(),
         AccountStreamScan::NotAuthorized
+    ));
+    assert!(matches!(
+        store
+            .committed_event_for_member(
+                &genesis.authority_commit.event.event_id,
+                &ActorId::account(foreign),
+                &controller.station_id,
+            )
+            .await
+            .unwrap(),
+        soland_storage::MemberCommittedEventRead::NotVisible
     ));
     (context.authority_commit, group, tracker)
 }
