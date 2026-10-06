@@ -887,3 +887,598 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
         Some(held)
     );
 }
+
+#[tokio::test]
+async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_signed_bootstrap() {
+    let listener = registered_tls_peer();
+    let base = format!("https://{}/", listener.listener.local_addr().unwrap());
+    let (governor_state, governor_pool, _governor_lease) = station(base.clone());
+    let (origin, origin_pool, _origin_lease) =
+        station("https://forward-recovery-origin.internal/".into());
+    let mut governor =
+        historical_human::HumanFixture::new(&governor_pool, governor_state.service_did()).await;
+    // The existing closed bootstrap facet must explicitly authorize the Origin
+    // to receive plaintext. Membership/action grants alone grant no such right.
+    // Author this before the unit is accepted; never patch accepted state.
+    let disclosure_index = governor
+        .unit
+        .transactions
+        .iter()
+        .position(|tx| tx.event.kind == EventKind::RealmPlaintextVisibleServices)
+        .unwrap();
+    assert!(disclosure_index > 0);
+    assert_eq!(
+        governor
+            .unit
+            .transactions
+            .iter()
+            .filter(|tx| tx.event.kind == EventKind::RealmPlaintextVisibleServices)
+            .count(),
+        1
+    );
+    let mut disclosure: arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload =
+        serde_json::from_value(
+            serde_json::to_value(&governor.unit.transactions[disclosure_index].event.payload).unwrap(),
+        ).unwrap();
+    assert_eq!(disclosure.services.len(), 1);
+    assert_eq!(
+        disclosure.services[0].service_id,
+        governor_state.service_core_id()
+    );
+    assert_ne!(governor_state.service_core_id(), origin.service_core_id());
+    disclosure.services.push(
+        serde_json::from_value(serde_json::json!({
+            "service_id":origin.service_core_id(), "service_kind":"station",
+            "data_classes":["message_content"],
+            "purposes":["accepted original recovery fixture"],
+            "visibility":"private_plaintext"
+        }))
+        .unwrap(),
+    );
+    let disclosure_event = historical_human::signed_ordinary_event(
+        &governor,
+        &governor.unit.transactions[disclosure_index - 1],
+        EventKind::RealmPlaintextVisibleServices,
+        disclosure.to_value().unwrap(),
+        governor.unit.transactions[disclosure_index]
+            .commit
+            .committed_at,
+    );
+    governor.unit.transactions[disclosure_index].event = disclosure_event;
+    let source = PgAuthorityCommitStore {
+        pool: governor_pool.clone(),
+    };
+    let mut previous_commit = None;
+    for (index, transaction) in governor.unit.transactions.iter_mut().enumerate() {
+        transaction.commit.event_ref = transaction.event.event_id.clone();
+        transaction.producer_signer_fact = source
+            .prepare_human_signer_fact(&transaction.event, transaction.commit.committed_at)
+            .await
+            .unwrap();
+        assert!(transaction.producer_signer_fact.is_some());
+        transaction.commit.producer_signer_fact_digest = transaction
+            .producer_signer_fact
+            .as_ref()
+            .map(|fact| fact.digest().unwrap());
+        transaction.commit.previous_commit_ref = previous_commit;
+        historical_human::seal_commit(&mut transaction.commit, &governor.pcr.history.station_did);
+        previous_commit = Some(transaction.commit.commit_id.clone());
+        governor.unit.submission.events[index] =
+            EventAdmissionSubmission::new(transaction.event.clone());
+    }
+    governor.unit.exact_request_body = serde_json::to_vec(
+        &SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(governor.unit.submission.clone()),
+    )
+    .unwrap();
+    governor.admit(&governor_pool).await;
+    assert_eq!(
+        source
+            .accepted_plaintext_visible_services(&governor.unit.transactions[0].event.realm_id,)
+            .await
+            .unwrap(),
+        Some(disclosure)
+    );
+    let human = historical_human::HumanFixture::new(&origin_pool, origin.service_did()).await;
+    let actor = ActorId::account(human.pcr.history.account.clone());
+    let previous = governor.unit.transactions.last().unwrap();
+    let at = previous.commit.committed_at + Duration::seconds(1);
+    let owner = ActorId::account(governor.pcr.history.account.clone());
+    let strand_event = historical_human::signed_ordinary_event(
+        &governor,
+        previous,
+        EventKind::StrandCreate,
+        serde_json::json!({"object":{
+            "schema":"ak.schema.strand.v1", "realm_id":previous.event.realm_id,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"forward recovery fixture discussion"}, "state":"active",
+            "created_by":owner, "created_at":arkret_canonical::format_timestamp_canonical(at)
+        }}),
+        at,
+    );
+    let strand = historical_human::request_for_event(&governor, previous, strand_event, at);
+    let uow = PgEventCommitUnitOfWork::new(governor_pool.clone());
+    uow.commit_event(strand.clone()).await.unwrap();
+    // Membership is not an action grant. Read the actual accepted root cut,
+    // then admit the owner's narrow Grant before the foreign member joins. The
+    // Grant grants no membership; MessageCreate still runs after the real join.
+    #[derive(diesel::QueryableByName)]
+    struct RootCut {
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        controller_actor_id: serde_json::Value,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        authority_event_ref: String,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        authority_generation: i64,
+    }
+    use diesel_async::RunQueryDsl as _;
+    let root_cut = {
+        let mut conn = governor_pool.get().await.unwrap();
+        diesel::sql_query(
+            "SELECT controller_actor_id, authority_event_ref, authority_generation \
+             FROM realm_authority_root_current_results WHERE realm_id=$1",
+        )
+        .bind::<diesel::sql_types::Text, _>(strand.authority_commit.event.realm_id.as_str())
+        .get_result::<RootCut>(&mut *conn)
+        .await
+        .unwrap()
+    };
+    assert_eq!(
+        serde_json::from_value::<ActorId>(root_cut.controller_actor_id).unwrap(),
+        owner
+    );
+    let root_generation = u64::try_from(root_cut.authority_generation).unwrap();
+    let previous = &strand.authority_commit;
+    let grant_at = previous.commit.committed_at + Duration::seconds(1);
+    let grant_payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
+        serde_json::from_value(serde_json::json!({"grant": {
+            "schema":"ak.schema.capability.v1",
+            "realm_id":previous.event.realm_id,
+            "issuer_id":owner,
+            "subject":actor,
+            "actions":["ak.message.create"],
+            "resources":[{"kind":"realm","realm_id":previous.event.realm_id}],
+            "issuer_authority_refs":[{
+                "kind":"realm_root","realm_id":previous.event.realm_id,
+                "authority_event_ref":root_cut.authority_event_ref,
+                "authority_generation":root_generation
+            }],
+            "issued_at":arkret_canonical::format_timestamp_canonical(grant_at)
+        }}))
+        .unwrap();
+    let grant_event = historical_human::signed_ordinary_event(
+        &governor,
+        previous,
+        EventKind::CapabilityGrant,
+        serde_json::to_value(grant_payload).unwrap(),
+        grant_at,
+    );
+    let mut grant = historical_human::request_for_event(&governor, previous, grant_event, grant_at);
+    // This is a fresh PG source candidate, not a cached authorizing capability.
+    // The UOW independently prepares and compares it under its admission locks.
+    let grant_fact = PgAuthorityCommitStore {
+        pool: governor_pool.clone(),
+    }
+    .prepare_human_signer_fact(&grant.authority_commit.event, grant_at)
+    .await
+    .unwrap()
+    .unwrap();
+    grant.authority_commit.commit.producer_signer_fact_digest = Some(grant_fact.digest().unwrap());
+    grant.authority_commit.producer_signer_fact = Some(grant_fact);
+    historical_human::seal_commit(
+        &mut grant.authority_commit.commit,
+        &governor.pcr.history.station_did,
+    );
+    uow.commit_event(grant.clone()).await.unwrap();
+    let previous = &grant.authority_commit;
+    let join = foreign_request(&origin, &human, &governor, previous, EventKind::MemberState,
+        serde_json::json!({"realm_id":previous.event.realm_id,"member_id":actor,"membership":"join","reason":"real forward recovery membership"})).await;
+    uow.commit_event(join.clone()).await.unwrap();
+    let source = PgAuthorityCommitStore {
+        pool: governor_pool.clone(),
+    };
+    let store = PgAuthorityCommitStore {
+        pool: origin_pool.clone(),
+    };
+    let realm = &join.authority_commit.event.realm_id;
+    let event = &join.authority_commit.event;
+    let commit = &join.authority_commit.commit;
+    let key = ed25519_dalek::SigningKey::from_bytes(&historical_human::station_authority_seed());
+    let session = authenticated_context(&origin_pool, &human).await;
+    let route =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(
+            &governor_state,
+        )
+        .await
+        .unwrap();
+    let boundary = route.method_history_evidence.boundary();
+    let description = VerifiedServiceDescribeMetadata {
+        service_id: governor_state.service_core_id(),
+        service_kind: "station".into(),
+        service_resolution: ResolutionCommitment {
+            did: governor_state.service_did(),
+            method_history_head: boundary.to_method_history_head.clone(),
+            version_id: boundary.to_version_id.clone(),
+        },
+        http_json_base_url: base,
+        trust_domain: governor_state.config().trust_domain.clone(),
+        protocol_version: arkret_wire::PROTOCOL_VERSION.into(),
+        supported_operation_bundles: vec![
+            arkret_wire::role_describe_bundle_descriptor(arkret_wire::ServiceKind::Station)
+                .unwrap()
+                .operation_bundle_id
+                .into(),
+        ],
+    };
+    origin.test_install_service_route_fetcher(Arc::new(VerifiedSourceRoute(
+        VerifiedRouteCandidate {
+            evidence: route,
+            description,
+        },
+    )));
+    let nonce = Base64UrlString::new(arkret_canonical::base64url_encode([0x71; 32])).unwrap();
+    let bundle = crate::routing::realm_join::local_authority_bundle(&governor_state, realm, &nonce)
+        .await
+        .unwrap();
+    let mut keys = arkret_identity::RealmAuthorityKeyMap::new();
+    for sig in [
+        &bundle.genesis_commit.signature,
+        &bundle.current_assertion.signature,
+        &commit.signature,
+    ] {
+        keys.insert_at(
+            &sig.verification_method,
+            sig.created_at,
+            arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: key.verifying_key().to_bytes().to_vec(),
+            },
+        );
+    }
+    let authority = arkret_identity::verify_realm_authority_bundle(
+        &bundle,
+        &arkret_identity::RealmAuthorityFreshness::new(Utc::now(), nonce),
+        &keys,
+    )
+    .unwrap();
+    let mut located = crate::routing::realm_join::LocatedRealmAuthority {
+        bundle,
+        authority,
+        keys,
+    };
+    store
+        .record_remote_authority(&located.current_authority(), &origin.service_core_id())
+        .await
+        .unwrap();
+    store.queue_event(event, commit.committed_at).await.unwrap();
+    let intent = SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(event.clone()));
+    store
+        .retain_forwarded_submission(event, &intent, commit.committed_at)
+        .await
+        .unwrap();
+    store
+        .retain_forwarded_acceptance(event, commit, commit.committed_at)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .replica_anchor_for_stream(&commit.stream_ref)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .committed_event(&event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let no_write = opening_footprint(&origin_pool, realm).await;
+    // A bare original or the wrong authenticated Account never starts a scan.
+    assert!(
+        super::super::replica_anchor::ensure_forwarded_target(
+            &origin,
+            &governor_state.service_core_id(),
+            event,
+            None,
+            &mut located,
+            &session,
+        )
+        .await
+        .is_err()
+    );
+    let mut other_session = session.clone();
+    other_session.session_grant.as_mut().unwrap().account_id = governor.pcr.history.account.clone();
+    assert!(
+        super::super::replica_anchor::ensure_forwarded_target(
+            &origin,
+            &governor_state.service_core_id(),
+            event,
+            Some(commit),
+            &mut located,
+            &other_session,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(opening_footprint(&origin_pool, realm).await, no_write);
+    let scan = StreamScanRequest {
+        realm_id: realm.clone(),
+        stream_ref: commit.stream_ref.clone(),
+        direction: StreamScanDirection::After(None),
+        limit: 128,
+    };
+    let soland_storage::PeerStreamScan::Page(page) = source
+        .scan_stream_for_peer(
+            &scan,
+            &human.pcr.history.account.station_id,
+            &governor_state.service_core_id(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("Gov accepted member grants its routed Station the opening floor");
+    };
+    page.validate_for_request(&scan).unwrap();
+    let full = page
+        .committed_events
+        .iter()
+        .find(|item| item.commit().commit_id == commit.commit_id)
+        .unwrap();
+    assert!(
+        matches!(full, arkret_wire::CommittedEventView::Full(view) if view.event == *event && view.commit == *commit)
+    );
+    let archived = source
+        .human_signer_fact(event, commit)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        page.producer_signer_facts
+            .iter()
+            .find(|f| f.target.commit_id == commit.commit_id)
+            .unwrap()
+            .producer_signer_fact,
+        archived
+    );
+    let mut withheld = page.clone();
+    withheld.committed_events = vec![arkret_wire::CommittedEventView::Withheld(
+        arkret_wire::CommittedEventWithheldView {
+            commit: commit.clone(),
+            event_disclosure: arkret_wire::EventDisclosure {
+                status: arkret_wire::EventDisclosureStatus::Withheld,
+            },
+        },
+    )];
+    withheld.producer_signer_facts.clear();
+    let reply = tokio::spawn(tcp_scan(
+        listener.clone(),
+        withheld,
+        scan.clone(),
+        human.pcr.history.account.clone(),
+        governor_state.service_core_id(),
+    ));
+    assert!(
+        super::super::replica_anchor::ensure_forwarded_target(
+            &origin,
+            &governor_state.service_core_id(),
+            event,
+            Some(commit),
+            &mut located,
+            &session,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(reply.await.unwrap(), 1);
+    assert_eq!(opening_footprint(&origin_pool, realm).await, no_write);
+    let mut missing_fact = page.clone();
+    missing_fact.producer_signer_facts.clear();
+    let reply = tokio::spawn(tcp_scan(
+        listener.clone(),
+        missing_fact,
+        scan.clone(),
+        human.pcr.history.account.clone(),
+        governor_state.service_core_id(),
+    ));
+    assert!(
+        super::super::replica_anchor::ensure_forwarded_target(
+            &origin,
+            &governor_state.service_core_id(),
+            event,
+            Some(commit),
+            &mut located,
+            &session,
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(reply.await.unwrap(), 1);
+    assert_eq!(opening_footprint(&origin_pool, realm).await, no_write);
+    let response_listener = listener.clone();
+    let response_governor = governor_state.clone();
+    let response_pool = governor_pool.clone();
+    let response_account = human.pcr.history.account.clone();
+    let response_commit = commit.clone();
+    let reply = tokio::spawn(async move {
+        assert_eq!(
+            tcp_scan(
+                response_listener.clone(),
+                page,
+                scan,
+                response_account.clone(),
+                response_governor.service_core_id()
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            tcp_opening_bootstrap(
+                response_listener,
+                response_governor,
+                response_pool,
+                response_account,
+                response_commit
+            )
+            .await,
+            1
+        );
+        2
+    });
+    let original = super::super::replica_anchor::ensure_forwarded_target(
+        &origin,
+        &governor_state.service_core_id(),
+        event,
+        Some(commit),
+        &mut located,
+        &session,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(original, *commit);
+    assert_eq!(reply.await.unwrap(), 2);
+    let held = store
+        .committed_event(&event.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.event, *event);
+    assert_eq!(held.commit, *commit);
+    assert_eq!(
+        store.human_signer_fact(event, commit).await.unwrap(),
+        Some(archived)
+    );
+    let anchor = store
+        .replica_anchor_for_stream(&commit.stream_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(anchor.anchored_head.is_some());
+    assert_eq!(anchor.join_commit, *commit);
+    let before_replay = opening_footprint(&origin_pool, realm).await;
+    assert_eq!(
+        super::super::replica_anchor::ensure_forwarded_target(
+            &origin,
+            &governor_state.service_core_id(),
+            event,
+            Some(commit),
+            &mut located,
+            &session,
+        )
+        .await
+        .unwrap(),
+        Some(commit.clone())
+    );
+    assert_eq!(opening_footprint(&origin_pool, realm).await, before_replay);
+}
+async fn tcp_opening_bootstrap(
+    listener: Arc<RegisteredTlsPeer>,
+    governor: AppState,
+    pool: PgPool,
+    from: AccountId,
+    expected: arkret_wire::RealmCommit,
+) -> usize {
+    tokio::task::spawn_blocking(move || {
+    let (stream, _) = listener.listener.accept().unwrap();
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    let mut stream = rustls::StreamOwned::new(
+        rustls::ServerConnection::new(listener.tls.clone()).unwrap(), stream,
+    );
+    let mut bytes = Vec::new();
+    let mut buf = [0u8; 2048];
+    let end = loop {
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0);
+        bytes.extend_from_slice(&buf[..n]);
+        assert!(bytes.len() < 1024 * 1024);
+        if let Some(p) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+            break p + 4;
+        }
+    };
+    let header = std::str::from_utf8(&bytes[..end]).unwrap();
+    assert!(header.starts_with("POST /_arkret/peer/realm-joins/bootstrap HTTP/1.1"));
+    let fields = header
+        .lines()
+        .filter_map(|v| {
+            v.split_once(':')
+                .map(|(k, v)| (k.to_ascii_lowercase(), v.trim().to_owned()))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        fields.get("source-service-id"),
+        Some(&from.station_id.to_string())
+    );
+    assert_eq!(fields.get("destination-service-id"), Some(&governor.service_core_id().to_string()));
+    assert!(
+        fields.contains_key("signature-input")
+            && fields.contains_key("signature")
+            && fields.contains_key("content-digest")
+    );
+    let length = fields["content-length"].parse::<usize>().unwrap();
+    assert!(length < 1024 * 1024);
+    while bytes.len() < end + length {
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0);
+        bytes.extend_from_slice(&buf[..n]);
+    }
+    let actual: arkret_models_collaboration::governance::realm_join_intake::PeerRealmJoinBootstrapRequestBody =
+        serde_json::from_slice(&bytes[end..end + length]).unwrap();
+    assert_eq!(actual.realm_id, expected.realm_id);
+    assert_eq!(actual.member_account_id, from);
+    assert_eq!(actual.membership_commit_id, expected.commit_id);
+    let outcome = tokio::runtime::Handle::current().block_on(async {
+        let store = PgAuthorityCommitStore { pool };
+        let material = store.member_station_bootstrap_material(
+            &actual.realm_id, &actual.member_account_id, &actual.membership_commit_id,
+        ).await.unwrap().unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&historical_human::station_authority_seed());
+        let snapshot = soland_services::authority_commit::build_signed_realm_state_snapshot(
+            &material, DidUrl::new(format!("{}#authority", governor.service_did())).unwrap(),
+            &key, Utc::now(),
+        ).unwrap();
+        let nonce = crate::routing::realm_join::nonce_for_request(&actual.request_id).unwrap();
+        let authority_bundle = crate::routing::realm_join::local_authority_bundle(
+            &governor, &actual.realm_id, &nonce,
+        ).await.unwrap();
+        arkret_models_collaboration::governance::realm_join_intake::PeerRealmJoinBootstrapOutcome {
+            request_id: actual.request_id, visible_stream_heads: snapshot.visible_stream_heads.clone(), snapshot, authority_bundle,
+        }
+    });
+    let body = arkret_canonical::canonical_json_bytes(&outcome).unwrap();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).unwrap();
+    stream.write_all(&body).unwrap();
+    stream.flush().unwrap();
+    assert!(!stream.conn.is_handshaking());
+    1
+    }).await.unwrap()
+}
+
+async fn opening_footprint(pool: &PgPool, realm: &arkret_wire::RealmId) -> (i64, i64, i64, i64) {
+    use diesel_async::RunQueryDsl as _;
+    #[derive(diesel::QueryableByName)]
+    struct Counts {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        events: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        commits: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        anchors: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        facts: i64,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let c = diesel::sql_query(
+        "SELECT (SELECT count(*) FROM canonical_events WHERE realm_id=$1 AND state='committed') AS events, \
+         (SELECT count(*) FROM realm_commits WHERE realm_id=$1) AS commits, \
+         (SELECT count(*) FROM replica_stream_anchors WHERE realm_id=$1) AS anchors, \
+         (SELECT count(*) FROM agent_producer_signer_keys f JOIN realm_commits c ON c.commit_id=f.commit_id \
+          WHERE c.realm_id=$1 AND f.human_source_fact IS NOT NULL) AS facts"
+    ).bind::<diesel::sql_types::Text,_>(realm.as_str())
+     .get_result::<Counts>(&mut *conn).await.unwrap();
+    (c.events, c.commits, c.anchors, c.facts)
+}

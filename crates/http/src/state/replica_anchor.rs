@@ -391,6 +391,19 @@ async fn anchor_stream(
     governance: &DidCoreId,
     located: &mut LocatedRealmAuthority,
 ) -> Result<CommitStreamHead, String> {
+    anchor_stream_with_forward_source(state, anchor, governance, located, None).await
+}
+
+async fn anchor_stream_with_forward_source(
+    state: &AppState,
+    anchor: &ReplicaStreamAnchor,
+    governance: &DidCoreId,
+    located: &mut LocatedRealmAuthority,
+    forward_source: Option<(
+        &soland_services::identity::SessionIdentityState,
+        &arkret_wire::Event,
+    )>,
+) -> Result<CommitStreamHead, String> {
     let realm_id = &anchor.realm_id;
     let join = &anchor.join_commit;
     let request = PeerRealmJoinBootstrapRequestBody {
@@ -408,6 +421,9 @@ async fn anchor_stream(
         BOOTSTRAP_MAX_BYTES,
     )
     .await?;
+    if let Some((session, event)) = forward_source {
+        require_forward_source(state, session, event, located).await?;
+    }
     let outcome: PeerRealmJoinBootstrapOutcome =
         serde_json::from_slice(&body).map_err(temporary)?;
     if outcome.request_id != request.request_id || outcome.snapshot.realm_id != *realm_id {
@@ -459,6 +475,9 @@ async fn anchor_stream(
         || (head.stream_position == join.stream_position && head.commit_id != join.commit_id)
     {
         return Err("bootstrap snapshot head does not cover the join".to_owned());
+    }
+    if let Some((session, event)) = forward_source {
+        require_forward_source(state, session, event, located).await?;
     }
     state
         .authority_commits()
@@ -544,11 +563,32 @@ pub(crate) async fn ensure_forwarded_target(
         return Err("forward recovery names another governing authority".into());
     }
     let commits = state.authority_commits();
-    let anchor = commits
+    // The original Accepted is not a replica. Only the host's own opening join
+    // may acquire its original through the governor's existing member scan.
+    let mut total_bytes = 0usize;
+    let mut pages_left = MAX_PAGES;
+    let anchor = match commits
         .replica_anchor_for_stream(&stream)
         .await
         .map_err(temporary)?
-        .ok_or("forward recovery has no authorized replica anchor")?;
+    {
+        Some(anchor) if anchor.anchored_head.is_some() => anchor,
+        prior => {
+            open_forwarded_join(
+                state,
+                governance,
+                event,
+                expected,
+                located,
+                session,
+                prior,
+                &mut pages_left,
+                &mut total_bytes,
+                MAX_TOTAL_BYTES,
+            )
+            .await?
+        }
+    };
     let anchored = anchor
         .anchored_head
         .as_ref()
@@ -558,8 +598,7 @@ pub(crate) async fn ensure_forwarded_target(
     {
         return Err("forward recovery anchor is not hosted on this exact stream".into());
     }
-    let mut total_bytes = 0usize;
-    for _ in 0..MAX_PAGES {
+    for attempt in 0..=pages_left {
         require_forward_source(state, session, event, located).await?;
         if let Some(original) = commits
             .committed_event(&event.event_id)
@@ -613,6 +652,9 @@ pub(crate) async fn ensure_forwarded_target(
         if expected.is_some_and(|target| held.stream_position >= target.stream_position) {
             // A snapshot may cover the position without containing its Full original.
             return Err("forward target Full is absent below the held head".into());
+        }
+        if attempt == pages_left {
+            return Err("forward recovery page budget exhausted".into());
         }
         let request = StreamScanRequest {
             realm_id: event.realm_id.clone(),
@@ -688,6 +730,199 @@ pub(crate) async fn ensure_forwarded_target(
         }
     }
     Err("forward recovery page budget exhausted".into())
+}
+
+/// Acquire only an already Accepted, exact own opening join. No acknowledgement
+/// becomes a Full row: the existing governor scan must disclose that original
+/// and its immutable fact. Other page items are never installed here.
+async fn open_forwarded_join(
+    state: &AppState,
+    governance: &DidCoreId,
+    event: &arkret_wire::Event,
+    expected: Option<&RealmCommit>,
+    located: &mut LocatedRealmAuthority,
+    session: &soland_services::identity::SessionIdentityState,
+    prior: Option<ReplicaStreamAnchor>,
+    pages_left: &mut usize,
+    total_bytes: &mut usize,
+    max_total_bytes: usize,
+) -> Result<ReplicaStreamAnchor, String> {
+    let commit = expected.ok_or("forward recovery has no authorized replica anchor")?;
+    if !matches!(commit.stream_ref, CommitStreamRef::Realm { .. })
+        || !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. })
+        || !matches!(
+            event.kind,
+            arkret_wire::EventKind::MemberState | arkret_wire::EventKind::InviteAccept
+        )
+    {
+        return Err("forward recovery has no authorized replica anchor".into());
+    }
+    let member = super::committed_replication::hosted_member_join(state, event, commit)
+        .ok_or("forward recovery is not a hosted opening join")?;
+    if event.actor_id.as_account_id() != Some(&member)
+        || session
+            .session_grant
+            .as_ref()
+            .map(|grant| &grant.account_id)
+            != Some(&member)
+    {
+        return Err("forward opening join does not bind the exact session Account".into());
+    }
+    require_forward_source(state, session, event, located).await?;
+    let commits = state.authority_commits();
+    let anchor = if let Some(anchor) = prior {
+        if anchor.member_account_id != member || anchor.join_commit != *commit {
+            return Err("forward opening join differs from the pending anchor".into());
+        }
+        let original = commits
+            .committed_event(&event.event_id)
+            .await
+            .map_err(temporary)?
+            .ok_or("pending opening join has no Full original")?;
+        if original.event != *event || original.commit != *commit {
+            return Err("pending opening join differs from its frozen Full".into());
+        }
+        let fact = commits
+            .human_signer_fact(&original.event, &original.commit)
+            .await
+            .map_err(temporary)?;
+        ensure_historical_method_key(state, located, &commit.signature).await?;
+        verify_committed_event_receipt_with_fact(
+            state.persistence(),
+            &original.event,
+            &original.commit,
+            CommitContinuity::Standalone,
+            &located.authority,
+            &located.keys,
+            &state.service_core_id(),
+            state
+                .projections()
+                .realm_digest_suite(event.realm_id.as_str()),
+            fact.as_ref(),
+        )
+        .await
+        .map_err(temporary)?;
+        require_forward_source(state, session, event, located).await?;
+        anchor
+    } else {
+        let mut direction = StreamScanDirection::After(None);
+        let mut original = None;
+        while *pages_left > 0 {
+            *pages_left -= 1;
+            let request = StreamScanRequest {
+                realm_id: event.realm_id.clone(),
+                stream_ref: commit.stream_ref.clone(),
+                direction,
+                limit: SCAN_PAGE_LIMIT,
+            };
+            let body = post_peer(state, governance, SCAN_PATH, &request, SCAN_MAX_BYTES).await?;
+            require_forward_source(state, session, event, located).await?;
+            *total_bytes = total_bytes
+                .checked_add(body.len())
+                .ok_or("forward recovery byte budget overflow")?;
+            if *total_bytes > max_total_bytes {
+                return Err("forward recovery byte budget exhausted".into());
+            }
+            let page: arkret_models_collaboration::authority_commit::PeerStreamScanOutcome =
+                serde_json::from_slice(&body).map_err(temporary)?;
+            page.validate_for_request(&request).map_err(temporary)?;
+            for item in &page.committed_events {
+                if item.commit().stream_position > commit.stream_position {
+                    return Err("opening target is absent from the authorized page".into());
+                }
+                if validate_forward_scan_target(item, event, Some(commit))? {
+                    let CommittedEventView::Full(full) = item else {
+                        unreachable!("exact target must be Full");
+                    };
+                    let fact = page
+                        .producer_signer_facts
+                        .iter()
+                        .find(|entry| entry.target.commit_id == commit.commit_id)
+                        .map(|entry| entry.producer_signer_fact.clone());
+                    ensure_historical_method_key(state, located, &commit.signature).await?;
+                    require_forward_source(state, session, event, located).await?;
+                    verify_committed_event_receipt_with_fact(
+                        state.persistence(),
+                        &full.event,
+                        &full.commit,
+                        CommitContinuity::Standalone,
+                        &located.authority,
+                        &located.keys,
+                        &state.service_core_id(),
+                        state
+                            .projections()
+                            .realm_digest_suite(event.realm_id.as_str()),
+                        fact.as_ref(),
+                    )
+                    .await
+                    .map_err(temporary)?;
+                    require_forward_source(state, session, event, located).await?;
+                    original = Some((full.clone(), fact));
+                    break;
+                }
+            }
+            if original.is_some() {
+                break;
+            }
+            if !page.truncated || page.committed_events.is_empty() {
+                return Err("opening target is absent from the authorized page".into());
+            }
+            direction = StreamScanDirection::After(Some(
+                page.committed_events
+                    .last()
+                    .expect("nonempty page")
+                    .commit()
+                    .stream_position,
+            ));
+        }
+        let (full, fact) = original.ok_or("forward recovery page budget exhausted")?;
+        require_forward_source(state, session, event, located).await?;
+        commits
+            .install_committed_replica(&CommittedReplica {
+                local_service_id: state.service_core_id(),
+                authority: located.current_authority(),
+                event: full.event,
+                commit: full.commit,
+                producer_signer_fact: fact,
+                genesis_event_ref: None,
+                role: CommittedReplicaRole::OpeningJoin {
+                    member_account_id: member.clone(),
+                },
+                received_at: crate::wire::now(),
+                welcomes: Vec::new(),
+            })
+            .await
+            .map_err(temporary)?;
+        require_forward_source(state, session, event, located).await?;
+        let anchor = commits
+            .replica_anchor_for_stream(&commit.stream_ref)
+            .await
+            .map_err(temporary)?
+            .ok_or("verified opening join created no pending anchor")?;
+        if anchor.member_account_id != member || anchor.join_commit != *commit {
+            return Err("verified opening join differs from its pending anchor".into());
+        }
+        anchor
+    };
+    require_forward_source(state, session, event, located).await?;
+    // Preserve the existing nonce-bound bundle, Snapshot/floor/head/current
+    // validator. A failed bootstrap leaves only the legitimate pending join.
+    if anchor.anchored_head.is_none() {
+        anchor_stream_with_forward_source(
+            state,
+            &anchor,
+            governance,
+            located,
+            Some((session, event)),
+        )
+        .await?;
+        require_forward_source(state, session, event, located).await?;
+    }
+    commits
+        .replica_anchor_for_stream(&commit.stream_ref)
+        .await
+        .map_err(temporary)?
+        .ok_or_else(|| "verified opening join lost its anchor".into())
 }
 
 /// Coordinate and original-content gate only. Cryptographic and disclosure

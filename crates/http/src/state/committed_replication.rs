@@ -75,12 +75,12 @@ fn rejection_reason(error: ServiceError) -> ServiceResult<String> {
 /// open its held Realm stream: the member's own `ak.member.state{join}` or
 /// the directed invitee's `ak.invite.accept`, which is that invitee's join
 /// (`governance-objects.md` §5.3).
-fn hosted_member_join(
+pub(super) fn hosted_member_join(
     state: &AppState,
-    item: &CommittedEventSubmission,
+    event: &arkret_wire::Event,
+    source_commit: &arkret_wire::RealmCommit,
 ) -> Option<arkret_wire::AccountId> {
-    let event = &item.event_submission.event;
-    if item.source_commit.stream_ref
+    if source_commit.stream_ref
         != arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, None).ok()?
     {
         return None;
@@ -349,7 +349,7 @@ async fn replicate_one(
     // An unlocked head can advance after the duplicate lookup and wrongly
     // reject the same Commit concurrently delivered by another peer request.
     // Receipt verification still checks every signature and Event binding.
-    let role = hosted_member_join(state, item)
+    let role = hosted_member_join(state, event, commit)
         .map_or(CommittedReplicaRole::HeldStream, |member_account_id| {
             CommittedReplicaRole::OpeningJoin { member_account_id }
         });
