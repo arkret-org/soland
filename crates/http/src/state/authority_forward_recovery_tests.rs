@@ -4,6 +4,7 @@
 #[path = "../../../storage-postgres/tests/support/historical_human.rs"]
 mod historical_human;
 
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 use arkret_models_collaboration::authority_commit::{
@@ -31,7 +32,6 @@ use soland_storage::{
 use soland_storage_postgres::{
     PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
 };
-use std::io::{Read, Write};
 
 use super::*;
 
