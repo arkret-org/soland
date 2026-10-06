@@ -392,3 +392,68 @@ async fn agent_origin_registered_gate_http_refusal_and_malformed_success_never_m
         server.await.unwrap();
     }
 }
+
+#[test]
+fn forwarded_target_original_gate_rejects_body_substitution_before_install() {
+    let request = forwarded_request(0x73);
+    let event = commit_event(&request);
+    let commit = commit_for(&request);
+    let full = arkret_wire::CommittedEventView::Full(arkret_wire::CommittedEventFullView {
+        event: event.clone(),
+        commit: commit.clone(),
+    });
+    assert!(
+        super::super::replica_anchor::validate_forward_scan_target(&full, &event, Some(&commit))
+            .unwrap()
+    );
+    let mut changed = event.clone();
+    changed.payload.insert(
+        "name".into(),
+        serde_json::json!("different coordinate-gate fixture"),
+    );
+    assert!(
+        super::super::replica_anchor::validate_forward_scan_target(&full, &changed, Some(&commit))
+            .is_err()
+    );
+}
+
+#[test]
+fn forwarded_target_original_gate_rejects_same_position_fork_before_install() {
+    let request = forwarded_request(0x74);
+    let event = commit_event(&request);
+    let commit = commit_for(&request);
+    let mut fork = commit.clone();
+    fork.commit_id = arkret_wire::RealmCommitId::from_digest([0x76; 32]);
+    fork.event_ref =
+        arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x77; 32]);
+    let full = arkret_wire::CommittedEventView::Full(arkret_wire::CommittedEventFullView {
+        event: event.clone(),
+        commit: fork,
+    });
+    assert!(
+        super::super::replica_anchor::validate_forward_scan_target(&full, &event, Some(&commit))
+            .is_err()
+    );
+}
+
+#[test]
+fn forwarded_target_original_gate_never_upgrades_withheld_target() {
+    let request = forwarded_request(0x78);
+    let event = commit_event(&request);
+    let commit = commit_for(&request);
+    let withheld =
+        arkret_wire::CommittedEventView::Withheld(arkret_wire::CommittedEventWithheldView {
+            commit: commit.clone(),
+            event_disclosure: arkret_wire::EventDisclosure {
+                status: arkret_wire::EventDisclosureStatus::Withheld,
+            },
+        });
+    assert!(
+        super::super::replica_anchor::validate_forward_scan_target(
+            &withheld,
+            &event,
+            Some(&commit)
+        )
+        .is_err()
+    );
+}

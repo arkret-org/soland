@@ -53,7 +53,10 @@ async fn service_pairing_session_binds_the_exact_stored_controller_account() {
         .unwrap()
         .unwrap();
     assert_eq!(session.account_pk, Some(account.pk));
-    assert_eq!(session.human_device_id().map(String::as_str), Some(device_id));
+    assert_eq!(
+        session.human_device_id().map(String::as_str),
+        Some(device_id)
+    );
     assert_eq!(
         crate::routing::identity::session_actor::validated_session_actor(&state, &session)
             .await

@@ -137,8 +137,13 @@ impl ForwardAttemptStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ForwardAttemptRecord {
+    /// Exact original submission; this is transport intent, never current state.
+    pub original_submission:
+        Option<arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest>,
+    /// Verified governing acceptance witness, not an installed replica.
+    pub accepted_commit: Option<RealmCommit>,
     pub status: ForwardAttemptStatus,
     pub reason_code: Option<String>,
     pub attempted_at: DateTime<Utc>,
@@ -1817,6 +1822,35 @@ pub trait AuthorityCommitStore: Send + Sync {
     >;
 
     async fn queue_event(&self, event: &Event, queued_at: DateTime<Utc>) -> PersistenceResult<()>;
+
+    /// Freeze the complete original Event or MLS submission without admitting it.
+    async fn retain_forwarded_submission(
+        &self,
+        event: &Event,
+        submission: &arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest,
+        at: DateTime<Utc>,
+    ) -> PersistenceResult<()> {
+        let _ = (event, submission, at);
+        Err(crate::PersistenceError::Conflict(
+            "dependency_missing: forwarded original retention is not implemented by this store"
+                .to_owned(),
+        ))
+    }
+
+    /// CAS-retain a verified governing acknowledgement against the queued original.
+    /// It is not chain continuity, disclosure, or an installed RealmCommit.
+    async fn retain_forwarded_acceptance(
+        &self,
+        event: &Event,
+        commit: &RealmCommit,
+        at: DateTime<Utc>,
+    ) -> PersistenceResult<()> {
+        let _ = (event, commit, at);
+        Err(crate::PersistenceError::Conflict(
+            "dependency_missing: forwarded original retention is not implemented by this store"
+                .to_owned(),
+        ))
+    }
 
     async fn record_forward_attempt(
         &self,

@@ -59,6 +59,10 @@ struct EventRow {
     commit_json: Option<Value>,
     #[diesel(sql_type = Nullable<Text>)]
     forward_status: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    forward_original_submission: Option<Value>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    forward_accepted_commit: Option<Value>,
     #[diesel(sql_type = Nullable<Text>)]
     forward_reason_code: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -476,6 +480,10 @@ struct StreamPageRow {
 struct PresenceRow {
     #[diesel(sql_type = Bool)]
     present: bool,
+}
+
+fn forward_original_conflict(detail: impl std::fmt::Display) -> PersistenceError {
+    PersistenceError::Conflict(format!("duplicate_conflict: {detail}"))
 }
 
 fn invalid(detail: impl std::fmt::Display) -> PersistenceError {
@@ -3526,6 +3534,103 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .map_err(PgTransactionError::into_persistence)
     }
 
+    async fn retain_forwarded_submission(
+        &self,
+        event: &arkret_wire::Event,
+        submission: &arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        use arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest;
+        submission.validate().map_err(|e| invalid(e.to_string()))?;
+        event
+            .verify_event_id_matches_content_with_digest_suite(
+                event.event_id.digest_suite_code().digest_suite(),
+            )
+            .map_err(invalid)?;
+        let submitted = match submission {
+            SelfAuthoritySubmitRequest::Event(value) => &value.event,
+            SelfAuthoritySubmitRequest::MlsCommit(value) => &value.commit_event,
+            _ => {
+                return Err(invalid(
+                    "only an Event or MLS forwarding intent may be retained",
+                ));
+            }
+        };
+        if submitted != event {
+            return Err(forward_original_conflict(
+                "forward intent differs from its Event",
+            ));
+        }
+        let token = ids::parse_event_id(event.event_id.as_str())
+            .ok_or_else(|| invalid("invalid Event token"))?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let written = sql_query(
+            "INSERT INTO authority_forward_attempts (event_pk,status,reason_code,attempted_at,original_submission_json) \
+             SELECT pk,'forwarding',NULL,$3,$2 FROM canonical_events WHERE id=$1 AND envelope=$4 \
+             ON CONFLICT(event_pk) DO UPDATE SET original_submission_json=EXCLUDED.original_submission_json \
+             WHERE authority_forward_attempts.original_submission_json IS NULL \
+                OR authority_forward_attempts.original_submission_json=EXCLUDED.original_submission_json"
+        ).bind::<Binary,_>(token.to_vec()).bind::<Jsonb,_>(serde_json::to_value(submission).map_err(PersistenceError::database)?)
+         .bind::<Timestamptz,_>(at).bind::<Jsonb,_>(serde_json::to_value(event).map_err(PersistenceError::database)?)
+         .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        if written != 1 {
+            return Err(forward_original_conflict(
+                "forward intent differs from its queued original",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn retain_forwarded_acceptance(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<()> {
+        event
+            .validate_for_submit_structural()
+            .map_err(|e| invalid(e.to_string()))?;
+        event
+            .verify_event_id_matches_content_with_digest_suite(
+                event.event_id.digest_suite_code().digest_suite(),
+            )
+            .map_err(invalid)?;
+        commit
+            .validate_shape()
+            .map_err(|e| invalid(e.to_string()))?;
+        commit.verify_commit_id_matches_content().map_err(invalid)?;
+        if commit.event_ref != event.event_id
+            || commit.realm_id != event.realm_id
+            || commit.stream_ref
+                != arkret_wire::CommitStreamRef::from_scope(
+                    &event.scope_ref,
+                    Some(event.realm_id.clone()),
+                )
+                .map_err(|e| invalid(e.to_string()))?
+        {
+            return Err(invalid(
+                "forward acceptance does not bind its exact Event and stream",
+            ));
+        }
+        let token = ids::parse_event_id(event.event_id.as_str())
+            .ok_or_else(|| invalid("invalid Event token"))?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let written = sql_query(
+            "UPDATE authority_forward_attempts f SET accepted_commit_json=$2,status='forwarding',reason_code=NULL,attempted_at=$3 \
+             FROM canonical_events e WHERE f.event_pk=e.pk AND e.id=$1 AND e.envelope=$4 \
+               AND f.original_submission_json IS NOT NULL \
+               AND (f.accepted_commit_json IS NULL OR f.accepted_commit_json=$2)"
+        ).bind::<Binary,_>(token.to_vec()).bind::<Jsonb,_>(serde_json::to_value(commit).map_err(PersistenceError::database)?)
+         .bind::<Timestamptz,_>(at).bind::<Jsonb,_>(serde_json::to_value(event).map_err(PersistenceError::database)?)
+         .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        if written != 1 {
+            return Err(forward_original_conflict(
+                "forward acceptance differs from its frozen original",
+            ));
+        }
+        Ok(())
+    }
+
     async fn record_forward_attempt(
         &self,
         event_id: &arkret_wire::EventId,
@@ -3542,8 +3647,10 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         let written = sql_query(
             "INSERT INTO authority_forward_attempts (event_pk,status,reason_code,attempted_at) \
              SELECT pk,$2,$3,$4 FROM canonical_events WHERE id=$1 \
-             ON CONFLICT (event_pk) DO UPDATE SET status=EXCLUDED.status, \
-             reason_code=EXCLUDED.reason_code, attempted_at=EXCLUDED.attempted_at",
+             ON CONFLICT (event_pk) DO UPDATE SET \
+             status=CASE WHEN authority_forward_attempts.accepted_commit_json IS NOT NULL THEN 'forwarding' ELSE EXCLUDED.status END, \
+             reason_code=CASE WHEN authority_forward_attempts.accepted_commit_json IS NOT NULL THEN NULL ELSE EXCLUDED.reason_code END, \
+             attempted_at=EXCLUDED.attempted_at",
         )
         .bind::<Binary, _>(token.to_vec())
         .bind::<Text, _>(status.as_str())
@@ -3570,7 +3677,8 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         let row = sql_query(
             "SELECT e.envelope, e.state, e.received_at, e.rejection_reason, c.commit_json, \
                     f.status AS forward_status, f.reason_code AS forward_reason_code, \
-                    f.attempted_at AS forward_attempted_at \
+                    f.attempted_at AS forward_attempted_at, \
+                    f.original_submission_json AS forward_original_submission, f.accepted_commit_json AS forward_accepted_commit \
              FROM canonical_events e LEFT JOIN realm_commits c ON c.event_pk = e.pk \
              LEFT JOIN authority_forward_attempts f ON f.event_pk=e.pk \
              WHERE e.id = $1",
@@ -3603,6 +3711,14 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                 forward_attempt: match (row.forward_status, row.forward_attempted_at) {
                     (None, None) => None,
                     (Some(status), Some(attempted_at)) => Some(ForwardAttemptRecord {
+                        original_submission: row
+                            .forward_original_submission
+                            .map(|v| decode_json(v, "forward original submission"))
+                            .transpose()?,
+                        accepted_commit: row
+                            .forward_accepted_commit
+                            .map(|v| decode_json(v, "forward accepted witness"))
+                            .transpose()?,
                         status: match status.as_str() {
                             "forwarding" => ForwardAttemptStatus::Forwarding,
                             "rejected" => ForwardAttemptStatus::Rejected,

@@ -359,8 +359,8 @@ struct JoinPositionRow {
 /// Material for `ak.peer.realm_join.read.bootstrap.v1` (`federation.md`
 /// §4.1.1, member Station bootstrap): the member Account's complete
 /// disclosure at one cut, with an ordinary join-position prefix or the exact
-/// registered founding-unit position-zero prefix. `None` unless `membership_commit_id` is still the member's
-/// current joined membership.
+/// registered founding-unit position-zero prefix. `None` unless `membership_commit_id` is still the
+/// member's current joined membership.
 async fn current_bootstrap_join_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,

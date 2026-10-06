@@ -291,11 +291,7 @@ async fn post_peer<T: serde::Serialize>(
     )
     .await?;
     if !(200..300).contains(&response.status) {
-        return Err(format!(
-            "{path} answered HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.body)
-        ));
+        return Err(format!("{path} answered HTTP {}", response.status));
     }
     Ok(response.body)
 }
@@ -524,6 +520,268 @@ async fn fill_to_head(
         if !page.truncated {
             return Ok(());
         }
+    }
+}
+
+/// Resolve only one frozen submission through an already authorized held stream.
+/// The acknowledgement is not a replay floor or an installed current cut.
+/// A bounded attempt may retain valid predecessors; it never installs a withheld target.
+pub(crate) async fn ensure_forwarded_target(
+    state: &AppState,
+    governance: &DidCoreId,
+    event: &arkret_wire::Event,
+    expected: Option<&RealmCommit>,
+    located: &mut LocatedRealmAuthority,
+    session: &soland_services::identity::SessionIdentityState,
+) -> Result<Option<RealmCommit>, String> {
+    const MAX_PAGES: usize = 16;
+    const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+    let stream = CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
+        .map_err(temporary)?;
+    if located.authority.realm_id() != &event.realm_id
+        || located.authority.current_service_id() != governance
+    {
+        return Err("forward recovery names another governing authority".into());
+    }
+    let commits = state.authority_commits();
+    let anchor = commits
+        .replica_anchor_for_stream(&stream)
+        .await
+        .map_err(temporary)?
+        .ok_or("forward recovery has no authorized replica anchor")?;
+    let anchored = anchor
+        .anchored_head
+        .as_ref()
+        .ok_or("forward recovery replica anchor is not installed")?;
+    if anchored.stream_ref != stream
+        || anchor.member_account_id.station_id != state.service_core_id()
+    {
+        return Err("forward recovery anchor is not hosted on this exact stream".into());
+    }
+    let mut total_bytes = 0usize;
+    for _ in 0..MAX_PAGES {
+        require_forward_source(state, session, event, located).await?;
+        if let Some(original) = commits
+            .committed_event(&event.event_id)
+            .await
+            .map_err(temporary)?
+        {
+            if original.event != *event || expected.is_some_and(|c| c != &original.commit) {
+                return Err("forward recovery conflicts with the exact accepted original".into());
+            }
+            let held = commits
+                .held_stream_head_commit(&stream)
+                .await
+                .map_err(temporary)?
+                .ok_or("forward recovery has no held head")?;
+            if held.stream_position < original.commit.stream_position
+                || (held.stream_position == original.commit.stream_position
+                    && held.commit_id != original.commit.commit_id)
+            {
+                return Err("forward recovery original is not covered by the held prefix".into());
+            }
+            let fact = commits
+                .human_signer_fact(&original.event, &original.commit)
+                .await
+                .map_err(temporary)?;
+            ensure_historical_method_key(state, located, &original.commit.signature).await?;
+            verify_committed_event_receipt_with_fact(
+                state.persistence(),
+                &original.event,
+                &original.commit,
+                CommitContinuity::Standalone,
+                &located.authority,
+                &located.keys,
+                &state.service_core_id(),
+                state
+                    .projections()
+                    .realm_digest_suite(event.realm_id.as_str()),
+                fact.as_ref(),
+            )
+            .await
+            .map_err(temporary)?;
+            require_forward_source(state, session, event, located).await?;
+            require_forward_visibility(state, event, &original.commit).await?;
+            require_forward_source(state, session, event, located).await?;
+            return Ok(Some(original.commit));
+        }
+        let mut held = commits
+            .held_stream_head_commit(&stream)
+            .await
+            .map_err(temporary)?
+            .ok_or("forward recovery has no held head")?;
+        if expected.is_some_and(|target| held.stream_position >= target.stream_position) {
+            // A snapshot may cover the position without containing its Full original.
+            return Err("forward target Full is absent below the held head".into());
+        }
+        let request = StreamScanRequest {
+            realm_id: event.realm_id.clone(),
+            stream_ref: stream.clone(),
+            direction: StreamScanDirection::After(Some(held.stream_position)),
+            limit: SCAN_PAGE_LIMIT,
+        };
+        let body = post_peer(state, governance, SCAN_PATH, &request, SCAN_MAX_BYTES).await?;
+        require_forward_source(state, session, event, located).await?;
+        total_bytes = total_bytes
+            .checked_add(body.len())
+            .ok_or("forward recovery byte budget overflow")?;
+        if total_bytes > MAX_TOTAL_BYTES {
+            return Err("forward recovery byte budget exhausted".into());
+        }
+        let page: arkret_models_collaboration::authority_commit::PeerStreamScanOutcome =
+            serde_json::from_slice(&body).map_err(temporary)?;
+        page.validate_for_request(&request).map_err(temporary)?;
+        for item in &page.committed_events {
+            let commit = item.commit();
+            if expected.is_some_and(|target| commit.stream_position > target.stream_position) {
+                return Err("forward target is absent from the authorized prefix".into());
+            }
+            let fact = page
+                .producer_signer_facts
+                .iter()
+                .find(|entry| entry.target.commit_id == commit.commit_id)
+                .map(|entry| &entry.producer_signer_fact);
+            let is_target = validate_forward_scan_target(item, event, expected)?;
+            if is_target {
+                let CommittedEventView::Full(full) = item else {
+                    unreachable!("the target validator requires Full");
+                };
+                ensure_historical_method_key(state, located, &commit.signature).await?;
+                verify_committed_event_receipt_with_fact(
+                    state.persistence(),
+                    &full.event,
+                    commit,
+                    CommitContinuity::After(&held),
+                    &located.authority,
+                    &located.keys,
+                    &state.service_core_id(),
+                    state
+                        .projections()
+                        .realm_digest_suite(event.realm_id.as_str()),
+                    fact,
+                )
+                .await
+                .map_err(temporary)?;
+                require_forward_source(state, session, event, located).await?;
+                // Retain the original acknowledgement before installing its Full.
+                commits
+                    .retain_forwarded_acceptance(event, commit, crate::wire::now())
+                    .await
+                    .map_err(temporary)?;
+            }
+            require_forward_source(state, session, event, located).await?;
+            store_scanned(state, &event.realm_id, anchored, located, &held, item, fact).await?;
+            require_forward_source(state, session, event, located).await?;
+            held = commit.clone();
+            if is_target {
+                require_forward_visibility(state, event, commit).await?;
+                require_forward_source(state, session, event, located).await?;
+                return Ok(Some(commit.clone()));
+            }
+        }
+        if !page.truncated {
+            return if expected.is_some() {
+                Err("accepted forward target is not available at this authorized cut".into())
+            } else {
+                Ok(None)
+            };
+        }
+    }
+    Err("forward recovery page budget exhausted".into())
+}
+
+/// Coordinate and original-content gate only. Cryptographic and disclosure
+/// checks remain mandatory before the caller can retain or install the target.
+pub(super) fn validate_forward_scan_target(
+    item: &CommittedEventView,
+    event: &arkret_wire::Event,
+    expected: Option<&RealmCommit>,
+) -> Result<bool, String> {
+    let commit = item.commit();
+    if expected
+        .is_some_and(|target| target.stream_position == commit.stream_position && target != commit)
+    {
+        return Err("forward target coordinate conflicts with its accepted acknowledgement".into());
+    }
+    if commit.event_ref != event.event_id {
+        return Ok(false);
+    }
+    let CommittedEventView::Full(full) = item else {
+        return Err("forward target is withheld at the authorized cut".into());
+    };
+    if full.event != *event || expected.is_some_and(|target| target != commit) {
+        return Err("forward target differs from the frozen original".into());
+    }
+    Ok(true)
+}
+
+async fn require_forward_source(
+    state: &AppState,
+    session: &soland_services::identity::SessionIdentityState,
+    event: &arkret_wire::Event,
+    located: &LocatedRealmAuthority,
+) -> Result<(), String> {
+    super::authority_forward::validate_recovery_caller(state, session, event)
+        .await
+        .map_err(temporary)?;
+    require_forward_authority(state, located).await
+}
+
+async fn require_forward_authority(
+    state: &AppState,
+    located: &LocatedRealmAuthority,
+) -> Result<(), String> {
+    let current = state
+        .authority_commits()
+        .current_authority(located.authority.realm_id())
+        .await
+        .map_err(temporary)?;
+    if current.as_ref() != Some(&located.current_authority()) {
+        return Err("forward recovery governing tenure changed".into());
+    }
+    Ok(())
+}
+
+async fn require_forward_visibility(
+    state: &AppState,
+    event: &arkret_wire::Event,
+    commit: &RealmCommit,
+) -> Result<(), String> {
+    let account = event
+        .actor_id
+        .as_account_id()
+        .ok_or("forward recovery producer is not a full Account")?;
+    if account.station_id != state.service_core_id() {
+        return Err("forward recovery producer is not hosted here".into());
+    }
+    let request = StreamScanRequest {
+        realm_id: event.realm_id.clone(),
+        stream_ref: commit.stream_ref.clone(),
+        direction: StreamScanDirection::Before(Some(
+            commit
+                .stream_position
+                .checked_add(1)
+                .ok_or("forward target position overflow")?,
+        )),
+        limit: 1,
+    };
+    match state
+        .authority_commits()
+        .scan_stream_for_account(&request, account, &state.service_core_id())
+        .await
+        .map_err(temporary)?
+    {
+        soland_storage::AccountStreamScan::Page(page) if page.committed_events.len() == 1 => {
+            match &page.committed_events[0] {
+                CommittedEventView::Full(full)
+                    if full.event == *event && full.commit == *commit =>
+                {
+                    Ok(())
+                }
+                _ => Err("forward target is not exactly visible to its original Account".into()),
+            }
+        }
+        _ => Err("forward target visibility is not available to its original Account".into()),
     }
 }
 

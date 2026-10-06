@@ -558,6 +558,30 @@ impl AuthorityCommitApplication {
         Ok(())
     }
 
+    pub async fn retain_forwarded_submission(
+        &self,
+        event: &Event,
+        submission: &arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest,
+        at: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        self.store()
+            .retain_forwarded_submission(event, submission, at)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn retain_forwarded_acceptance(
+        &self,
+        event: &Event,
+        commit: &arkret_wire::RealmCommit,
+        at: DateTime<Utc>,
+    ) -> ServiceResult<()> {
+        self.store()
+            .retain_forwarded_acceptance(event, commit, at)
+            .await?;
+        Ok(())
+    }
+
     pub async fn record_forward_attempt(
         &self,
         event_id: &arkret_wire::EventId,

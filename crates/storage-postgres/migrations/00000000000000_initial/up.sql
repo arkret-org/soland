@@ -943,10 +943,16 @@ FOR EACH ROW EXECUTE FUNCTION public.enforce_canonical_event_immutability();
 -- A current-cut refusal can be overwritten by an exact retry or by the
 -- eventual committed replica without changing canonical_events.state.
 CREATE TABLE public.authority_forward_attempts (
+    -- Local frozen intent and verified acknowledgement; neither is installed state.
+    original_submission_json jsonb,
+    accepted_commit_json jsonb,
     event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     status text NOT NULL CHECK (status IN ('forwarding', 'rejected', 'temporarily_unavailable')),
     reason_code text,
     attempted_at timestamptz NOT NULL,
+    CONSTRAINT authority_forward_accepted_intent_check CHECK (
+        accepted_commit_json IS NULL OR original_submission_json IS NOT NULL
+    ),
     CONSTRAINT authority_forward_attempt_reason_check CHECK (
         (status = 'rejected' AND reason_code IS NOT NULL)
         OR (status <> 'rejected' AND reason_code IS NULL)

@@ -1354,6 +1354,122 @@ async fn consumed_sidecar_agent_requires_exact_controller_owner_and_consume_dige
         event: request.authority_commit.event.clone(),
         commit: request.authority_commit.commit.clone(),
     };
+    // Preserve the complete already-accepted MLS submission separately from
+    // canonical installation. This storage regression uses the actual accepted
+    // Add and its real Welcome; it does not assert peer HTTP authorization.
+    {
+        use arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest;
+        let origin_database = TestDatabase::lease().await;
+        let origin_pool = origin_database.pool();
+        let origin = PgAuthorityCommitStore {
+            pool: origin_pool.clone(),
+        };
+        let submission = SelfAuthoritySubmitRequest::MlsCommit(arkret_wire::MlsCommitSubmission {
+            commit_event: accepted.event.clone(),
+            welcomes: vec![delivery.clone()],
+            idempotency_key: arkret_wire::UuidV7::new(uuid::Uuid::now_v7()).unwrap(),
+        });
+        submission.validate().unwrap();
+        origin
+            .queue_event(&accepted.event, accepted.commit.committed_at)
+            .await
+            .unwrap();
+        origin
+            .retain_forwarded_submission(&accepted.event, &submission, accepted.commit.committed_at)
+            .await
+            .unwrap();
+        origin
+            .retain_forwarded_acceptance(
+                &accepted.event,
+                &accepted.commit,
+                accepted.commit.committed_at,
+            )
+            .await
+            .unwrap();
+        drop(origin);
+        let reopened = PgAuthorityCommitStore {
+            pool: origin_pool.clone(),
+        };
+        let retained = reopened
+            .queued_event(&accepted.event.event_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.status, soland_storage::QueuedEventStatus::Queued);
+        assert!(retained.committed.is_none());
+        let attempt = retained.forward_attempt.unwrap();
+        assert_eq!(attempt.original_submission, Some(submission.clone()));
+        assert_eq!(attempt.accepted_commit, Some(accepted.commit.clone()));
+        assert_eq!(
+            attempt.status,
+            soland_storage::ForwardAttemptStatus::Forwarding
+        );
+        for alter_welcome in [true, false] {
+            let mut changed = submission.clone();
+            let SelfAuthoritySubmitRequest::MlsCommit(ref mut value) = changed else {
+                unreachable!()
+            };
+            if alter_welcome {
+                // Validly shaped but different complete Welcome bytes must not
+                // replace the frozen request, even when its Event is identical.
+                value.welcomes[0].ciphertext_b64 = arkret_wire::Base64UrlString::new("AQ").unwrap();
+                let mut unsigned = serde_json::to_value(&value.welcomes[0]).unwrap();
+                unsigned.as_object_mut().unwrap().remove("producer_proof");
+                value.welcomes[0].producer_proof =
+                    arkret_signatures::detached_object::sign_detached_object(
+                        &unsigned,
+                        arkret_wire::DetachedSignatureContext::MlsWelcomeDelivery,
+                        principal.history.device_verification_method.clone(),
+                        value.welcomes[0].producer_proof.created_at,
+                        &ed25519_dalek::SigningKey::from_bytes(
+                            &principal.history.founding_device_signing_seed,
+                        ),
+                    )
+                    .unwrap();
+            } else {
+                value.idempotency_key = arkret_wire::UuidV7::new(uuid::Uuid::now_v7()).unwrap();
+            }
+            changed.validate().unwrap();
+            let error = reopened
+                .retain_forwarded_submission(
+                    &accepted.event,
+                    &changed,
+                    accepted.commit.committed_at,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.conflict_code(),
+                Some(soland_storage::ConflictCode::DuplicateConflict)
+            );
+            assert_eq!(
+                reopened
+                    .queued_event(&accepted.event.event_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .forward_attempt,
+                Some(attempt.clone())
+            );
+        }
+        assert!(
+            reopened
+                .committed_event(&accepted.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        #[derive(diesel::QueryableByName)]
+        struct ForwardOnlyFootprint {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            installed: i64,
+        }
+        let mut conn = origin_pool.get().await.unwrap();
+        use diesel_async::RunQueryDsl;
+        let footprint = diesel::sql_query("SELECT (SELECT count(*) FROM realm_commits) + (SELECT count(*) FROM realm_authorities) + (SELECT count(*) FROM replica_stream_anchors) + (SELECT count(*) FROM replica_authorization_cuts) + (SELECT count(*) FROM replica_authorization_rows) + (SELECT count(*) FROM current_result_heads) + (SELECT count(*) FROM realm_state_snapshots) + (SELECT count(*) FROM member_state_current_results) + (SELECT count(*) FROM agent_producer_signer_keys) + (SELECT count(*) FROM federation_outbox) AS installed")
+            .get_result::<ForwardOnlyFootprint>(&mut *conn).await.unwrap();
+        assert_eq!(footprint.installed, 0);
+    }
     group.install_accepted_commit(&accepted, &base).unwrap();
     let mut recipient_group = arkret_mls::ArkretMlsGroup::join_from_verified_welcome_delivery(
         identity, &delivery, &accepted,

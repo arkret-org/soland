@@ -435,6 +435,17 @@ impl AuthorityProtocolPort for AppState {
                 return Ok(original);
             }
         }
+        if let Some(original) = super::authority_forward::recover_forwarded_original(
+            self,
+            session,
+            &arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest::Event(
+                request.clone(),
+            ),
+        )
+        .await?
+        {
+            return Ok(original);
+        }
         let (producer_guard, producer_key) =
             super::authority_producer_validation::verify_self_event_producer_key(
                 self, session, event,
@@ -455,8 +466,13 @@ impl AuthorityProtocolPort for AppState {
                 error
             })?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
-            let outcome =
-                super::authority_forward::forward_self_event(self, &governance, request).await;
+            let outcome = super::authority_forward::forward_self_event_with_session(
+                self,
+                &governance,
+                request,
+                session,
+            )
+            .await;
             #[cfg(feature = "conformance-harness")]
             if let Err(error) = &outcome {
                 crate::routing::trace_submission_refusal(
@@ -556,13 +572,25 @@ impl AuthorityProtocolPort for AppState {
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.commit_event;
+        if let Some(original) = super::authority_forward::recover_forwarded_original(
+            self,
+            session,
+            &arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest::MlsCommit(
+                request.clone(),
+            ),
+        )
+        .await?
+        {
+            return Ok(original);
+        }
         let (producer_guard, producer_key) =
             super::authority_producer_validation::verify_self_event_producer_key(
                 self, session, event,
             )
             .await?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
-            return super::authority_forward::forward_self_mls(self, &governance, request).await;
+            return super::authority_forward::forward_self_mls(self, &governance, request, session)
+                .await;
         }
         super::authority_mls_unit::admit_mls_event(
             self,

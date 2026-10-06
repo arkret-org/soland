@@ -783,3 +783,179 @@ async fn withheld_full_upgrade_atomically_retains_original_human_fact_without_he
     assert!(member.install_committed_replica(&changed).await.is_err());
     assert_eq!(footprint(&member_pool).await, before);
 }
+
+mod forward_retention {
+    //! Real accepted source originals retained as non-authoritative forwarding
+    //! witnesses. These PG ports do not establish peer HTTP authority verification.
+    use arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest;
+    use arkret_wire::{Did, EventAdmissionSubmission};
+    use diesel::sql_query;
+    use diesel::sql_types::Jsonb;
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{AuthorityCommitStore, ForwardAttemptStatus, QueuedEventStatus};
+    use soland_storage_postgres::test_database::TestDatabase;
+    use soland_storage_postgres::{PgAuthorityCommitStore, PgPool};
+
+    use super::historical_human;
+
+    #[derive(diesel::QueryableByName)]
+    struct InstalledFootprint {
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+    }
+
+    async fn installed(pool: &PgPool) -> serde_json::Value {
+        let mut conn = pool.get().await.unwrap();
+        sql_query("SELECT jsonb_build_object(        'commits',(SELECT count(*) FROM realm_commits),        'authorities',(SELECT count(*) FROM realm_authorities),        'anchors',(SELECT count(*) FROM replica_stream_anchors),'cuts',(SELECT count(*) FROM replica_authorization_cuts),'rows',(SELECT count(*) FROM replica_authorization_rows),'current_heads',(SELECT count(*) FROM current_result_heads),        'snapshots',(SELECT count(*) FROM realm_state_snapshots),        'members',(SELECT count(*) FROM member_state_current_results),        'facts',(SELECT count(*) FROM agent_producer_signer_keys),        'outbox',(SELECT count(*) FROM federation_outbox)) AS value")
+            .get_result::<InstalledFootprint>(&mut *conn).await.unwrap().value
+    }
+
+    #[tokio::test]
+    async fn genuine_accepted_originals_reopen_without_installing_or_overwriting_forward_witness() {
+        let source_db = TestDatabase::lease().await;
+        let source_pool = source_db.pool();
+        let source = historical_human::HumanFixture::new(
+            &source_pool,
+            Did::new("did:web:forward-source.example").unwrap(),
+        )
+        .await;
+        source.admit(&source_pool).await;
+        let governor = PgAuthorityCommitStore {
+            pool: source_pool.clone(),
+        };
+        let origin_db = TestDatabase::lease().await;
+        let pool = origin_db.pool();
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let before = installed(&pool).await;
+        assert!(
+            before
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|v| v == &serde_json::json!(0))
+        );
+        for transaction in &source.unit.transactions {
+            let original = governor
+                .committed_event(&transaction.event.event_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(original.event, transaction.event);
+            assert_eq!(original.commit, transaction.commit);
+            let intent = SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(
+                original.event.clone(),
+            ));
+            store
+                .queue_event(&original.event, original.commit.committed_at)
+                .await
+                .unwrap();
+            let missing_intent = store
+                .retain_forwarded_acceptance(
+                    &original.event,
+                    &original.commit,
+                    original.commit.committed_at,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                missing_intent.conflict_code(),
+                Some(soland_storage::ConflictCode::DuplicateConflict)
+            );
+            assert!(
+                store
+                    .queued_event(&original.event.event_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .forward_attempt
+                    .is_none()
+            );
+            assert_eq!(installed(&pool).await, before);
+            store
+                .retain_forwarded_submission(&original.event, &intent, original.commit.committed_at)
+                .await
+                .unwrap();
+            store
+                .retain_forwarded_acceptance(
+                    &original.event,
+                    &original.commit,
+                    original.commit.committed_at,
+                )
+                .await
+                .unwrap();
+            drop(original);
+            let reopened = PgAuthorityCommitStore { pool: pool.clone() };
+            let queued = reopened
+                .queued_event(&transaction.event.event_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(queued.status, QueuedEventStatus::Queued);
+            assert!(queued.committed.is_none());
+            let attempt = queued.forward_attempt.unwrap();
+            assert_eq!(attempt.original_submission, Some(intent.clone()));
+            assert_eq!(attempt.accepted_commit, Some(transaction.commit.clone()));
+            assert_eq!(attempt.status, ForwardAttemptStatus::Forwarding);
+            reopened
+                .record_forward_attempt(
+                    &transaction.event.event_id,
+                    ForwardAttemptStatus::Rejected,
+                    Some("not_authorized"),
+                    transaction.commit.committed_at,
+                )
+                .await
+                .unwrap();
+            let retained = reopened
+                .queued_event(&transaction.event.event_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .forward_attempt
+                .unwrap();
+            assert_eq!(retained.original_submission, Some(intent));
+            assert_eq!(retained.accepted_commit, Some(transaction.commit.clone()));
+            assert_eq!(retained.status, ForwardAttemptStatus::Forwarding);
+            assert!(retained.reason_code.is_none());
+            let mut fork = transaction.commit.clone();
+            fork.committed_at += chrono::TimeDelta::milliseconds(1);
+            historical_human::seal_commit(&mut fork, &source.pcr.history.station_did);
+            let error = reopened
+                .retain_forwarded_acceptance(&transaction.event, &fork, fork.committed_at)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.conflict_code(),
+                Some(soland_storage::ConflictCode::DuplicateConflict)
+            );
+            let unchanged = reopened
+                .queued_event(&transaction.event.event_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .forward_attempt
+                .unwrap();
+            assert_eq!(unchanged, retained);
+            let mut wrong_id = transaction.commit.clone();
+            wrong_id.commit_id = arkret_wire::RealmCommitId::from_digest([42; 32]);
+            assert!(
+                reopened
+                    .retain_forwarded_acceptance(
+                        &transaction.event,
+                        &wrong_id,
+                        wrong_id.committed_at
+                    )
+                    .await
+                    .is_err()
+            );
+            assert_eq!(installed(&pool).await, before);
+            assert!(
+                reopened
+                    .committed_event(&transaction.event.event_id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert_eq!(installed(&pool).await, before);
+    }
+}

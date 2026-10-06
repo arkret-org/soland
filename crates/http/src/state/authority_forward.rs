@@ -18,6 +18,7 @@
 use arkret_models_collaboration::authority_commit::{
     MLS_GENESIS_MATERIAL_MAX_BLOB_BYTES, MlsGenesisMaterial, PeerAuthorityForwardEventRequest,
     PeerAuthorityForwardMlsRequest, PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest,
+    SelfAuthoritySubmitRequest,
 };
 use arkret_models_identity::{AccountDeviceSignerEvidence, ForwardAccountDeviceSignerEvidence};
 use arkret_wire::{
@@ -614,6 +615,24 @@ pub(crate) async fn forward_self_event(
     governance: &DidCoreId,
     submission: EventAdmissionSubmission,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
+    forward_self_event_inner(state, governance, submission, None).await
+}
+
+pub(crate) async fn forward_self_event_with_session(
+    state: &AppState,
+    governance: &DidCoreId,
+    submission: EventAdmissionSubmission,
+    session: &soland_services::identity::SessionIdentityState,
+) -> ServiceResult<AuthoritySubmitOutcome> {
+    forward_self_event_inner(state, governance, submission, Some(session)).await
+}
+
+async fn forward_self_event_inner(
+    state: &AppState,
+    governance: &DidCoreId,
+    submission: EventAdmissionSubmission,
+    session: Option<&soland_services::identity::SessionIdentityState>,
+) -> ServiceResult<AuthoritySubmitOutcome> {
     // Device admission and Genesis material are preflight gates.  In
     // particular, a revoked/pending/fenced producer must leave no queued
     // Event behind at the forwarding Station.
@@ -634,6 +653,13 @@ pub(crate) async fn forward_self_event(
     request.producer_device_evidence =
         fresh_producer_device_evidence(state, &submission.event, governance, &body_digest).await?;
     request.validate().map_err(wire_refusal)?;
+    let session = session.ok_or_else(|| {
+        ServiceError::protocol(
+            ErrorCode::Unauthenticated,
+            "forward transport requires the authenticated request context",
+        )
+    })?;
+    validate_recovery_caller(state, session, &submission.event).await?;
     // Retain the producer's exact signed Event before any forwarding attempt.
     // A transport failure leaves this row queued for an exact replay or a
     // later committed replica; neither path makes it visible as accepted.
@@ -642,10 +668,19 @@ pub(crate) async fn forward_self_event(
         .queue_event(&request.event_submission.event, crate::wire::now())
         .await?;
 
+    state
+        .authority_commits()
+        .retain_forwarded_submission(
+            &submission.event,
+            &SelfAuthoritySubmitRequest::Event(submission.clone()),
+            crate::wire::now(),
+        )
+        .await?;
     send_forward(
         state,
         governance,
         PeerAuthoritySubmitRequest::AuthorityForwardEvent(request),
+        session,
     )
     .await
 }
@@ -656,6 +691,7 @@ pub(super) async fn forward_self_mls(
     state: &AppState,
     governance: &DidCoreId,
     submission: MlsCommitSubmission,
+    session: &soland_services::identity::SessionIdentityState,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     // Match ordinary forwarding: the live device gate precedes every durable
     // forwarding effect, including the local queued Event.
@@ -680,18 +716,157 @@ pub(super) async fn forward_self_mls(
         .queue_event(&submission.commit_event, crate::wire::now())
         .await?;
 
+    state
+        .authority_commits()
+        .retain_forwarded_submission(
+            &submission.commit_event,
+            &SelfAuthoritySubmitRequest::MlsCommit(submission.clone()),
+            crate::wire::now(),
+        )
+        .await?;
     send_forward(
         state,
         governance,
         PeerAuthoritySubmitRequest::AuthorityForwardMls(request),
+        session,
     )
     .await
+}
+
+/// Recover an exact frozen remote submission before today's producer admission.
+/// The HTTP boundary still authenticates the full Account and standard holder.
+pub(crate) async fn recover_forwarded_original(
+    state: &AppState,
+    session: &soland_services::identity::SessionIdentityState,
+    submission: &SelfAuthoritySubmitRequest,
+) -> ServiceResult<Option<AuthoritySubmitOutcome>> {
+    let event = match submission {
+        SelfAuthoritySubmitRequest::Event(value) => &value.event,
+        SelfAuthoritySubmitRequest::MlsCommit(value) => &value.commit_event,
+        _ => return Ok(None),
+    };
+    let commits = state.authority_commits();
+    let Some(queued) = commits.queued_event(&event.event_id).await? else {
+        return Ok(None);
+    };
+    let Some(attempt) = queued.forward_attempt else {
+        return Ok(None);
+    };
+    let Some(original) = attempt.original_submission else {
+        return Ok(None);
+    };
+    if original != *submission || queued.event != *event {
+        return Err(ServiceError::Conflict(
+            "duplicate_conflict: forwarding recovery differs from its complete original".into(),
+        ));
+    }
+    validate_recovery_caller(state, session, event).await?;
+    let authority = commits
+        .current_authority(&event.realm_id)
+        .await?
+        .ok_or_else(|| {
+            temporarily_unavailable("forward recovery has no current governing tenure")
+        })?;
+    let governance = authority.service_id;
+    let mut located = if let Some(commit) = attempt.accepted_commit.as_ref() {
+        verify_forwarded_acknowledgement(state, &governance, event, commit).await?
+    } else {
+        crate::routing::realm_join::resolve_verified_authority_of_service(
+            state,
+            &event.realm_id,
+            &governance,
+        )
+        .await
+        .map_err(|e| temporarily_unavailable(e.message))?
+    };
+    validate_recovery_caller(state, session, event).await?;
+    let original_commit = super::replica_anchor::ensure_forwarded_target(
+        state,
+        &governance,
+        event,
+        attempt.accepted_commit.as_ref(),
+        &mut located,
+        session,
+    )
+    .await
+    .map_err(temporarily_unavailable)?;
+    validate_recovery_caller(state, session, event).await?;
+    match original_commit {
+        Some(commit) => Ok(Some(AuthoritySubmitOutcome::Accepted {
+            status: arkret_wire::AuthorityCommitStatus::Duplicate,
+            commit,
+        })),
+        None if attempt.accepted_commit.is_none() => Ok(None),
+        None => Err(temporarily_unavailable(
+            "accepted forward original remains unavailable",
+        )),
+    }
+}
+
+pub(super) async fn validate_recovery_caller(
+    state: &AppState,
+    session: &soland_services::identity::SessionIdentityState,
+    event: &Event,
+) -> ServiceResult<()> {
+    use arkret_models_identity::session_credential::{
+        SessionGrantCredentialClass, SessionGrantHolderBinding,
+    };
+    let actor = crate::routing::identity::session_actor::validated_session_actor(state, session)
+        .await
+        .map_err(|e| ServiceError::protocol(ErrorCode::Unauthenticated, e.message))?;
+    let account = actor.as_account_id().ok_or_else(|| {
+        ServiceError::protocol(
+            ErrorCode::Unauthenticated,
+            "recovery requires a full Account",
+        )
+    })?;
+    let grant = session.session_grant.as_ref().ok_or_else(|| {
+        ServiceError::protocol(
+            ErrorCode::Unauthenticated,
+            "recovery requires a standard grant",
+        )
+    })?;
+    if event.actor_id != actor
+        || event.executed_by.is_some()
+        || grant.account_id != *account
+        || grant.credential_class != SessionGrantCredentialClass::Standard
+        || account.station_id != state.service_core_id()
+        || session.expires_at <= crate::wire::now()
+        || session.revoked_at.is_some()
+    {
+        return Err(ServiceError::protocol(
+            ErrorCode::Unauthenticated,
+            "recovery credential does not bind the exact original Account",
+        ));
+    }
+    match &grant.holder_binding {
+        SessionGrantHolderBinding::HumanDevice { device_binding }
+            if session
+                .human_device_id()
+                .is_some_and(|id| id == device_binding)
+                && grant
+                    .device_binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.device_id.as_str() == device_binding) => {}
+        SessionGrantHolderBinding::AgentRuntime { agent_id, .. }
+            if session.agent_session().is_some()
+                && agent_id == &account.principal_id
+                && grant.device_binding.is_none() => {}
+        _ => {
+            return Err(ServiceError::protocol(
+                ErrorCode::Unauthenticated,
+                "recovery standard holder does not bind the authenticated endpoint",
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn send_forward(
     state: &AppState,
     governance: &DidCoreId,
     request: PeerAuthoritySubmitRequest,
+    session: &soland_services::identity::SessionIdentityState,
 ) -> ServiceResult<AuthoritySubmitOutcome> {
     let event = match &request {
         PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
@@ -702,42 +877,11 @@ async fn send_forward(
         }
         _ => unreachable!("only authority forwards reach send_forward"),
     };
-    let evidence = match &request {
-        PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => {
-            request.producer_device_evidence.as_ref()
-        }
-        PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => {
-            request.producer_device_evidence.as_ref()
-        }
-        _ => unreachable!("only authority forwards reach send_forward"),
-    };
-    let request_body = match &request {
-        PeerAuthoritySubmitRequest::AuthorityForwardEvent(request) => serde_json::to_value(request),
-        PeerAuthoritySubmitRequest::AuthorityForwardMls(request) => serde_json::to_value(request),
-        _ => unreachable!("only authority forwards reach send_forward"),
-    }
-    .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
-    let body_digest =
-        arkret_models_collaboration::authority_commit::authority_forward_body_digest(&request_body)
-            .map_err(wire_refusal)?;
-    let producer_signer_fact = evidence
-        .map(|evidence| {
-            arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
-                evidence,
-                event,
-                &state.service_core_id(),
-                governance,
-                &body_digest,
-                event.realm_id.digest_suite_code().digest_suite(),
-                crate::wire::now(),
-            )
-            .map(|verified| verified.into_fact())
-            .map_err(|e| ServiceError::protocol(ErrorCode::SignatureInvalid, e))
-        })
-        .transpose()?;
+    let mut governing_accepted = false;
     let result = async {
         let body = arkret_canonical::canonical_json_bytes(&request)
             .map_err(|error| ServiceError::internal(error.to_string()))?;
+        validate_recovery_caller(state, session, event).await?;
         let response = crate::routing::federation::outbox::submit_authority_forward(
             state,
             governance.as_str(),
@@ -747,37 +891,54 @@ async fn send_forward(
         .map_err(temporarily_unavailable)?;
         let outcome = relay_governance_response(&request, response)?;
         if let AuthoritySubmitOutcome::Accepted { commit, .. } = &outcome {
-            verify_forwarded_commit(
+            governing_accepted = true;
+            let mut located =
+                verify_forwarded_acknowledgement(state, governance, event, commit).await?;
+            // This durable witness is not a replica: it authorizes no read or current value.
+            state
+                .authority_commits()
+                .retain_forwarded_acceptance(event, commit, crate::wire::now())
+                .await?;
+            validate_recovery_caller(state, session, event).await?;
+            super::replica_anchor::ensure_forwarded_target(
                 state,
                 governance,
                 event,
-                commit,
-                producer_signer_fact.as_ref(),
+                Some(commit),
+                &mut located,
+                session,
             )
-            .await?;
+            .await
+            .map_err(temporarily_unavailable)?
+            .ok_or_else(|| temporarily_unavailable("accepted forward original is unavailable"))?;
         }
         Ok::<_, ServiceError>(outcome)
     }
     .await;
-    let (status, reason_code) = match &result {
-        Ok(AuthoritySubmitOutcome::Accepted { .. }) => (ForwardAttemptStatus::Forwarding, None),
-        Ok(AuthoritySubmitOutcome::Rejected { reason_code, .. }) => {
-            (ForwardAttemptStatus::Rejected, Some(reason_code.as_str()))
-        }
-        Err(error) if error.conflict_code() == Some(ConflictCode::TemporarilyUnavailable) => {
-            (ForwardAttemptStatus::TemporarilyUnavailable, None)
-        }
-        Err(error) => match error.conflict_code() {
-            Some(code) => (ForwardAttemptStatus::Rejected, Some(code.as_str())),
-            None if matches!(error, ServiceError::SchemaViolation(_)) => {
-                (ForwardAttemptStatus::Rejected, Some("schema_violation"))
+    let (status, reason_code) = if governing_accepted {
+        // Materialization failure is operation availability, not an admission rejection.
+        (ForwardAttemptStatus::Forwarding, None)
+    } else {
+        match &result {
+            Ok(AuthoritySubmitOutcome::Accepted { .. }) => (ForwardAttemptStatus::Forwarding, None),
+            Ok(AuthoritySubmitOutcome::Rejected { reason_code, .. }) => {
+                (ForwardAttemptStatus::Rejected, Some(reason_code.as_str()))
             }
-            None if matches!(error, ServiceError::UnsupportedEventKind(_)) => (
-                ForwardAttemptStatus::Rejected,
-                Some("unsupported_event_kind"),
-            ),
-            None => (ForwardAttemptStatus::TemporarilyUnavailable, None),
-        },
+            Err(error) if error.conflict_code() == Some(ConflictCode::TemporarilyUnavailable) => {
+                (ForwardAttemptStatus::TemporarilyUnavailable, None)
+            }
+            Err(error) => match error.conflict_code() {
+                Some(code) => (ForwardAttemptStatus::Rejected, Some(code.as_str())),
+                None if matches!(error, ServiceError::SchemaViolation(_)) => {
+                    (ForwardAttemptStatus::Rejected, Some("schema_violation"))
+                }
+                None if matches!(error, ServiceError::UnsupportedEventKind(_)) => (
+                    ForwardAttemptStatus::Rejected,
+                    Some("unsupported_event_kind"),
+                ),
+                None => (ForwardAttemptStatus::TemporarilyUnavailable, None),
+            },
+        }
     };
     state
         .authority_commits()
@@ -786,13 +947,12 @@ async fn send_forward(
     result
 }
 
-async fn verify_forwarded_commit(
+async fn verify_forwarded_acknowledgement(
     state: &AppState,
     governance: &DidCoreId,
     event: &Event,
     commit: &arkret_wire::RealmCommit,
-    fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
-) -> ServiceResult<()> {
+) -> ServiceResult<crate::routing::realm_join::LocatedRealmAuthority> {
     let mut located = crate::routing::realm_join::resolve_verified_authority_of_service(
         state,
         &event.realm_id,
@@ -816,22 +976,29 @@ async fn verify_forwarded_commit(
         .await
         .map_err(|error| temporarily_unavailable(format!("RealmCommit signing key: {error}")))?;
     }
-    soland_services::committed_receipt::verify_committed_event_receipt_with_fact(
-        state.persistence(),
-        event,
-        commit,
-        soland_services::committed_receipt::CommitContinuity::Standalone,
-        &located.authority,
-        &located.keys,
-        &state.service_core_id(),
-        state
-            .projections()
-            .realm_digest_suite(event.realm_id.as_str()),
-        fact,
-    )
-    .await
-    .map_err(|error| temporarily_unavailable(format!("RealmCommit verification: {error}")))?;
-    Ok(())
+    event
+        .verify_event_id_matches_content_with_digest_suite(
+            event.realm_id.digest_suite_code().digest_suite(),
+        )
+        .map_err(wire_refusal)?;
+    commit.validate_shape().map_err(wire_refusal)?;
+    let stream =
+        arkret_wire::CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
+            .map_err(wire_refusal)?;
+    if commit.event_ref != event.event_id
+        || commit.realm_id != event.realm_id
+        || commit.stream_ref != stream
+    {
+        return Err(ServiceError::protocol(
+            ErrorCode::SignatureInvalid,
+            "governing acknowledgement names another original",
+        ));
+    }
+    located
+        .authority
+        .verify_commit(commit, &located.keys)
+        .map_err(|e| ServiceError::protocol(ErrorCode::SignatureInvalid, e))?;
+    Ok(located)
 }
 
 /// The governance Station's registered refusal of a forward, as this
@@ -1022,3 +1189,7 @@ impl AppState {
         stage_control_source(self, transaction, original).await
     }
 }
+
+#[cfg(test)]
+#[path = "authority_forward_recovery_tests.rs"]
+mod recovery_tests;
