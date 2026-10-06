@@ -419,6 +419,11 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
 
 #[handler]
 pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Response) {
+    #[cfg(feature = "conformance-harness")]
+    tracing::warn!(
+        phase = "handler_entered",
+        "self submission execution boundary"
+    );
     let app_state = match state(depot) {
         Ok(state) => state,
         Err(error) => {
@@ -430,6 +435,11 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
         trace_submission_refusal("authentication", "unparsed", "unresolved", None);
         return;
     };
+    #[cfg(feature = "conformance-harness")]
+    tracing::warn!(
+        phase = "authenticated",
+        "self submission execution boundary"
+    );
     if let Err(error) =
         crate::routing::identity::session_actor::validated_session_actor(app_state, &session).await
     {
@@ -468,6 +478,11 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
         );
     }
     let authority = app_state.authority();
+    #[cfg(feature = "conformance-harness")]
+    tracing::warn!(
+        phase = "authority_dispatch",
+        "self submission execution boundary"
+    );
     let result = authority
         .submit_self(&session, request.clone(), &exact_request_body)
         .await
@@ -477,6 +492,11 @@ pub(crate) async fn submit_self(req: &mut Request, depot: &Depot, res: &mut Resp
                 .map_err(invalid_application_output)?;
             Ok(outcome)
         });
+    #[cfg(feature = "conformance-harness")]
+    tracing::warn!(
+        phase = "authority_returned",
+        "self submission execution boundary"
+    );
     #[cfg(feature = "conformance-harness")]
     if let Err(error) = &result {
         let kind_class = match &request {
