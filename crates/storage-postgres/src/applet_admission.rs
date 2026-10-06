@@ -788,7 +788,28 @@ async fn admit_in_connection(
             return Err(rejected("authoring unit crosses sovereign Stations"));
         }
         let head = stream_head(conn, &event.realm_id).await?;
-        let commit = author(event, &authority, head.as_ref(), input.accepted_at)?;
+        // Native installation does not exempt its ordinary Human members from
+        // the original signer-fact contract. Freeze under this same locked cut,
+        // bind it before Commit ID/signature, and archive only with acceptance.
+        let producer_signer_fact =
+            crate::agent_producer_signer_keys::prepare_local_human_source_in_connection(
+                conn,
+                event,
+                input.accepted_at,
+            )
+            .await?;
+        let commit = author(
+            event,
+            &authority,
+            head.as_ref(),
+            input.accepted_at,
+            producer_signer_fact.as_ref(),
+        )?;
+        crate::agent_producer_signer_keys::validate_human_fact_binding(
+            event,
+            &commit,
+            producer_signer_fact.as_ref(),
+        )?;
         let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
             bytes: input.station_public_key.to_vec(),
         };
@@ -811,7 +832,7 @@ async fn admit_in_connection(
             expected_authority: authority,
             event: event.clone(),
             commit: commit.clone(),
-            producer_signer_fact: None,
+            producer_signer_fact: producer_signer_fact.clone(),
             mls_state: None,
             welcomes: vec![],
             recipient_queue_capacity: 0,
@@ -826,6 +847,12 @@ async fn admit_in_connection(
             AuthorityCommitWriteOutcome::Committed
         ) {
             return Err(rejected("Applet Event was accepted outside this aggregate"));
+        }
+        if let Some(fact) = producer_signer_fact.as_ref() {
+            crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
+                conn, event, &commit, fact,
+            )
+            .await?;
         }
         if event.kind == EventKind::CapabilityGrant {
             crate::capability_grant_current_results::commit_capability_grant_current_result_in_connection(conn,event,&commit).await?;

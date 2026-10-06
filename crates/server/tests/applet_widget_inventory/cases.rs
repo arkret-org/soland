@@ -314,6 +314,7 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
         request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::HumanDevice(
             device_selector,
         ));
+        request = ordinary_realm::source_request(&fixture.pool, request).await;
         request.authority_commit.commit.signature =
             arkret_signatures::detached_object::sign_detached_object(
                 &arkret_canonical::unsigned_value(&request.authority_commit.commit, &["signature"])

@@ -65,6 +65,7 @@ async fn authority_snapshot(pool: &PgPool) -> Value {
         'transactions',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM applet_transactions r), \
         'completions',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM applet_authoring_completions r), \
         'authoring_units',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM applet_authoring_units r), \
+        'signer_sources',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM agent_producer_signer_keys r), \
         'authoring_previews',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM applet_authoring_previews r), \
         'idempotency',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM idempotency_keys r), \
         'outbox',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM federation_outbox r), \
@@ -161,6 +162,46 @@ async fn signed_install_accepts_bot_unit_and_exact_retry_without_new_writes() {
         acceptance.accepted_at,
         arkret_canonical::normalize_timestamp_canonical(acceptance.accepted_at)
     );
+    let basis = body.authoring_request.basis.install().unwrap();
+    for event in
+        std::iter::once(&basis.registration_event).chain(basis.capability_grant_events.iter())
+    {
+        let accepted = fixture
+            .state
+            .test_persistence()
+            .authority_commits()
+            .committed_event(&event.event_id)
+            .await
+            .unwrap()
+            .unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct Source {
+            #[diesel(sql_type = diesel::sql_types::Jsonb)]
+            payload: Value,
+        }
+        let mut conn = fixture.pool.get().await.unwrap();
+        let source = diesel::sql_query(
+            "SELECT human_source_fact AS payload FROM agent_producer_signer_keys WHERE commit_id=$1 AND human_source_fact IS NOT NULL",
+        ).bind::<diesel::sql_types::Text,_>(accepted.commit.commit_id.as_str())
+            .get_result::<Source>(&mut *conn).await.unwrap();
+        let fact: arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact =
+            serde_json::from_value(source.payload).unwrap();
+        let suite = event.realm_id.digest_suite_code().digest_suite();
+        fact.validate_commit_binding(
+            &arkret_wire::CommittedEventFullView {
+                event: accepted.event.clone(),
+                commit: accepted.commit.clone(),
+            },
+            suite,
+        )
+        .unwrap();
+        arkret_identity::account_device_signer_evidence::verify_historical_human_event_signature(
+            event, &fact, suite,
+        )
+        .unwrap();
+        assert!(fact.accepted_at <= acceptance.accepted_at);
+        assert_eq!(accepted.commit.committed_at, acceptance.accepted_at);
+    }
     for event in [
         &body.managed_actor_bundle.managed_actor_provision_event,
         &body.managed_actor_bundle.pcr_genesis_event,
@@ -1219,8 +1260,25 @@ impl Fixture {
             &fixture.state.service_did(),
         );
         fixture.realm = unit.transactions[0].event.realm_id.clone();
+        let source = PgAuthorityCommitStore {
+            pool: fixture.pool.clone(),
+        };
+        let mut previous_commit = None;
         for tx in &mut unit.transactions {
             tx.event = fixture.sign_admin(tx.event.clone());
+            tx.commit.event_ref = tx.event.event_id.clone();
+            tx.producer_signer_fact = source
+                .prepare_human_signer_fact(&tx.event, tx.commit.committed_at)
+                .await
+                .unwrap();
+            assert!(tx.producer_signer_fact.is_some());
+            tx.commit.producer_signer_fact_digest = tx
+                .producer_signer_fact
+                .as_ref()
+                .map(|fact| fact.digest().unwrap());
+            tx.commit.previous_commit_ref = previous_commit;
+            ordinary_realm::seal_final_commit(&mut tx.commit);
+            previous_commit = Some(tx.commit.commit_id.clone());
         }
         for (submission, tx) in unit.submission.events.iter_mut().zip(&unit.transactions) {
             submission.event = tx.event.clone();
@@ -1616,6 +1674,7 @@ async fn accepted_admin_domain_event(fixture: &Fixture, event: Event) {
         event.clone(),
         arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
     );
+    let request = ordinary_realm::source_request(&fixture.pool, request).await;
     soland_storage_postgres::PgEventCommitUnitOfWork::new(fixture.pool.clone())
         .commit_event(request)
         .await

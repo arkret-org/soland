@@ -2313,6 +2313,26 @@ async fn verify_invite_commit(
             e.to_string(),
         )
     })?;
+    if let Some(fact) = delivery.producer_signer_fact.as_ref() {
+        let suite = delivery
+            .invite_event
+            .realm_id
+            .digest_suite_code()
+            .digest_suite();
+        fact.validate_commit_binding(
+            &arkret_wire::CommittedEventFullView {
+                event: delivery.invite_event.clone(),
+                commit: delivery.invite_commit.clone(),
+            },
+            suite,
+        )
+        .map_err(|error| {
+            AppError::from_rejection(
+                soland_http::error::ErrorCode::SignatureInvalid,
+                error.to_string(),
+            )
+        })?;
+    }
     match delivery.producer_signer_fact.as_ref() {
         Some(fact) => arkret_identity::account_device_signer_evidence::verify_historical_human_event_signature(
             &delivery.invite_event,fact,state.projections().realm_digest_suite(delivery.invite_event.realm_id.as_str())
@@ -2963,7 +2983,7 @@ mod invite_locator_security_tests {
         };
         for (name, delivery, code) in [
             ("missing", missing, "schema_violation"),
-            ("wrong_digest", wrong_digest, "schema_violation"),
+            ("wrong_digest", wrong_digest, "signature_invalid"),
             ("wrong_real_key", wrong_key, "signature_invalid"),
             ("legacy", legacy, "temporarily_unavailable"),
         ] {

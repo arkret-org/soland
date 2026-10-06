@@ -429,6 +429,9 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
         // scope_circle_id is listed by the generic projection vocabulary but
         // strand-and-message.md §5 explicitly forbids rebinding it.
         let root = path.split('.').next().unwrap_or(path);
+        if root == "scope_circle_id" {
+            return Err(reject("scope_rebind_forbidden"));
+        }
         if !matches!(
             root,
             "schema_refs"
@@ -885,6 +888,15 @@ fn validate_calendar_profile(
             "Strand metadata and encrypted_metadata are mutually exclusive".to_owned(),
         ));
     }
+    if let Some(envelope) = &strand.encrypted_metadata {
+        envelope
+            .validate()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        // The registered profile remains public, while its private subtree is
+        // checked before encryption and after authorized client decryption.
+        // Absence of server-readable plaintext does not deactivate the profile.
+        return Ok(());
+    }
     let fields = strand.metadata.as_ref().map(|metadata| &metadata.fields);
     let calendar = fields.is_some_and(|fields| fields.contains_key("calendar"));
     let schema_ref = strand.schema_refs.as_ref().is_some_and(|refs| {
@@ -901,4 +913,81 @@ fn validate_calendar_profile(
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod encrypted_calendar_tests {
+    use super::*;
+
+    #[test]
+    fn encrypted_calendar_validates_public_profile_and_envelope_without_private_subtree() {
+        let realm: arkret_wire::RealmId = "ak:realm:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
+            .parse()
+            .unwrap();
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: realm.clone(),
+        };
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            "ak:did_core:web:alice.example".parse().unwrap(),
+            "ak:did_core:web:station.example".parse().unwrap(),
+        ));
+        let mut group = arkret_mls::ArkretMlsIdentity::new_test_human_device(
+            actor.clone(),
+            "ak:device:01904100-0000-7000-8000-000000000001"
+                .parse()
+                .unwrap(),
+        )
+        .unwrap()
+        .create_group_with_governance_binding(
+            &scope,
+            &arkret_models_crypto::MlsGovernanceBindingPayload::realm(realm.clone(), None, 0, 0, 0)
+                .unwrap(),
+        )
+        .unwrap();
+        let source =
+            arkret_wire::EventId::from_digest(realm.digest_suite_code().digest_suite(), [4; 32]);
+        let header = arkret_models_crypto::EventContentPreEncryptionHeader::reconstruct(
+            "1.0",
+            "application/json",
+            arkret_wire::EncryptedPayloadScheme::MlsRfc9420,
+            scope,
+            arkret_wire::EventKind::StrandUpdate.as_str(),
+            group.epoch(),
+            source.clone(),
+            group.local_content_sender_domain().unwrap(),
+            arkret_models_crypto::EventContentRoutingContext::None,
+        )
+        .unwrap();
+        let envelope = group.encrypt_payload(header, br#"{"title":"Private schedule","fields":{"calendar":{"start":"2026-06-22","end":"2026-06-23","timezone":"UTC","tzdb_version":"2025b","all_day":true,"status":"confirmed"}}}"#)
+            .unwrap().to_envelope().unwrap();
+        let mut strand = arkret_models_collaboration::objects::strand::Strand::discussion(
+            arkret_wire::StrandId::from_event_id(&source),
+            realm,
+            "draft",
+            actor,
+        );
+        strand.metadata = None;
+        strand.encrypted_metadata = Some(envelope);
+        strand.schema_refs = Some(vec!["ak.schema.calendar_event.v1".to_owned()]);
+        validate_calendar_profile(&strand).unwrap();
+        assert!(
+            !serde_json::to_string(&strand)
+                .unwrap()
+                .contains("Private schedule")
+        );
+        let mut malformed = strand.clone();
+        malformed.encrypted_metadata.as_mut().unwrap().ciphertext = "invalid+".to_owned();
+        assert!(validate_calendar_profile(&malformed).is_err());
+        for refs in [
+            vec!["ak.schema.unregistered.v1".to_owned()],
+            vec!["ak.schema.calendar_event.v1".to_owned(); 2],
+        ] {
+            let mut invalid = strand.clone();
+            invalid.schema_refs = Some(refs);
+            assert!(validate_calendar_profile(&invalid).is_err());
+        }
+        let mut ambiguous = strand.clone();
+        ambiguous.metadata = Some(Default::default());
+        assert!(validate_calendar_profile(&ambiguous).is_err());
+    }
 }

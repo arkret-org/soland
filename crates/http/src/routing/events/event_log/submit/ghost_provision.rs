@@ -29,7 +29,7 @@ pub(in crate::routing) async fn submit_applet_authoring_unit(
         .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
     });
     let author: soland_storage::AppletCommitAuthor =
-        std::sync::Arc::new(move |event, authority, head, at| {
+        std::sync::Arc::new(move |event, authority, head, at, producer_signer_fact| {
             if authority.service_id != station.service_core_id() {
                 return Err(soland_storage::PersistenceError::Conflict(
                     "failed_precondition: this Station is not the current Applet authority"
@@ -45,6 +45,7 @@ pub(in crate::routing) async fn submit_applet_authoring_unit(
                     verification_method.clone(),
                     signing_key.as_ref(),
                     at,
+                    producer_signer_fact,
                 )
                 .map_err(|error| soland_storage::PersistenceError::Conflict(error.to_string()))
         });

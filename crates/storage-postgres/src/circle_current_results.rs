@@ -68,6 +68,25 @@ pub(crate) async fn require_active_author_in_connection(
             "Circle source or Realm membership differs",
         ));
     }
+    let active = sql_query(
+        "SELECT EXISTS (SELECT 1 FROM circle_current_results circle \
+         JOIN realm_commits cc ON cc.commit_id=circle.current_commit_id \
+         WHERE circle.realm_id=$1 AND circle.circle_id=$2 AND circle.value->>'state'='active' \
+           AND cc.realm_id=circle.realm_id AND cc.stream_position=circle.current_stream_position \
+           AND cc.stream_ref=circle.source_stream_ref \
+           AND cc.stream_ref->>'kind'='realm' AND cc.stream_ref->>'realm_id'=circle.realm_id) AS present",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(circle_id.as_str())
+    .get_result::<PresentRow>(&mut *conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if !active.present {
+        return Err(conflict(
+            ConflictCode::FailedPrecondition,
+            "circle_not_active",
+        ));
+    }
     let present = sql_query(
         "SELECT EXISTS (SELECT 1 FROM circle_current_results circle \
          JOIN realm_commits cc ON cc.commit_id=circle.current_commit_id \

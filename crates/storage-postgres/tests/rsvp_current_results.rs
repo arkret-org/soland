@@ -6,7 +6,7 @@ mod ordinary_realm;
 
 use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
-use ordinary_realm::{founder, next_request, next_request_for_actor, open_discussion, station};
+use ordinary_realm::{next_request, next_request_for_actor, open_discussion, station};
 use serde_json::{Value, json};
 use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::test_database::TestDatabase;
@@ -104,12 +104,19 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let discussion = open_discussion(&pool, "rsvp-current-encrypted").await;
+    let author = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let realm_id = discussion.head.authority_commit.event.realm_id.clone();
     let at = discussion.head.authority_commit.commit.committed_at;
     let calendar = next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::StrandUpdate,
-        &founder(),
+        &author,
         json!({
             "target_ref": discussion.strand_id,
             "patch": {
@@ -128,7 +135,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let grant = next_request(
         &calendar.authority_commit,
         arkret_wire::EventKind::CapabilityGrant,
-        &founder(),
+        &author,
         json!({"grant": {
             "schema": "ak.schema.capability.v1",
             "realm_id": realm_id,
@@ -156,7 +163,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let first = next_request(
         &grant.authority_commit,
         arkret_wire::EventKind::RsvpSet,
-        &founder(),
+        &author,
         response("rsvpAlpha"),
         at,
     );
@@ -182,7 +189,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let second = next_request(
         &first.authority_commit,
         arkret_wire::EventKind::RsvpSet,
-        &founder(),
+        &author,
         response("rsvpBravo"),
         at,
     );
@@ -238,7 +245,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let plaintext = next_request(
         &second.authority_commit,
         arkret_wire::EventKind::RsvpSet,
-        &founder(),
+        &author,
         json!({
             "event_ref": discussion.strand_id, "occurrence": null,
             "entry": {"schedule_basis_refs":[basis], "response":{"status":"accepted"}}
@@ -248,7 +255,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let wrong_basis = next_request(
         &second.authority_commit,
         arkret_wire::EventKind::RsvpSet,
-        &founder(),
+        &author,
         json!({
             "event_ref": discussion.strand_id, "occurrence": null,
             "entry": encrypted_entry(&discussion.head.authority_commit.event.event_id, "rsvpCharlie")
@@ -258,7 +265,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let invalid_occurrence = next_request(
         &second.authority_commit,
         arkret_wire::EventKind::RsvpSet,
-        &founder(),
+        &author,
         json!({
             "event_ref": discussion.strand_id, "occurrence": "2026-02-30",
             "entry": encrypted_entry(basis, "rsvpDelta")
@@ -268,7 +275,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
     let unknown_target = next_request(
         &second.authority_commit,
         arkret_wire::EventKind::RsvpSet,
-        &founder(),
+        &author,
         json!({
             "event_ref": arkret_wire::StrandId::from_event_id(&second.authority_commit.event.event_id),
             "occurrence": null,

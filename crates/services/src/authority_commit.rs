@@ -415,6 +415,7 @@ impl AuthorityCommitApplication {
         verification_method: DidUrl,
         signing_key: &SigningKey,
         committed_at: DateTime<Utc>,
+        producer_signer_fact: Option<&HumanHistoricalSignerFact>,
     ) -> ServiceResult<RealmCommit> {
         build_signed_event_commit(
             event,
@@ -423,7 +424,7 @@ impl AuthorityCommitApplication {
             verification_method,
             signing_key,
             committed_at,
-            None,
+            producer_signer_fact,
         )
     }
 

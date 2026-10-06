@@ -59,7 +59,7 @@ fn circle_request(
     kind: EventKind,
     payload: Value,
 ) -> EventCommitRequest {
-    let event = ordinary_realm::event_for_actor(
+    let mut event = ordinary_realm::event_for_actor(
         kind,
         ScopeRef::Circle {
             realm_id: previous.event.realm_id.clone(),
@@ -69,6 +69,7 @@ fn circle_request(
         payload,
         previous.commit.committed_at,
     );
+    ordinary_realm::bind_structural_human_device(&mut event);
     let mut request =
         ordinary_realm::request_for_event(previous, event, previous.commit.committed_at);
     let stream = CommitStreamRef::Circle {
@@ -80,6 +81,7 @@ fn circle_request(
         request.authority_commit.commit.previous_commit_ref = None;
     }
     request.authority_commit.commit.stream_ref = stream;
+    ordinary_realm::seal_final_commit(&mut request.authority_commit.commit);
     request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
         request.authority_commit.event.clone(),
     ));
@@ -90,17 +92,43 @@ fn circle_request(
 async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_membership() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let unit = ordinary_realm::bootstrap_unit(&uuid::Uuid::now_v7().to_string());
-    let root = unit.transactions.last().unwrap();
+    let discussion =
+        ordinary_realm::open_discussion(&pool, &uuid::Uuid::now_v7().to_string()).await;
+    let root = &discussion.head.authority_commit;
     let realm = root.event.realm_id.clone();
     let actor = root.event.actor_id.clone();
     let at = root.commit.committed_at;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
-    store
-        .admit_ordinary_realm_bootstrap_unit(&unit, at)
-        .await
-        .unwrap();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+
+    let absent = CircleId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [42; 32],
+    ));
+    let unknown = circle_request(
+        root,
+        &absent,
+        EventKind::StrandCreate,
+        json!({"object":{"schema":"ak.schema.strand.v1","realm_id":realm,
+            "scope_circle_id":absent,"tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Unknown Circle"},"state":"active","created_by":actor,
+            "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
+    );
+    let baseline = counts(&pool).await;
+    let refused = uow.commit_event(unknown.clone()).await.unwrap_err();
+    assert!(
+        matches!(refused, soland_storage::PersistenceError::Conflict(ref detail)
+        if detail == "failed_precondition: circle_not_active"),
+        "{refused:?}"
+    );
+    assert_eq!(counts(&pool).await, baseline);
+    assert!(
+        store
+            .committed_event(&unknown.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let create = ordinary_realm::next_request_for_actor(
         root,

@@ -69,6 +69,42 @@ fn digest(value: &Value) -> String {
 }
 
 #[tokio::test]
+async fn strand_scope_rebind_returns_the_contract_reason_without_writes() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let discussion = open_discussion(&pool, "strand-scope-rebind").await;
+    let head = &discussion.head.authority_commit;
+    let before = current(&pool, &discussion.strand_id).await;
+    let counts = realm_counts(&pool, &head.event.realm_id).await;
+    let request = next_request(
+        head,
+        arkret_wire::EventKind::StrandUpdate,
+        head.event.actor_id.signing_principal_id(),
+        json!({"target_ref":discussion.strand_id,"patch":{
+            "scope_circle_id":{"$op":"set","value":arkret_wire::CircleId::from_event_id(&head.event.event_id)}
+        }}),
+        head.commit.committed_at,
+    );
+    let event_id = request.authority_commit.event.event_id.clone();
+    let error = uow.commit_event(request).await.unwrap_err();
+    assert!(
+        matches!(error, soland_storage::PersistenceError::Conflict(ref detail)
+        if detail == "failed_precondition: scope_rebind_forbidden"),
+        "{error}"
+    );
+    assert_eq!(current(&pool, &discussion.strand_id).await, before);
+    assert_eq!(realm_counts(&pool, &head.event.realm_id).await, counts);
+    assert!(
+        soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() }
+            .committed_event(&event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_tracks_atomically()
 {
     let database = TestDatabase::lease().await;
@@ -324,6 +360,13 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let discussion = open_discussion(&pool, "strand-update-calendar-pair").await;
+    let author = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let realm_id = discussion.head.authority_commit.event.realm_id.clone();
     let at = discussion.head.authority_commit.commit.committed_at;
     let schedule = json!({
@@ -337,7 +380,7 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
     let accepted = next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::StrandUpdate,
-        &founder(),
+        &author,
         json!({
             "target_ref": discussion.strand_id,
             "patch": {
@@ -359,7 +402,7 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
     let unpaired = next_request(
         &accepted.authority_commit,
         arkret_wire::EventKind::StrandUpdate,
-        &founder(),
+        &author,
         json!({
             "target_ref": discussion.strand_id,
             "patch": {"schema_refs": {"$op":"unset"}},

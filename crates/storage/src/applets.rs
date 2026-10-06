@@ -210,6 +210,7 @@ pub type AppletCommitAuthor = std::sync::Arc<
             &super::CurrentRealmAuthority,
             Option<&arkret_wire::CommitStreamHead>,
             chrono::DateTime<chrono::Utc>,
+            Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
         ) -> PersistenceResult<arkret_wire::RealmCommit>
         + Send
         + Sync,
