@@ -383,23 +383,64 @@ impl RealmAuthorizationCut {
             None => None,
         };
         let bounded = controller_cut.is_some();
+        let controller_root_covers = controller_cut.as_ref().is_some_and(|cut| {
+            cut.actor_is_root_controller()
+                && operation.actions.contains(&CapabilityActionId::REALM_OWNER)
+        });
+        let managed_actions = match &controller {
+            Some(controller) => Some(
+                crate::agent_management_admission::executable_actions_in_connection(
+                    conn,
+                    &self.realm_id,
+                    controller
+                        .as_account_id()
+                        .ok_or_else(|| capability_denied("Agent controller is not an account"))?,
+                    self.actor
+                        .as_account_id()
+                        .ok_or_else(|| capability_denied("Agent is not an account"))?,
+                    operation,
+                )
+                .await?,
+            ),
+            None => None,
+        };
+        let managed_operation = AuthorizationOperation {
+            actions: managed_actions.as_deref().unwrap_or(operation.actions),
+            ..*operation
+        };
         let evaluation = if let Some(controller_cut) = &controller_cut {
             controller_cut.require_governed_member(&EventKind::CapabilityGrant)?;
-            soland_storage::evaluate_controller_bounded_grants(
+            let agent_grants = self
+                .effective_grants(operation.at)
+                .map(|(_, grant)| grant)
+                .collect::<Vec<_>>();
+            let controller_grants = controller_cut
+                .effective_grants(operation.at)
+                .map(|(_, grant)| grant)
+                .collect::<Vec<_>>();
+            // Filtering a forbidden allow path must not discard an existing
+            // global grant deny/quarantine/review on the original operation.
+            let original = soland_storage::evaluate_controller_bounded_grants(
                 operation,
-                &self
-                    .effective_grants(operation.at)
-                    .map(|(_, grant)| grant)
-                    .collect::<Vec<_>>(),
+                &agent_grants,
                 &controller_cut.actor,
-                &controller_cut
-                    .effective_grants(operation.at)
-                    .map(|(_, grant)| grant)
-                    .collect::<Vec<_>>(),
+                &controller_grants,
                 approvals,
-                controller_cut.actor_is_root_controller()
-                    && operation.actions.contains(&CapabilityActionId::REALM_OWNER),
-            )
+                controller_root_covers,
+            );
+            match original {
+                GrantEvaluation::Denied
+                | GrantEvaluation::Quarantined
+                | GrantEvaluation::RequiresReview => original,
+                _ => soland_storage::evaluate_controller_bounded_grants(
+                    &managed_operation,
+                    &agent_grants,
+                    &controller_cut.actor,
+                    &controller_grants,
+                    approvals,
+                    controller_root_covers,
+                ),
+            }
         } else {
             evaluation
         };

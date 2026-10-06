@@ -74,6 +74,7 @@ mod direct_conversation_founding;
 #[cfg(feature = "test-support")]
 pub use direct_conversation_founding::FoundingProfileAdmissionSpy;
 mod agent_confirmation_admission;
+mod agent_management_admission;
 mod approval_admission;
 mod event_notifications;
 mod events;

@@ -115,6 +115,268 @@ async fn check(
     check_policy_cas_in_connection(conn, &candidate, &commit(&candidate, position), payload).await
 }
 
+fn management_policy(revision: Option<CurrentRevision>, effect: &str) -> PolicySetStatePayload {
+    let mut payload = policy(revision, true);
+    let PolicySetValue::Governance(document) = &mut payload.value else {
+        unreachable!()
+    };
+    document.rules = serde_json::from_value(json!([{
+        "rule_id":"execution", "kind":"agent", "effect":effect,
+        "agent_target":{"kind":"all"}, "agent_operations":["execute"]
+    }]))
+    .unwrap();
+    payload
+}
+
+#[tokio::test]
+async fn management_absence_requires_authoritative_complete_history() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    assert!(
+        read_agent_management_policies_in_connection(&mut conn, &realm())
+            .await
+            .is_err()
+    );
+    seed_genesis(&mut conn).await;
+    assert!(
+        read_agent_management_policies_in_connection(&mut conn, &realm())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let payload = management_policy(None, "deny");
+    let accepted = event(EventKind::PolicySet, json!(payload), 1);
+    // A private current row without its accepted Event cannot prove a policy set.
+    commit_in_connection(&mut conn, &accepted, &commit(&accepted, 1))
+        .await
+        .unwrap();
+    assert!(
+        read_agent_management_policies_in_connection(&mut conn, &realm())
+            .await
+            .is_err()
+    );
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}
+
+#[tokio::test]
+async fn management_current_must_match_last_accepted_policy_and_cannot_disappear() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    seed_genesis(&mut conn).await;
+    let payload = management_policy(None, "deny");
+    let accepted = event(EventKind::PolicySet, json!(payload), 1);
+    let basis = commit(&accepted, 1);
+    insert_history(&mut conn, &accepted, &basis).await;
+    commit_in_connection(&mut conn, &accepted, &basis)
+        .await
+        .unwrap();
+    let policies = read_agent_management_policies_in_connection(&mut conn, &realm())
+        .await
+        .unwrap();
+    assert_eq!(policies.len(), 1);
+    assert_eq!(json!(policies[0]), json!(payload.value));
+    for update in [
+        "UPDATE policy_current_results SET current_stream_position=0",
+        "UPDATE policy_current_results SET current_commit_id='wrong-commit'",
+        "UPDATE policy_current_results SET current_event_id='wrong-event'",
+        "UPDATE policy_current_results SET value=jsonb_set(value,'{default_effect}','\"deny\"')",
+        "UPDATE policy_current_results SET realm_id='another-realm'",
+    ] {
+        sql_query("SAVEPOINT tamper")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sql_query(update).execute(&mut conn).await.unwrap();
+        assert!(
+            read_agent_management_policies_in_connection(&mut conn, &realm())
+                .await
+                .is_err(),
+            "{update}"
+        );
+        sql_query("ROLLBACK TO SAVEPOINT tamper")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+    }
+    sql_query("DELETE FROM policy_current_results")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(
+        read_agent_management_policies_in_connection(&mut conn, &realm())
+            .await
+            .is_err()
+    );
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}
+
+#[tokio::test]
+async fn management_unrelated_gap_is_isolated_but_required_scope_and_realm_fork_refuse() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    seed_genesis(&mut conn).await;
+    sql_query("SAVEPOINT tamper")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let circle =
+        arkret_wire::CircleId::from_event_id(&event(EventKind::RealmCreate, json!({}), 0).event_id);
+    sql_query("INSERT INTO realm_commits(commit_id,realm_id,stream_key,stream_ref,stream_position,previous_commit_ref,event_pk,governance_generation,commit_json,committed_at) VALUES('opaque-management-sibling',$1,'sibling',$2,0,NULL,NULL,0,'{}',now())")
+        .bind::<Text,_>(realm().as_str()).bind::<Jsonb,_>(json!(CommitStreamRef::Circle { realm_id:realm(), circle_id:circle.clone() })).execute(&mut conn).await.unwrap();
+    assert!(
+        read_agent_management_policies_in_connection(&mut conn, &realm())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        read_scoped_agent_management_policies_in_connection(&mut conn, &realm(), Some(&circle))
+            .await
+            .is_err()
+    );
+    sql_query("ROLLBACK TO SAVEPOINT tamper")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sql_query(
+        "UPDATE realm_commits SET commit_json=jsonb_set(commit_json,'{commit_id}','\"fork\"')",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    assert!(
+        read_agent_management_policies_in_connection(&mut conn, &realm())
+            .await
+            .is_err()
+    );
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}
+
+#[tokio::test]
+async fn management_non_realm_policy_source_is_unresolved_not_absent() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    seed_genesis(&mut conn).await;
+    let payload = management_policy(None, "deny");
+    let accepted = event(EventKind::PolicySet, json!(payload), 1);
+    let mut basis = commit(&accepted, 1);
+    basis.stream_ref = CommitStreamRef::Circle {
+        realm_id: realm(),
+        circle_id: arkret_wire::CircleId::from_event_id(&accepted.event_id),
+    };
+    basis.stream_position = 0;
+    basis.previous_commit_ref = None;
+    insert_history(&mut conn, &accepted, &basis).await;
+    let error = read_agent_management_policies_in_connection(&mut conn, &realm())
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unresolved governance evidence"),
+        "{error}"
+    );
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}
+
+#[tokio::test]
+async fn management_policy_id_cannot_hide_its_agent_history_by_changing_family() {
+    let database = TestDatabase::lease().await;
+    let mut conn = database.pool().get().await.unwrap();
+    sql_query("BEGIN").execute(&mut conn).await.unwrap();
+    seed_genesis(&mut conn).await;
+    let first = management_policy(None, "deny");
+    let accepted = event(EventKind::PolicySet, json!(first), 1);
+    let basis = commit(&accepted, 1);
+    insert_history(&mut conn, &accepted, &basis).await;
+    commit_in_connection(&mut conn, &accepted, &basis)
+        .await
+        .unwrap();
+    let rebound = policy(None, false);
+    let accepted = event(EventKind::PolicySet, json!(rebound), 2);
+    let basis = commit(&accepted, 2);
+    insert_history(&mut conn, &accepted, &basis).await;
+    sql_query("UPDATE policy_current_results SET current_commit_id=$1,current_stream_position=$2,current_event_id=$3,value=$4")
+        .bind::<Text,_>(basis.commit_id.as_str()).bind::<BigInt,_>(basis.stream_position as i64)
+        .bind::<Text,_>(accepted.event_id.as_str()).bind::<Jsonb,_>(json!(rebound.value)).execute(&mut conn).await.unwrap();
+    assert!(
+        read_agent_management_policies_in_connection(&mut conn, &realm())
+            .await
+            .is_err()
+    );
+    sql_query("ROLLBACK").execute(&mut conn).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn management_reader_waits_for_policy_writer_and_observes_committed_deny() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let mut writer = pool.get().await.unwrap();
+    seed_genesis(&mut writer).await;
+    sql_query("BEGIN").execute(&mut writer).await.unwrap();
+    crate::realm_authorization_cut::lock_realm_authorization_cut(&mut writer, &realm())
+        .await
+        .unwrap();
+    let payload = management_policy(None, "deny");
+    let accepted = event(EventKind::PolicySet, json!(payload), 1);
+    let basis = commit(&accepted, 1);
+    insert_history(&mut writer, &accepted, &basis).await;
+    commit_in_connection(&mut writer, &accepted, &basis)
+        .await
+        .unwrap();
+    let other_pool = pool.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+    let reader = tokio::spawn(async move {
+        let mut reader = other_pool.get().await.unwrap();
+        sql_query("BEGIN").execute(&mut reader).await.unwrap();
+        started_tx.send(()).unwrap();
+        let policies = read_agent_management_policies_in_connection(&mut reader, &realm())
+            .await
+            .unwrap();
+        done_tx.send(()).unwrap();
+        let controller = arkret_wire::AccountId::new(
+            "ak:did_core:web:controller.example".parse().unwrap(),
+            "ak:did_core:web:station.example".parse().unwrap(),
+        );
+        let agent = arkret_wire::AccountId::new(
+            "ak:did_core:web:agent.example".parse().unwrap(),
+            controller.station_id.clone(),
+        );
+        let actor = arkret_wire::ActorId::account(agent.clone());
+        let target = arkret_wire::WireResourceSelector::realm(realm());
+        let facts = soland_storage::OperationFacts::default();
+        let operation = soland_storage::AuthorizationOperation {
+            actor: &actor,
+            actions: &["ak.message.create"],
+            target: &target,
+            facts: &facts,
+            at: chrono::Utc::now(),
+        };
+        let verdict = crate::agent_management_admission::executable_actions_in_connection(
+            &mut reader,
+            &realm(),
+            &controller,
+            &agent,
+            &operation,
+        )
+        .await;
+        assert_eq!(policies[0].rules[0].effect, arkret_wire::PolicyEffect::Deny);
+        assert!(verdict.unwrap().is_empty());
+        sql_query("ROLLBACK").execute(&mut reader).await.unwrap();
+    });
+    started_rx.await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut done_rx)
+            .await
+            .is_err()
+    );
+    sql_query("COMMIT").execute(&mut writer).await.unwrap();
+    reader.await.unwrap();
+}
+
 #[tokio::test]
 async fn first_write_needs_a_complete_held_prefix_and_rolls_back_without_effects() {
     let database = TestDatabase::lease().await;

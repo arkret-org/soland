@@ -39,6 +39,190 @@ struct Present {
     present: bool,
 }
 
+#[derive(QueryableByName)]
+struct ManagementPolicyRow {
+    #[diesel(sql_type=Text)]
+    policy_id: String,
+    #[diesel(sql_type=Text)]
+    realm_id: String,
+    #[diesel(sql_type=Text)]
+    current_commit_id: String,
+    #[diesel(sql_type=BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type=Text)]
+    current_event_id: String,
+    #[diesel(sql_type=Jsonb)]
+    value: Value,
+}
+
+#[derive(QueryableByName)]
+struct ManagementPolicyHistory {
+    #[diesel(sql_type=Text)]
+    policy_id: String,
+    #[diesel(sql_type=Text)]
+    realm_id: String,
+    #[diesel(sql_type=Text)]
+    current_commit_id: String,
+    #[diesel(sql_type=BigInt)]
+    current_stream_position: i64,
+    #[diesel(sql_type=Text)]
+    current_event_id: String,
+    #[diesel(sql_type=Jsonb)]
+    source_stream: Value,
+    #[diesel(sql_type=Jsonb)]
+    value: Value,
+}
+
+/// Governing admission only, under the same Realm lock as all current writers.
+/// A replica/cache must not use its held prefix to claim authoritative absence.
+/// Non-Realm Agent Policy sources remain unresolved, never silently absent.
+#[cfg(test)]
+async fn read_agent_management_policies_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+) -> PersistenceResult<Vec<arkret_models_collaboration::governance::operation_wire::Policy>> {
+    read_scoped_agent_management_policies_in_connection(conn, realm, None).await
+}
+
+/// Read only the enforcing operation's parent Realm and actual Circle prefix.
+/// Unrelated private stream gaps do not poison this cut. Known non-Realm Agent
+/// Policy writes still fail closed until their layer selection is implemented.
+pub(crate) async fn read_scoped_agent_management_policies_in_connection(
+    conn: &mut AsyncPgConnection,
+    realm: &arkret_wire::RealmId,
+    circle: Option<&arkret_wire::CircleId>,
+) -> PersistenceResult<Vec<arkret_models_collaboration::governance::operation_wire::Policy>> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, realm).await?;
+    let circle_source = circle
+        .map(|circle_id| {
+            serde_json::to_value(CommitStreamRef::Circle {
+                realm_id: realm.clone(),
+                circle_id: circle_id.clone(),
+            })
+            .map_err(schema)
+        })
+        .transpose()?;
+    let complete = sql_query(
+        "WITH nodes AS (SELECT c.*,e.state,e.kind AS event_kind,e.realm_id AS event_realm,e.envelope, \
+         ROW_NUMBER() OVER (PARTITION BY c.stream_ref ORDER BY c.stream_position)-1 AS expected_position, \
+         LAG(c.commit_id) OVER (PARTITION BY c.stream_ref ORDER BY c.stream_position) AS predecessor \
+         FROM realm_commits c LEFT JOIN canonical_events e ON e.pk=c.event_pk WHERE c.realm_id=$1 \
+         AND (c.stream_ref=jsonb_build_object('kind','realm','realm_id',$1) OR c.stream_ref=$2)) \
+         SELECT COALESCE(BOOL_AND(COALESCE(stream_position=expected_position \
+         AND previous_commit_ref IS NOT DISTINCT FROM predecessor AND state='committed' \
+         AND event_realm=$1 AND envelope->>'kind'=event_kind \
+         AND commit_json->>'commit_id'=commit_id AND commit_json->>'realm_id'=$1 \
+         AND commit_json->'stream_ref'=stream_ref \
+         AND commit_json->>'stream_position'=stream_position::text \
+         AND commit_json->>'previous_commit_ref' IS NOT DISTINCT FROM previous_commit_ref \
+         AND commit_json->>'event_ref'=envelope->>'event_id' \
+         AND ((stream_ref=jsonb_build_object('kind','realm','realm_id',$1) AND stream_position=0 \
+               AND event_kind='ak.realm.create' AND NOT (envelope ? 'realm_id') \
+               AND envelope->'scope_ref'=jsonb_build_object('kind','realm_genesis')) \
+              OR (envelope->>'realm_id'=$1 AND NOT \
+                  (stream_ref=jsonb_build_object('kind','realm','realm_id',$1) AND stream_position=0))),false)) \
+         AND BOOL_OR(stream_ref=jsonb_build_object('kind','realm','realm_id',$1) AND stream_position=0) \
+         AND ($2 IS NULL OR BOOL_OR(stream_ref=$2 AND stream_position=0)),false) \
+         AS present FROM nodes",
+    )
+    .bind::<Text,_>(realm.as_str()).bind::<diesel::sql_types::Nullable<Jsonb>,_>(circle_source)
+    .get_result::<Present>(&mut *conn)
+    .await.map_err(PersistenceError::database)?.present;
+    if !complete {
+        return Err(refused(
+            "complete Agent management governance history is unavailable",
+        ));
+    }
+    let history = sql_query(
+        "SELECT e.envelope->'payload'->>'policy_id' AS policy_id,c.realm_id, \
+         c.commit_id AS current_commit_id,c.stream_position AS current_stream_position, \
+         e.envelope->>'event_id' AS current_event_id,c.stream_ref AS source_stream, \
+         e.envelope->'payload'->'value' AS value FROM realm_commits c \
+         JOIN canonical_events e ON e.pk=c.event_pk WHERE e.kind='ak.policy.set' AND e.state='committed' \
+         AND (c.realm_id=$1 OR e.envelope->'payload'->'value'->>'realm_id'=$1) \
+         ORDER BY c.realm_id,c.stream_position,c.commit_id",
+    )
+    .bind::<Text,_>(realm.as_str()).load::<ManagementPolicyHistory>(&mut *conn)
+    .await.map_err(PersistenceError::database)?;
+    let agent_value =
+        |value: &Value| value.get("policy_kind").and_then(Value::as_str) == Some("agent");
+    let mut agent_ids = BTreeSet::new();
+    let mut latest = BTreeMap::new();
+    let realm_source = serde_json::to_value(CommitStreamRef::Realm {
+        realm_id: realm.clone(),
+    })
+    .map_err(schema)?;
+    for row in history {
+        if agent_value(&row.value) {
+            agent_ids.insert(row.policy_id.clone());
+        }
+        latest
+            .entry(row.policy_id.clone())
+            .or_insert_with(Vec::new)
+            .push(row);
+    }
+    let ids = agent_ids.iter().cloned().collect::<Vec<_>>();
+    let rows = sql_query(
+        "SELECT policy_id,realm_id,current_commit_id,current_stream_position,current_event_id,value \
+         FROM policy_current_results WHERE realm_id=$1 OR value->>'realm_id'=$1 OR policy_id=ANY($2) \
+         ORDER BY policy_id FOR SHARE",
+    )
+    .bind::<Text,_>(realm.as_str()).bind::<diesel::sql_types::Array<Text>,_>(&ids)
+    .load::<ManagementPolicyRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let mut current = BTreeMap::new();
+    for row in rows {
+        if agent_value(&row.value) {
+            agent_ids.insert(row.policy_id.clone());
+        }
+        current.insert(row.policy_id.clone(), row);
+    }
+    let mut policies = Vec::new();
+    for id in agent_ids {
+        let accepted = latest
+            .get(&id)
+            .ok_or_else(|| refused("Agent Policy current has no accepted history"))?;
+        if accepted
+            .iter()
+            .any(|row| row.realm_id != realm.as_str() || row.source_stream != realm_source)
+        {
+            return Err(refused(
+                "Agent Policy scope needs unresolved governance evidence",
+            ));
+        }
+        let accepted = accepted
+            .last()
+            .ok_or_else(|| refused("Agent Policy history is unavailable"))?;
+        let row = current
+            .get(&id)
+            .ok_or_else(|| refused("accepted Agent Policy current is missing"))?;
+        if row.realm_id != realm.as_str()
+            || row.current_commit_id != accepted.current_commit_id
+            || row.current_stream_position != accepted.current_stream_position
+            || row.current_event_id != accepted.current_event_id
+            || row.value != accepted.value
+        {
+            return Err(refused(
+                "Agent Policy current differs from its last accepted write",
+            ));
+        }
+        let document: PolicySetValue = serde_json::from_value(row.value.clone()).map_err(schema)?;
+        document.validate().map_err(schema)?;
+        match document {
+            PolicySetValue::Governance(policy)
+                if policy.policy_kind == PolicyKind::Agent
+                    && policy.id.as_str() == id
+                    && policy.realm_id.as_ref() == Some(realm) =>
+            {
+                policies.push(*policy)
+            }
+            _ => return Err(refused("Agent Policy binding or family changed")),
+        }
+    }
+    Ok(policies)
+}
+
 /// Admission only: replay reducers install accepted history without redoing CAS.
 async fn check_policy_cas_in_connection(
     conn: &mut AsyncPgConnection,
