@@ -2187,6 +2187,96 @@ async fn provision_owned_agent_with_did(
 /// Storage admission only: accepted controller/Agent units are real; RFC
 /// verification and publication signatures are covered by HTTP/MLS suites.
 #[tokio::test]
+async fn administrator_can_remove_agent_without_controller_join_binding() {
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let station = historical_control_source::HistoricalControlStation::new(
+        "sidecar-native-control",
+        [83; 32],
+    );
+    let principal = accepted_controller(&pool, station.did.clone()).await;
+    let controller = &principal.history.account;
+    let realm = ordinary_realm::bootstrap_unit_for_account(
+        "administrator-agent-removal",
+        controller,
+        &station.did,
+    );
+    let realm = ordinary_realm::source_bootstrap(&pool, realm).await;
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&realm, realm.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let parent = realm.transactions.last().unwrap();
+    let (agent, genesis, _) = provision_owned_agent(&pool, &principal).await;
+    let join = ordinary_realm::next_request(
+        parent,
+        EventKind::MemberState,
+        &controller.principal_id,
+        serde_json::json!({"member_id":arkret_wire::ActorId::account(agent.clone()),
+            "membership":"join","agent_controller_binding":{
+                "controller_account_id":controller,
+                "controller_membership_generation_ref":parent.event.event_id}}),
+        genesis.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    let join = ordinary_realm::source_request(&pool, join).await;
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    uow.commit_event(join.clone()).await.unwrap();
+    let outsider = ordinary_realm::human_profile::admit_for_station_did(
+        &pool,
+        station.did.clone(),
+        "agent-removal-outsider",
+    )
+    .await;
+    let outsider_join = ordinary_realm::next_request_for_actor(
+        &join.authority_commit,
+        EventKind::MemberState,
+        arkret_wire::ActorId::account(outsider.clone()),
+        serde_json::json!({"member_id":arkret_wire::ActorId::account(outsider.clone()),"membership":"join"}),
+        join.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    let outsider_join = ordinary_realm::source_request(&pool, outsider_join).await;
+    uow.commit_event(outsider_join.clone()).await.unwrap();
+    let unauthorized_leave = ordinary_realm::next_request_for_actor(
+        &outsider_join.authority_commit,
+        EventKind::MemberState,
+        arkret_wire::ActorId::account(outsider),
+        serde_json::json!({"member_id":arkret_wire::ActorId::account(agent.clone()),"membership":"leave"}),
+        outsider_join.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    let unauthorized_leave = ordinary_realm::source_request(&pool, unauthorized_leave).await;
+    let error = uow.commit_event(unauthorized_leave).await.unwrap_err();
+    assert!(error.to_string().contains("capability_denied"));
+    let leave = ordinary_realm::next_request(
+        &outsider_join.authority_commit,
+        EventKind::MemberState,
+        &controller.principal_id,
+        serde_json::json!({"member_id":arkret_wire::ActorId::account(agent.clone()),"membership":"leave"}),
+        outsider_join.authority_commit.commit.committed_at + chrono::TimeDelta::milliseconds(1),
+    );
+    let leave = ordinary_realm::source_request(&pool, leave).await;
+    uow.commit_event(leave).await.unwrap();
+
+    #[derive(diesel::QueryableByName)]
+    struct MembershipRow {
+        #[diesel(sql_type = Text)]
+        membership: String,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let row = diesel::sql_query(
+        "SELECT membership FROM member_state_current_results WHERE realm_id=$1 AND member_id=$2",
+    )
+    .bind::<Text, _>(parent.event.realm_id.as_str())
+    .bind::<Text, _>(arkret_wire::ActorId::account(agent).to_string())
+    .get_result::<MembershipRow>(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(row.membership, "leave");
+}
+
+#[tokio::test]
 async fn encrypted_agent_join_rechecks_claimability_and_writes_nothing_on_refusal() {
     use diesel::sql_types::{BigInt, Text};
     use diesel_async::RunQueryDsl;

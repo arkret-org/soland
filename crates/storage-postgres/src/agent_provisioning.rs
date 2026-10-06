@@ -121,6 +121,41 @@ pub(crate) async fn admit_agent_provision_in_connection(
         ));
     }
 
+    // The selector namespace belongs to the controller principal, not a
+    // pairing window or Station. Serialize this Station's observed claims,
+    // including provisions whose Agent genesis/binding has not finished yet.
+    // This does not claim global uniqueness across unobserved remote Stations.
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(format!(
+            "agent-selector:{}:{}",
+            payload.controller_principal_id, payload.agent_slug
+        ))
+        .execute(&mut *conn)
+        .await?;
+    let reserved = sql_query(
+        "SELECT EXISTS(SELECT 1 FROM agent_provisioning_current_results p \
+         JOIN realm_commits c ON c.commit_id=p.current_commit_id \
+           AND c.realm_id=p.realm_id AND c.stream_position=p.current_stream_position \
+         JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' \
+         WHERE p.value->>'controller_principal_id'=$1 \
+           AND e.envelope->'payload'->>'agent_slug'=$2 \
+           AND NOT EXISTS(SELECT 1 FROM agent_status_current_results s \
+             JOIN realm_commits sc ON sc.commit_id=s.current_commit_id \
+               AND sc.realm_id=s.realm_id AND sc.stream_position=s.current_stream_position \
+             WHERE s.realm_id=p.value->>'principal_control_realm_id' \
+               AND s.agent_id=p.agent_id AND s.value='\"deactivated\"'::jsonb)) AS present",
+    )
+    .bind::<Text, _>(payload.controller_principal_id.as_str())
+    .bind::<Text, _>(&payload.agent_slug)
+    .get_result::<crate::ExistsRow>(&mut *conn)
+    .await?;
+    if reserved.present {
+        return Err(rejected(
+            ConflictCode::DuplicateConflict,
+            "Agent slug is reserved by a recoverable or unfinished Agent of this controller",
+        ));
+    }
+
     let historical = crate::agent_producer_signer_keys::prepare_admitted_own_pcr_in_connection(
         conn, event, commit,
     )

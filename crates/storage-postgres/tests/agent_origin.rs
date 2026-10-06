@@ -250,6 +250,76 @@ fn origin_seal(commit: &mut arkret_wire::RealmCommit, method: &DidUrl, key: &Sig
     commit.validate_content_address().unwrap();
 }
 impl OriginFixture {
+    fn replacement_provision(
+        &self,
+        parent: &arkret_wire::RealmCommit,
+        slug: &str,
+    ) -> AuthorityCommitTransaction {
+        let agent = arkret_wire::project_did_to_core_id(
+            &Did::new(format!(
+                "did:web:replacement-{}.example",
+                uuid::Uuid::now_v7().simple()
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let pcr = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_canonical::sha256_bytes(agent.as_str().as_bytes()),
+        ));
+        let at = parent.committed_at + Duration::seconds(1);
+        let event = agent_provision_event(
+            &self.controller.history.account,
+            &parent.realm_id,
+            &self.controller.history.device_verification_method,
+            self.controller.history.founding_device_signing_seed,
+            &agent,
+            &pcr,
+            slug,
+            at,
+            at,
+        );
+        let mut commit = station_successor(parent, &event, &self.station_did, 1);
+        origin_seal(&mut commit, &self.method, &self.issuer);
+        origin_tx(event, commit, &self.station)
+    }
+
+    async fn lifecycle(
+        &self,
+        parent: &arkret_wire::RealmCommit,
+        kind: EventKind,
+        transition: &str,
+        previous: &str,
+    ) -> AuthorityCommitTransaction {
+        let at = parent.committed_at + Duration::seconds(1);
+        let event = agent_control_event(
+            &self.controller.history.device_verification_method,
+            self.controller.history.founding_device_signing_seed,
+            &self.controller.history.account,
+            &self.agent,
+            &self.genesis.event.realm_id,
+            &format!("{}#managed-controller", self.agent_did),
+            kind,
+            serde_json::json!({"transition":transition,"previous_status":previous,
+                "status_changed_at":arkret_canonical::format_timestamp_canonical(at)}),
+            at,
+        );
+        let mut commit = station_successor(parent, &event, &self.station_did, 1);
+        origin_seal(&mut commit, &self.method, &self.issuer);
+        let tx = origin_tx(event, commit, &self.station);
+        self.stage(&tx).await;
+        PgActorProfileStore {
+            pool: self.pool.clone(),
+        }
+        .admit_agent_control_event(AgentControlAdmissionWrite {
+            commit: tx.clone(),
+            queued_at: tx.commit.committed_at,
+        })
+        .await
+        .unwrap();
+        tx
+    }
+
     async fn new() -> Self {
         use arkret_models_identity::service_identity::{
             CanonicalServiceUrl, ServiceRegistrationKey,
@@ -533,6 +603,221 @@ impl OriginFixture {
             [0x61; 32],
         )
     }
+}
+
+#[tokio::test]
+async fn agent_slug_is_reserved_until_accepted_terminal_lifecycle() {
+    let f = OriginFixture::new().await;
+    f.admit_provision().await;
+    let store = PgActorProfileStore {
+        pool: f.pool.clone(),
+    };
+    let replacement = f.replacement_provision(&f.provision.commit, "origin");
+    let write = AgentProvisionAdmissionWrite {
+        commit: replacement.clone(),
+        queued_at: replacement.commit.committed_at,
+    };
+    // There is no Agent pairing row or genesis yet. Accepted provision alone
+    // keeps its recoverable name; private bootstrap clocks cannot release it.
+    let error = store
+        .admit_agent_provision(write.clone())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate_conflict"));
+    f.stage(&f.genesis).await;
+    f.admit_genesis().await.unwrap();
+    assert!(store.admit_agent_provision(write.clone()).await.is_err());
+    let key = f.authorize().await;
+    let pause = f
+        .lifecycle(&key.commit, EventKind::SelfAgentPause, "pause", "active")
+        .await;
+    assert!(store.admit_agent_provision(write.clone()).await.is_err());
+    let resume = f
+        .lifecycle(
+            &pause.commit,
+            EventKind::SelfAgentResume,
+            "resume",
+            "paused",
+        )
+        .await;
+    assert!(store.admit_agent_provision(write.clone()).await.is_err());
+    let terminal = f
+        .lifecycle(
+            &resume.commit,
+            EventKind::SelfAgentDeactivate,
+            "deactivate",
+            "active",
+        )
+        .await;
+    let accepted = store.admit_agent_provision(write.clone()).await.unwrap();
+    assert!(matches!(
+        accepted,
+        soland_storage::AgentProvisionAdmissionOutcome::Committed(_)
+    ));
+    assert!(matches!(
+        store.admit_agent_provision(write).await.unwrap(),
+        soland_storage::AgentProvisionAdmissionOutcome::Duplicate(_)
+    ));
+    // Replaying the old immutable provision must not retake the replacement's
+    // selector binding or make its independent pairing depend on old history.
+    assert!(matches!(
+        store
+            .admit_agent_provision(AgentProvisionAdmissionWrite {
+                commit: f.provision.clone(),
+                queued_at: f.provision.commit.committed_at,
+            })
+            .await
+            .unwrap(),
+        soland_storage::AgentProvisionAdmissionOutcome::Duplicate(_)
+    ));
+
+    // A late old runtime authorization must still hit the terminal Agent's
+    // gate, not the new selector owner or its future pairing.
+    let at = terminal.commit.committed_at + Duration::seconds(1);
+    let mut late_payload = agent_key_authorization(
+        &f.agent_did,
+        &f.controller.history.account.principal_id,
+        "late-runtime",
+        [0x61; 32],
+        Vec::new(),
+        at,
+    );
+    late_payload["audience"] = serde_json::json!([f.station]);
+    let event = agent_control_event(
+        &f.controller.history.device_verification_method,
+        f.controller.history.founding_device_signing_seed,
+        &f.controller.history.account,
+        &f.agent,
+        &f.genesis.event.realm_id,
+        &format!("{}#managed-controller", f.agent_did),
+        EventKind::AgentKeyAuthorize,
+        late_payload,
+        at,
+    );
+    let mut commit = station_successor(&terminal.commit, &event, &f.station_did, 1);
+    origin_seal(&mut commit, &f.method, &f.issuer);
+    let late = origin_tx(event, commit, &f.station);
+    f.stage(&late).await;
+    let terminal_error = store
+        .admit_agent_control_event(AgentControlAdmissionWrite {
+            queued_at: late.commit.committed_at,
+            commit: late,
+        })
+        .await
+        .unwrap_err();
+    assert!(terminal_error.to_string().contains("active or paused"));
+
+    #[derive(diesel::QueryableByName)]
+    struct Selector {
+        #[diesel(sql_type=Text)]
+        agent: String,
+    }
+    let mut conn = f.pool.get().await.unwrap();
+    let selector = diesel::sql_query("SELECT value->'subject_account_id'->>'principal_id' AS agent FROM agent_selector_claim_current_results WHERE realm_id=$1 AND agent_slug='origin'")
+        .bind::<Text,_>(f.provision.event.realm_id.as_str()).get_result::<Selector>(&mut *conn).await.unwrap();
+    assert_eq!(
+        selector.agent,
+        replacement.event.payload["agent_id"].as_str().unwrap()
+    );
+    drop(conn);
+    // The replacement has not reached genesis yet, so it now reserves the
+    // same slug even though the previous owner's terminal history remains.
+    let third = f.replacement_provision(&replacement.commit, "origin");
+    assert!(
+        store
+            .admit_agent_provision(AgentProvisionAdmissionWrite {
+                queued_at: third.commit.committed_at,
+                commit: third,
+            })
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate_conflict")
+    );
+}
+
+#[tokio::test]
+async fn concurrent_agent_provisions_cannot_take_one_controller_slug() {
+    let f = OriginFixture::new().await;
+    let parent = &f.controller.unit.transactions.last().unwrap().commit;
+    let a = f.replacement_provision(parent, "same-name");
+    let b = f.replacement_provision(parent, "same-name");
+    let store = PgActorProfileStore {
+        pool: f.pool.clone(),
+    };
+    let (a, b) = tokio::join!(
+        store.admit_agent_provision(AgentProvisionAdmissionWrite {
+            queued_at: a.commit.committed_at,
+            commit: a
+        }),
+        store.admit_agent_provision(AgentProvisionAdmissionWrite {
+            queued_at: b.commit.committed_at,
+            commit: b
+        }),
+    );
+    assert_ne!(
+        a.is_ok(),
+        b.is_ok(),
+        "exactly one provision may reserve the name"
+    );
+}
+
+#[tokio::test]
+async fn different_controllers_can_reserve_the_same_agent_slug() {
+    let f = OriginFixture::new().await;
+    f.admit_provision().await;
+    let other = pcr_genesis_fixture::PcrGenesisFixture::new_with(
+        f.station_did.clone(),
+        device_history_fixture::DeviceHistoryFixtureOptions {
+            local_id: "another-controller".into(),
+            ..Default::default()
+        },
+    );
+    other
+        .admit_into(&PgPersistenceStore::new(f.pool.clone()))
+        .await
+        .unwrap();
+    assert_ne!(
+        other.history.account.principal_id,
+        f.controller.history.account.principal_id
+    );
+    let agent = arkret_wire::project_did_to_core_id(
+        &Did::new("did:web:another-controller-agent.example").unwrap(),
+    )
+    .unwrap();
+    let pcr = RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_canonical::sha256_bytes(agent.as_str().as_bytes()),
+    ));
+    let parent = &other.unit.transactions.last().unwrap().commit;
+    let at = parent.committed_at + Duration::seconds(1);
+    let event = agent_provision_event(
+        &other.history.account,
+        &parent.realm_id,
+        &other.history.device_verification_method,
+        other.history.founding_device_signing_seed,
+        &agent,
+        &pcr,
+        "origin",
+        at,
+        at,
+    );
+    let mut commit = station_successor(parent, &event, &f.station_did, 1);
+    origin_seal(&mut commit, &f.method, &f.issuer);
+    let tx = origin_tx(event, commit, &f.station);
+    let outcome = PgActorProfileStore {
+        pool: f.pool.clone(),
+    }
+    .admit_agent_provision(AgentProvisionAdmissionWrite {
+        queued_at: tx.commit.committed_at,
+        commit: tx,
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        soland_storage::AgentProvisionAdmissionOutcome::Committed(_)
+    ));
 }
 
 #[tokio::test]
