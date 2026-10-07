@@ -10,22 +10,38 @@ use super::{
     Value, pg_conn, sql_query,
 };
 
-/// A cut that loses a write race with the governing row (a handoff commits
-/// after this `REPEATABLE READ` snapshot began, surfacing as SQLSTATE 40001)
-/// issued nothing. That is the registered retryable unavailability of the
-/// snapshot reads, never an internal fault.
+/// SQLSTATE 40001 aborts the whole snapshot-cut transaction. It can arise
+/// from a governing-row change or concurrent refresh of an unchanged issued
+/// object, so it does not establish that a handoff occurred.
 pub(crate) fn snapshot_cut_error(error: diesel::result::Error) -> PersistenceError {
     use diesel::result::{DatabaseErrorKind, Error};
     match error {
         Error::DatabaseError(DatabaseErrorKind::SerializationFailure, info) => {
             PersistenceError::Conflict(format!(
-                "{}: the governing cut changed concurrently: {}",
+                "{}: the snapshot transaction lost a concurrent write race: {}",
                 soland_storage::ConflictCode::TemporarilyUnavailable.as_str(),
                 info.message(),
             ))
         }
         other => PersistenceError::database(other),
     }
+}
+
+fn snapshot_write_error(stage: &'static str, error: diesel::result::Error) -> PersistenceError {
+    if matches!(
+        &error,
+        diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::SerializationFailure,
+            _,
+        )
+    ) {
+        tracing::warn!(
+            operation_stage = stage,
+            database_error_kind = "serialization_failure",
+            "snapshot issuance write lost a concurrent transaction race",
+        );
+    }
+    snapshot_cut_error(error)
 }
 
 /// [`snapshot_cut_error`] for a whole snapshot-cut transaction.
@@ -235,7 +251,7 @@ pub(crate) async fn issue_head_in_connection(
         .bind::<Text, _>(&account_key)
         .execute(&mut *conn)
         .await
-        .map_err(snapshot_cut_error)?;
+        .map_err(|error| snapshot_write_error("reissue_recency", error))?;
         if touched == 1 {
             issued = Some(existing);
             break;
@@ -280,7 +296,7 @@ pub(crate) async fn issue_head_in_connection(
     .bind::<super::BigInt, _>(soland_storage::MAX_UNRESERVED_ISSUED_SNAPSHOTS_PER_ACCOUNT_REALM - 1)
     .execute(&mut *conn)
     .await
-    .map_err(snapshot_cut_error)?;
+    .map_err(|error| snapshot_write_error("unreserved_issuance_prune", error))?;
     Ok(issued)
 }
 
@@ -1553,6 +1569,76 @@ mod tests {
             error.conflict_code(),
             Some(soland_storage::ConflictCode::SnapshotCapacityExceeded),
         );
+    }
+
+    #[tokio::test]
+    async fn unchanged_cut_reissue_can_serialize_without_a_handoff() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let alice = account("ak:did_core:web:alice.example");
+        let snapshot = signed_snapshot();
+        let material = soland_storage::RealmStateSnapshotMaterial {
+            realm_id: snapshot.realm_id.clone(),
+            governance_generation: snapshot.governance_generation,
+            visible_stream_heads: snapshot.visible_stream_heads.clone(),
+            current_state_entries: snapshot.current_state_entries.clone(),
+            retention_and_history_floor: snapshot.retention_and_history_floor.clone(),
+        };
+        PgIssuedRealmSnapshotArchive::new(pool.clone())
+            .issue(&alice, &snapshot)
+            .await
+            .unwrap();
+        let mut stale = pg_conn(&pool).await.unwrap();
+        let mut current = pg_conn(&pool).await.unwrap();
+        let result = stale
+            .transaction::<_, PgTransactionError, _>(async |conn| {
+                sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                    .execute(&mut *conn)
+                    .await?;
+                // This SELECT establishes the old MVCC cut, just as the
+                // production shared retention lock does before issuance.
+                crate::sync_cursor::retention::lock(conn, false).await?;
+                let reissued = current
+                    .transaction::<_, PgTransactionError, _>(async |conn| {
+                        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                            .execute(&mut *conn)
+                            .await?;
+                        crate::sync_cursor::retention::lock(conn, false).await?;
+                        issue_head_in_connection(conn, &alice, &material, snapshot.clone())
+                            .await
+                            .map_err(Into::into)
+                    })
+                    .await?;
+                assert_eq!(reissued, snapshot);
+                issue_head_in_connection(conn, &alice, &material, snapshot.clone())
+                    .await
+                    .map_err(Into::into)
+            })
+            .await;
+        let error = match result {
+            Ok(_) => panic!("stale repeatable-read issuance must lose the row-update race"),
+            Err(error) => snapshot_transaction_error(error),
+        };
+        assert_eq!(
+            error.conflict_code(),
+            Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+        );
+        assert!(error.to_string().contains("concurrent update"));
+        // A new transaction sees the unchanged object and safely reissues it.
+        let reissued = stale
+            .transaction::<_, PgTransactionError, _>(async |conn| {
+                sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                    .execute(&mut *conn)
+                    .await?;
+                crate::sync_cursor::retention::lock(conn, false).await?;
+                issue_head_in_connection(conn, &alice, &material, snapshot.clone())
+                    .await
+                    .map_err(Into::into)
+            })
+            .await
+            .map_err(snapshot_transaction_error)
+            .unwrap();
+        assert_eq!(reissued, snapshot);
     }
 
     #[tokio::test]
