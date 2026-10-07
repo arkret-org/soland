@@ -5068,78 +5068,84 @@ async fn inject_joined_member(
     .unwrap();
 }
 
-async fn source_if_human(
+fn source_if_human(
     pool: &soland_storage_postgres::PgPool,
     mut request: EventCommitRequest,
-) -> EventCommitRequest {
-    // Structural fixture placeholders are signed with the key material of
-    // the actual accepted Human fixture. Explicit device-proof negatives
-    // remain untouched; source authority still comes only from PG below.
-    if request
-        .authority_commit
-        .event
-        .producer_proof
-        .as_ref()
-        .is_some_and(|proof| {
-            proof.jws
-                == arkret_wire::test_support::structural_only_detached_jws(&proof.event_digest)
-        })
-    {
-        if let Some(event) =
-            human_profile::sign_fixture_event(request.authority_commit.event.clone())
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + '_>> {
+    Box::pin(async move {
+        // Structural fixture placeholders are signed with the key material of
+        // the actual accepted Human fixture. Explicit device-proof negatives
+        // remain untouched; source authority still comes only from PG below.
+        if request
+            .authority_commit
+            .event
+            .producer_proof
+            .as_ref()
+            .is_some_and(|proof| {
+                proof.jws
+                    == arkret_wire::test_support::structural_only_detached_jws(&proof.event_digest)
+            })
         {
-            request.event.event_id = event.event_id.to_string();
-            request.event.actor_id = event.actor_id.to_string();
-            request.event.envelope = serde_json::to_value(&event).unwrap();
-            request.event.canonical_bytes =
-                arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
-            request.event.canonical_digest = event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .unwrap();
-            for projection in &mut request.projections {
-                projection.event_id = event.event_id.to_string();
+            if let Some(event) =
+                human_profile::sign_fixture_event(request.authority_commit.event.clone())
+            {
+                request.event.event_id = event.event_id.to_string();
+                request.event.actor_id = event.actor_id.to_string();
+                request.event.envelope = serde_json::to_value(&event).unwrap();
+                request.event.canonical_bytes =
+                    arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap())
+                        .unwrap();
+                request.event.canonical_digest = event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap();
+                for projection in &mut request.projections {
+                    projection.event_id = event.event_id.to_string();
+                }
+                if request.realm_fanout_source.is_some() {
+                    request.realm_fanout_source =
+                        Some(arkret_wire::EventAdmissionSubmission::new(event.clone()));
+                }
+                request.authority_commit.commit.event_ref = event.event_id.clone();
+                request.authority_commit.event = event;
             }
-            if request.realm_fanout_source.is_some() {
-                request.realm_fanout_source =
-                    Some(arkret_wire::EventAdmissionSubmission::new(event.clone()));
-            }
-            request.authority_commit.commit.event_ref = event.event_id.clone();
-            request.authority_commit.event = event;
         }
-    }
-    if request
-        .authority_commit
-        .event
-        .human_device_producer()
-        .unwrap()
-        .is_some()
-    {
-        source_request(pool, request).await
-    } else {
-        request
-    }
+        if request
+            .authority_commit
+            .event
+            .human_device_producer()
+            .unwrap()
+            .is_some()
+        {
+            source_request(pool, request).await
+        } else {
+            request
+        }
+    })
 }
 
-async fn source_request(
+fn source_request(
     pool: &soland_storage_postgres::PgPool,
     mut request: EventCommitRequest,
-) -> EventCommitRequest {
-    request.authority_commit.producer_signer_fact = PgAuthorityCommitStore { pool: pool.clone() }
-        .prepare_human_signer_fact(
-            &request.authority_commit.event,
-            request.authority_commit.commit.committed_at,
-        )
-        .await
-        .unwrap()
-        .map(Into::into);
-    assert!(request.authority_commit.producer_signer_fact.is_some());
-    request.authority_commit.commit.producer_signer_fact_digest = request
-        .authority_commit
-        .producer_signer_fact
-        .as_ref()
-        .map(|fact| fact.digest().unwrap());
-    seal_suite_commit(&mut request.authority_commit.commit);
-    request
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + '_>> {
+    Box::pin(async move {
+        request.authority_commit.producer_signer_fact =
+            PgAuthorityCommitStore { pool: pool.clone() }
+                .prepare_human_signer_fact(
+                    &request.authority_commit.event,
+                    request.authority_commit.commit.committed_at,
+                )
+                .await
+                .unwrap()
+                .map(Into::into);
+        assert!(request.authority_commit.producer_signer_fact.is_some());
+        request.authority_commit.commit.producer_signer_fact_digest = request
+            .authority_commit
+            .producer_signer_fact
+            .as_ref()
+            .map(|fact| fact.digest().unwrap());
+        seal_suite_commit(&mut request.authority_commit.commit);
+        request
+    })
 }
 
 async fn invite_grant_request(
@@ -6941,31 +6947,33 @@ async fn message_families(
 
 /// Assert `request` was refused and left zero writes: no Event row, no
 /// Commit and no `message_revision` or `object_redaction` change.
-async fn assert_message_write_refused(
-    uow: &PgEventCommitUnitOfWork,
-    store: &PgAuthorityCommitStore,
-    pool: &soland_storage_postgres::PgPool,
-    request: &EventCommitRequest,
+fn assert_message_write_refused<'a>(
+    uow: &'a PgEventCommitUnitOfWork,
+    store: &'a PgAuthorityCommitStore,
+    pool: &'a soland_storage_postgres::PgPool,
+    request: &'a EventCommitRequest,
     code: Option<soland_storage::ConflictCode>,
-) -> soland_storage::PersistenceError {
-    let request = source_if_human(pool, request.clone()).await;
-    let realm_id = &request.authority_commit.event.realm_id;
-    let before = message_families(pool, realm_id).await;
-    let error = uow.commit_event(request.clone()).await.unwrap_err();
-    assert_eq!(error.conflict_code(), code, "{error}");
-    assert!(
-        store
-            .committed_event(&request.authority_commit.event.event_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        event_row_count(pool, request.authority_commit.event.event_id.as_str()).await,
-        0
-    );
-    assert_eq!(message_families(pool, realm_id).await, before);
-    error
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = soland_storage::PersistenceError> + 'a>> {
+    Box::pin(async move {
+        let request = source_if_human(pool, request.clone()).await;
+        let realm_id = &request.authority_commit.event.realm_id;
+        let before = message_families(pool, realm_id).await;
+        let error = uow.commit_event(request.clone()).await.unwrap_err();
+        assert_eq!(error.conflict_code(), code, "{error}");
+        assert!(
+            store
+                .committed_event(&request.authority_commit.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            event_row_count(pool, request.authority_commit.event.event_id.as_str()).await,
+            0
+        );
+        assert_eq!(message_families(pool, realm_id).await, before);
+        error
+    })
 }
 
 fn plain_revision(message_id: &arkret_wire::MessageId, body: &str) -> serde_json::Value {
