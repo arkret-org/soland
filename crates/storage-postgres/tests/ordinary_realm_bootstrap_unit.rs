@@ -323,7 +323,17 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(material.current_state_entries.len(), 10);
+    assert_eq!(material.current_state_entries.len(), 11);
+    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+    assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id: id },
+            source_stream_ref, revision, ..
+        } if id == &strand_id
+            && source_stream_ref == &strand.authority_commit.commit.stream_ref
+            && revision.commit_id == strand.authority_commit.commit.commit_id
+            && revision.stream_position == strand.authority_commit.commit.stream_position
+    )));
     assert_eq!(material.visible_stream_heads[0].stream_position, 8);
     let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let default = set_default_strand_request(&strand, &strand_id, None);
@@ -332,7 +342,7 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(material.current_state_entries.len(), 11);
+    assert_eq!(material.current_state_entries.len(), 12);
     let first = message_create_request(&default, &strand_id, "first");
     uow.commit_event(first.clone()).await.unwrap();
     let second = message_create_request(&first, &strand_id, "second");
@@ -341,7 +351,7 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(material.current_state_entries.len(), 13);
+    assert_eq!(material.current_state_entries.len(), 14);
     assert_eq!(material.visible_stream_heads[0].stream_position, 11);
     assert_eq!(
         material.retention_and_history_floor.stream_floors[0].oldest_position,
