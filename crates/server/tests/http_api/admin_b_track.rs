@@ -6,7 +6,7 @@ use super::common::*;
 
 #[test]
 fn admin_actor_detail_includes_account_lifecycle_linkage() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_actor_detail_includes_account_lifecycle_linkage",
         admin_actor_detail_includes_account_lifecycle_linkage_body,
     );
@@ -55,7 +55,7 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage_body() {
 
 #[test]
 fn admin_account_status_aliases_keep_protocol_state_closed() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_account_status_aliases_keep_protocol_state_closed",
         admin_account_status_aliases_keep_protocol_state_closed_body,
     );
@@ -132,7 +132,7 @@ async fn admin_account_status_aliases_keep_protocol_state_closed_body() {
 
 #[test]
 fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_media_statistics_and_by_actor_are_derived_from_blobs",
         admin_media_statistics_and_by_actor_are_derived_from_blobs_body,
     );

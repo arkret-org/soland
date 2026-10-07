@@ -18,7 +18,7 @@ fn assert_no_production_gap(body: &Value) {
 
 #[test]
 fn admin_actors_query_returns_typed_rows_and_walks_cursor() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_actors_query_returns_typed_rows_and_walks_cursor",
         admin_actors_query_returns_typed_rows_and_walks_cursor_body,
     );
@@ -157,7 +157,7 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
 
 #[test]
 fn admin_actors_query_excludes_foreign_only_accounts() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_actors_query_excludes_foreign_only_accounts",
         admin_actors_query_excludes_foreign_only_accounts_body,
     );
@@ -214,7 +214,7 @@ async fn admin_actors_query_excludes_foreign_only_accounts_body() {
 
 #[test]
 fn admin_actors_query_applies_and_echoes_filters() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_actors_query_applies_and_echoes_filters",
         admin_actors_query_applies_and_echoes_filters_body,
     );
@@ -260,7 +260,7 @@ async fn admin_actors_query_applies_and_echoes_filters_body() {
 
 #[test]
 fn admin_actors_query_rejects_expired_cursor_with_gone() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_actors_query_rejects_expired_cursor_with_gone",
         admin_actors_query_rejects_expired_cursor_with_gone_body,
     );
@@ -284,7 +284,7 @@ async fn admin_actors_query_rejects_expired_cursor_with_gone_body() {
 
 #[test]
 fn admin_queries_require_authentication() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_queries_require_authentication",
         admin_queries_require_authentication_body,
     );
@@ -306,7 +306,7 @@ async fn admin_queries_require_authentication_body() {
 
 #[test]
 fn admin_audit_query_is_typed_newest_first_and_filterable() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_audit_query_is_typed_newest_first_and_filterable",
         admin_audit_query_is_typed_newest_first_and_filterable_body,
     );
@@ -367,7 +367,7 @@ async fn admin_audit_query_is_typed_newest_first_and_filterable_body() {
 
 #[test]
 fn admin_capabilities_query_reports_tombstones_and_validates_state_filter() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_capabilities_query_reports_tombstones_and_validates_state_filter",
         admin_capabilities_query_reports_tombstones_and_validates_state_filter_body,
     );
@@ -402,7 +402,7 @@ async fn admin_capabilities_query_reports_tombstones_and_validates_state_filter_
 
 #[test]
 fn admin_devices_query_filters_by_name_or_id() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_devices_query_filters_by_name_or_id",
         admin_devices_query_filters_by_name_or_id_body,
     );
@@ -449,7 +449,7 @@ async fn admin_devices_query_filters_by_name_or_id_body() {
 
 #[test]
 fn admin_collection_no_longer_serves_migrated_resources() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "admin_collection_no_longer_serves_migrated_resources",
         admin_collection_no_longer_serves_migrated_resources_body,
     );

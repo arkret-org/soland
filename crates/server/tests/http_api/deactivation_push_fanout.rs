@@ -95,7 +95,7 @@ async fn admin_actor_row(state: AppState, admin: &str, did: &str) -> Value {
 
 #[test]
 fn deactivation_notifies_configured_push_gateway_and_clears_partial() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "deactivation_notifies_configured_push_gateway_and_clears_partial",
         deactivation_notifies_configured_push_gateway_and_clears_partial_body,
     );
@@ -161,7 +161,7 @@ async fn deactivation_notifies_configured_push_gateway_and_clears_partial_body()
 
 #[test]
 fn gateway_failure_marks_partial_and_worker_retries_until_ack() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "gateway_failure_marks_partial_and_worker_retries_until_ack",
         gateway_failure_marks_partial_and_worker_retries_until_ack_body,
     );
@@ -221,7 +221,7 @@ async fn gateway_failure_marks_partial_and_worker_retries_until_ack_body() {
 
 #[test]
 fn partially_completed_ack_keeps_partial_until_retry_completes() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "partially_completed_ack_keeps_partial_until_retry_completes",
         partially_completed_ack_keeps_partial_until_retry_completes_body,
     );
@@ -278,7 +278,7 @@ async fn partially_completed_ack_keeps_partial_until_retry_completes_body() {
 
 #[test]
 fn no_gateway_configured_completes_locally_without_partial() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "no_gateway_configured_completes_locally_without_partial",
         no_gateway_configured_completes_locally_without_partial_body,
     );

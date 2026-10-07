@@ -6,7 +6,7 @@ use super::common::*;
 
 #[test]
 fn health_and_describe_work() {
-    run_on_deep_stack("health_and_describe_work", health_and_describe_work_body);
+    run_on_test_runtime("health_and_describe_work", health_and_describe_work_body);
 }
 
 async fn health_and_describe_work_body() {
@@ -284,7 +284,7 @@ async fn health_and_describe_work_body() {
 
 #[test]
 fn server_describe_accepts_only_its_selected_role() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "server_describe_accepts_only_its_selected_role",
         server_describe_accepts_only_its_selected_role_body,
     );
@@ -312,7 +312,7 @@ async fn server_describe_accepts_only_its_selected_role_body() {
 
 #[test]
 fn open_service_resolution_serves_byte_canonical_evidence() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "open_service_resolution_serves_byte_canonical_evidence",
         open_service_resolution_serves_byte_canonical_evidence_body,
     );
@@ -378,7 +378,7 @@ async fn open_service_resolution_serves_byte_canonical_evidence_body() {
 
 #[test]
 fn readyz_returns_503_until_session_grant_internal_channel_is_complete() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "readyz_returns_503_until_session_grant_internal_channel_is_complete",
         readyz_returns_503_until_session_grant_internal_channel_is_complete_body,
     );
@@ -408,7 +408,7 @@ async fn readyz_returns_503_until_session_grant_internal_channel_is_complete_bod
 
 #[test]
 fn describe_separates_claim_levels() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "describe_separates_claim_levels",
         describe_separates_claim_levels_body,
     );
@@ -463,7 +463,7 @@ async fn describe_separates_claim_levels_body() {
 
 #[test]
 fn describe_returns_development_mode_field() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "describe_returns_development_mode_field",
         describe_returns_development_mode_field_body,
     );
@@ -555,7 +555,7 @@ async fn describe_returns_development_mode_field_body() {
 
 #[test]
 fn healthz_exposes_hardening_status() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "healthz_exposes_hardening_status",
         healthz_exposes_hardening_status_body,
     );

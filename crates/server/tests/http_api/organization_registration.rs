@@ -132,7 +132,7 @@ fn signed_control_proof(
 
 #[test]
 fn organization_registration_http_round_trip_and_get_are_non_enumerable() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "organization_registration_http_round_trip_and_get_are_non_enumerable",
         organization_registration_http_round_trip_and_get_are_non_enumerable_body,
     );

@@ -17,7 +17,7 @@ fn b64(value: &str) -> String {
 
 #[test]
 fn tus_requires_and_freezes_storage_encryption_until_finalize() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "tus_requires_and_freezes_storage_encryption_until_finalize",
         tus_requires_and_freezes_storage_encryption_until_finalize_body,
     );
@@ -144,7 +144,7 @@ async fn tus_requires_and_freezes_storage_encryption_until_finalize_body() {
 
 #[test]
 fn tus_options_probe_advertises_capabilities_without_auth() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "tus_options_probe_advertises_capabilities_without_auth",
         tus_options_probe_advertises_capabilities_without_auth_body,
     );
@@ -172,7 +172,7 @@ async fn tus_options_probe_advertises_capabilities_without_auth_body() {
 
 #[test]
 fn tus_create_requires_supported_version_and_auth() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "tus_create_requires_supported_version_and_auth",
         tus_create_requires_supported_version_and_auth_body,
     );
@@ -203,7 +203,7 @@ async fn tus_create_requires_supported_version_and_auth_body() {
 
 #[test]
 fn resumable_chunked_upload_matches_canonical_blob_ref() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "resumable_chunked_upload_matches_canonical_blob_ref",
         resumable_chunked_upload_matches_canonical_blob_ref_body,
     );
@@ -377,7 +377,7 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
 
 #[test]
 fn resumable_upload_is_actor_scoped_and_terminable() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "resumable_upload_is_actor_scoped_and_terminable",
         resumable_upload_is_actor_scoped_and_terminable_body,
     );
@@ -440,7 +440,7 @@ async fn resumable_upload_is_actor_scoped_and_terminable_body() {
 
 #[test]
 fn describe_advertises_tus_binding_and_limits() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "describe_advertises_tus_binding_and_limits",
         describe_advertises_tus_binding_and_limits_body,
     );

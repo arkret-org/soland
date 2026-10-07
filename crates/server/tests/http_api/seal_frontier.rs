@@ -2,7 +2,7 @@ use super::common::*;
 
 #[test]
 fn retired_self_frontier_routes_are_not_mounted() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "retired_self_frontier_routes_are_not_mounted",
         retired_self_frontier_routes_are_not_mounted_body,
     );

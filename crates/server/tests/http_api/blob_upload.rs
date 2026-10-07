@@ -12,7 +12,7 @@ use super::common::*;
 
 #[test]
 fn storage_encryption_is_required_and_ciphertext_cannot_be_presigned() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "storage_encryption_is_required_and_ciphertext_cannot_be_presigned",
         storage_encryption_is_required_and_ciphertext_cannot_be_presigned_body,
     );
@@ -211,7 +211,7 @@ async fn upload(state: &AppState, token: &str, parts: &[Part<'_>]) -> (u16, Valu
 
 #[test]
 fn canonical_upload_reads_every_member_from_form_parts() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "canonical_upload_reads_every_member_from_form_parts",
         canonical_upload_reads_every_member_from_form_parts_body,
     );
@@ -280,7 +280,7 @@ async fn canonical_upload_reads_every_member_from_form_parts_body() {
 
 #[test]
 fn canonical_upload_rejects_bodies_outside_the_closed_schema() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "canonical_upload_rejects_bodies_outside_the_closed_schema",
         canonical_upload_rejects_bodies_outside_the_closed_schema_body,
     );
@@ -390,7 +390,7 @@ async fn canonical_upload_rejects_bodies_outside_the_closed_schema_body() {
 
 #[test]
 fn canonical_upload_checks_declared_size_digest_and_realm() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "canonical_upload_checks_declared_size_digest_and_realm",
         canonical_upload_checks_declared_size_digest_and_realm_body,
     );

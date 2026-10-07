@@ -90,7 +90,7 @@ fn assert_param_invalid(status: StatusCode, problem: &Value, case: &str) {
 
 #[test]
 fn device_message_outside_the_enqueue_window_is_refused_with_zero_writes() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "device_message_outside_the_enqueue_window_is_refused_with_zero_writes",
         device_message_outside_the_enqueue_window_is_refused_with_zero_writes_body,
     );
@@ -161,7 +161,7 @@ async fn device_message_outside_the_enqueue_window_is_refused_with_zero_writes_b
 
 #[test]
 fn one_invalid_expires_at_rejects_the_whole_mixed_batch() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "one_invalid_expires_at_rejects_the_whole_mixed_batch",
         one_invalid_expires_at_rejects_the_whole_mixed_batch_body,
     );
@@ -239,7 +239,7 @@ async fn one_invalid_expires_at_rejects_the_whole_mixed_batch_body() {
 
 #[test]
 fn exact_retry_after_expires_at_returns_the_original_result() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "exact_retry_after_expires_at_returns_the_original_result",
         exact_retry_after_expires_at_returns_the_original_result_body,
     );
@@ -284,7 +284,7 @@ async fn exact_retry_after_expires_at_returns_the_original_result_body() {
 
 #[test]
 fn undeliverable_recipients_are_indistinguishable_unknown_rows() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "undeliverable_recipients_are_indistinguishable_unknown_rows",
         undeliverable_recipients_are_indistinguishable_unknown_rows_body,
     );

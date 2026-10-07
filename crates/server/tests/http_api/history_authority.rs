@@ -2,7 +2,7 @@ use super::common::*;
 
 #[test]
 fn retired_seal_history_authority_route_is_not_registered() {
-    run_on_deep_stack("retired_seal_history_authority", current_body);
+    run_on_test_runtime("retired_seal_history_authority", current_body);
 }
 
 async fn current_body() {

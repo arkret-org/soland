@@ -321,45 +321,16 @@ pub(crate) async fn register_account(
         .unwrap();
     login["session_credential"].as_str().unwrap().to_owned()
 }
-pub(crate) const DEEP_STACK_BYTES: usize = 8 * 1024 * 1024;
-
-/// Run one async test body on a [`DEEP_STACK_BYTES`] thread with a
+/// Run one async test body with the standard thread stack and a
 /// current-thread Tokio runtime.
-pub(crate) fn run_on_deep_stack<F>(name: &'static str, body: impl FnOnce() -> F + Send + 'static)
+pub(crate) fn run_on_test_runtime<F>(name: &'static str, body: impl FnOnce() -> F + Send + 'static)
 where
     F: Future<Output = ()>,
 {
-    run_on_deep_stack_with(name, RuntimeFlavor::CurrentThread, body);
-}
-
-#[derive(Clone, Copy)]
-enum RuntimeFlavor {
-    CurrentThread,
-    CurrentThreadPaused,
-    MultiThread,
-}
-
-fn run_on_deep_stack_with<F>(
-    name: &'static str,
-    flavor: RuntimeFlavor,
-    body: impl FnOnce() -> F + Send + 'static,
-) where
-    F: Future<Output = ()>,
-{
     let joined = std::thread::Builder::new()
-        .stack_size(DEEP_STACK_BYTES)
         .spawn(move || {
-            let mut builder = match flavor {
-                RuntimeFlavor::MultiThread => tokio::runtime::Builder::new_multi_thread(),
-                RuntimeFlavor::CurrentThread | RuntimeFlavor::CurrentThreadPaused => {
-                    tokio::runtime::Builder::new_current_thread()
-                }
-            };
-            builder.enable_all();
-            if matches!(flavor, RuntimeFlavor::CurrentThreadPaused) {
-                builder.start_paused(true);
-            }
-            builder
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
                 .build()
                 .unwrap_or_else(|error| panic!("build the {name} test runtime: {error}"))
                 .block_on(body());

@@ -2,7 +2,7 @@ use super::common::*;
 
 #[test]
 fn retired_seal_mls_read_routes_are_not_registered() {
-    run_on_deep_stack("retired_seal_mls_reads", current_body);
+    run_on_test_runtime("retired_seal_mls_reads", current_body);
 }
 
 async fn current_body() {

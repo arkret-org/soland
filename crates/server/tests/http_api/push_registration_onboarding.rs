@@ -12,7 +12,7 @@ use super::common::*;
 
 #[test]
 fn register_with_not_onboarded_gateway_fails_closed_without_writes() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "register_with_not_onboarded_gateway_fails_closed_without_writes",
         register_with_not_onboarded_gateway_fails_closed_without_writes_body,
     );

@@ -7,7 +7,7 @@ use super::common::*;
 /// generated operation surface.
 #[test]
 fn served_openapi_is_generated_from_the_router() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "served_openapi_is_generated_from_the_router",
         served_openapi_is_generated_from_the_router_body,
     );
@@ -57,7 +57,7 @@ fn assert_operation_selectors_are_required(root: &Value) {
 
 #[test]
 fn served_openapi_yaml_renders() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "served_openapi_yaml_renders",
         served_openapi_yaml_renders_body,
     );
@@ -185,7 +185,7 @@ fn operation_ids(root: &Value) -> Vec<&str> {
 /// which is now driven by the router walk rather than the OpenAPI document.
 #[test]
 fn artifact_only_path_is_not_treated_as_a_registered_route() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "artifact_only_path_is_not_treated_as_a_registered_route",
         artifact_only_path_is_not_treated_as_a_registered_route_body,
     );
@@ -208,7 +208,7 @@ async fn artifact_only_path_is_not_treated_as_a_registered_route_body() {
 /// Framework-level 404 and 405 responses carry the Arkret problem envelope.
 #[test]
 fn framework_errors_use_problem_details() {
-    run_on_deep_stack(
+    run_on_test_runtime(
         "framework_errors_use_problem_details",
         framework_errors_use_problem_details_body,
     );
