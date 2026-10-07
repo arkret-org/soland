@@ -6341,205 +6341,282 @@ async fn circle_create_and_self_join_write_same_cut_current() {
 async fn invite_create_without_invite_capability_is_capability_denied_with_zero_writes() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    human_profile::admit(
-        &pool,
-        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
-        "bootstrap-actor",
-    )
-    .await;
-    let store = PgAuthorityCommitStore { pool: pool.clone() };
-    let unit = unit(&pool).await;
-    let at = unit.transactions[0].commit.committed_at;
-    store
-        .admit_ordinary_realm_bootstrap_unit(&unit, at)
-        .await
-        .unwrap();
-    let realm_id = unit.transactions[0].event.realm_id.clone();
-    let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let station = unit.transactions[0].expected_authority.service_id.clone();
-    let member = accepted_pcr_account::accepted_pcr_account(
-        &pool,
-        device_authorization_history::did_web_station(&station),
-    )
-    .await
-    .as_account_id()
-    .expect("accepted PCR has an Account")
-    .clone();
-    let stranger = human_profile::admit(&pool, &station, "message-stranger").await;
-    let bob = invite_account("bob.example", "bob-station.example");
-    inject_joined_member(&pool, &unit, &member).await;
-    let tail = bootstrap_tail(&unit);
+    let fixture = invite_capability_fixture(&pool).await;
+    assert_invite_initial_capability_denials(&pool, &fixture).await;
+    let revoke = assert_invite_sequenced_revocation(&pool, &fixture).await;
+    assert_invite_racing_revocation(&pool, &fixture, &revoke).await;
+}
 
-    for actor in [&member, &stranger] {
-        let denied = realm_event_request_as(
-            &tail,
-            actor,
-            arkret_wire::EventKind::InviteCreate,
-            invite_create_payload(&bob, '4', at),
-        );
-        let denied = source_if_human(&pool, denied).await;
-        assert_refused_with_zero_writes(
-            &uow,
-            &store,
+struct InviteCapabilityFixture {
+    unit: OrdinaryRealmBootstrapCommitUnit,
+    member: arkret_wire::AccountId,
+    stranger: arkret_wire::AccountId,
+    bob: arkret_wire::AccountId,
+    tail: EventCommitRequest,
+}
+
+fn invite_capability_fixture(
+    pool: &soland_storage_postgres::PgPool,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = InviteCapabilityFixture> + '_>> {
+    Box::pin(async move {
+        human_profile::admit(
             &pool,
-            &denied,
-            soland_storage::ConflictCode::CapabilityDenied,
+            &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+            "bootstrap-actor",
         )
         .await;
-    }
-
-    let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
-    let grant = invite_grant_request(
-        &pool,
-        &tail,
-        &unit,
-        &root_event_ref,
-        &member,
-        &["ak.invite.create"],
-    )
-    .await;
-    uow.commit_event(grant.clone()).await.unwrap();
-    let grant_id = arkret_wire::GrantId::from_event_id(&grant.authority_commit.event.event_id);
-
-    // The member's create is prepared against the grant's head, but the
-    // root's revoke of that grant commits at the same head first: the create
-    // cannot commit on that head, and sequenced after the revoke it is
-    // refused by the evaluator at its own cut.
-    let prepared = realm_event_request_as(
-        &grant,
-        &member,
-        arkret_wire::EventKind::InviteCreate,
-        invite_create_payload(&bob, '5', at),
-    );
-    let prepared = source_if_human(&pool, prepared).await;
-    let revoke = realm_event_request_as(
-        &grant,
-        &creator_account(&unit),
-        arkret_wire::EventKind::CapabilityRevoke,
-        serde_json::json!({
-            "grant_id": grant_id,
-            "expected_revision": {
-                "commit_id": grant.authority_commit.commit.commit_id,
-                "stream_position": grant.authority_commit.commit.stream_position,
-            }
-        }),
-    );
-    let revoke = source_if_human(&pool, revoke).await;
-    uow.commit_event(revoke.clone()).await.unwrap();
-    assert_refused_with_zero_writes(
-        &uow,
-        &store,
-        &pool,
-        &prepared,
-        soland_storage::ConflictCode::TemporarilyUnavailable,
-    )
-    .await;
-    let resequenced = realm_event_request_as(
-        &revoke,
-        &member,
-        arkret_wire::EventKind::InviteCreate,
-        invite_create_payload(&bob, '5', at),
-    );
-    let resequenced = source_if_human(&pool, resequenced).await;
-    assert_eq!(
-        resequenced.authority_commit.event,
-        prepared.authority_commit.event
-    );
-    assert_refused_with_zero_writes(
-        &uow,
-        &store,
-        &pool,
-        &resequenced,
-        soland_storage::ConflictCode::CapabilityDenied,
-    )
-    .await;
-
-    // Racing a fresh grant's revoke against a create on one head leaves one
-    // winner; whichever order commits, the create never survives a revoke
-    // that precedes it.
-    // A distinct grant body: the first grant's exact Event is already committed.
-    let regrant = invite_grant_request(
-        &pool,
-        &revoke,
-        &unit,
-        &root_event_ref,
-        &member,
-        &["ak.invite.create", "ak.invite.revoke"],
-    )
-    .await;
-    uow.commit_event(regrant.clone()).await.unwrap();
-    let regrant_id = arkret_wire::GrantId::from_event_id(&regrant.authority_commit.event.event_id);
-    let racing_create = realm_event_request_as(
-        &regrant,
-        &member,
-        arkret_wire::EventKind::InviteCreate,
-        invite_create_payload(&bob, '6', at),
-    );
-    let racing_create = source_if_human(&pool, racing_create).await;
-    let racing_revoke = realm_event_request_as(
-        &regrant,
-        &creator_account(&unit),
-        arkret_wire::EventKind::CapabilityRevoke,
-        serde_json::json!({
-            "grant_id": regrant_id,
-            "expected_revision": {
-                "commit_id": regrant.authority_commit.commit.commit_id,
-                "stream_position": regrant.authority_commit.commit.stream_position,
-            }
-        }),
-    );
-    let racing_revoke = source_if_human(&pool, racing_revoke).await;
-    let create_uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let revoke_uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let (create_result, revoke_result) = tokio::join!(
-        create_uow.commit_event(racing_create.clone()),
-        revoke_uow.commit_event(racing_revoke.clone())
-    );
-    match (create_result, revoke_result) {
-        (Ok(_), Err(error)) => {
-            assert_eq!(
-                error.conflict_code(),
-                Some(soland_storage::ConflictCode::TemporarilyUnavailable)
-            );
-            let after = realm_event_request_as(
-                &racing_create,
-                &creator_account(&unit),
-                arkret_wire::EventKind::CapabilityRevoke,
-                serde_json::to_value(&racing_revoke.authority_commit.event.payload).unwrap(),
-            );
-            let after = source_if_human(&pool, after).await;
-            let after = source_request(&pool, after).await;
-            uow.commit_event(after).await.unwrap();
-            assert_eq!(invite_families(&pool, &realm_id).await.lifecycle.len(), 1);
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let unit = unit(&pool).await;
+        let at = unit.transactions[0].commit.committed_at;
+        store
+            .admit_ordinary_realm_bootstrap_unit(&unit, at)
+            .await
+            .unwrap();
+        let station = unit.transactions[0].expected_authority.service_id.clone();
+        let member = accepted_pcr_account::accepted_pcr_account(
+            &pool,
+            device_authorization_history::did_web_station(&station),
+        )
+        .await
+        .as_account_id()
+        .expect("accepted PCR has an Account")
+        .clone();
+        let stranger = human_profile::admit(&pool, &station, "message-stranger").await;
+        let bob = invite_account("bob.example", "bob-station.example");
+        inject_joined_member(&pool, &unit, &member).await;
+        let tail = bootstrap_tail(&unit);
+        InviteCapabilityFixture {
+            unit,
+            member,
+            stranger,
+            bob,
+            tail,
         }
-        (Err(error), Ok(_)) => {
-            assert_eq!(
-                error.conflict_code(),
-                Some(soland_storage::ConflictCode::TemporarilyUnavailable)
-            );
-            let after = realm_event_request_as(
-                &racing_revoke,
-                &member,
+    })
+}
+
+fn assert_invite_initial_capability_denials<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    fixture: &'a InviteCapabilityFixture,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>> {
+    Box::pin(async move {
+        let InviteCapabilityFixture {
+            unit,
+            member,
+            stranger,
+            bob,
+            tail,
+        } = fixture;
+        let at = unit.transactions[0].commit.committed_at;
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        for actor in [&member, &stranger] {
+            let denied = realm_event_request_as(
+                &tail,
+                actor,
                 arkret_wire::EventKind::InviteCreate,
-                invite_create_payload(&bob, '6', at),
+                invite_create_payload(&bob, '4', at),
             );
-            let after = source_if_human(&pool, after).await;
+            let denied = source_if_human(&pool, denied).await;
             assert_refused_with_zero_writes(
                 &uow,
                 &store,
                 &pool,
-                &after,
+                &denied,
                 soland_storage::ConflictCode::CapabilityDenied,
             )
             .await;
-            assert!(invite_families(&pool, &realm_id).await.lifecycle.is_empty());
         }
-        (create, revoke) => panic!(
-            "expected exactly one winner: create ok={} revoke ok={}",
-            create.is_ok(),
-            revoke.is_ok()
-        ),
-    }
+    })
+}
+
+fn assert_invite_sequenced_revocation<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    fixture: &'a InviteCapabilityFixture,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + 'a>> {
+    Box::pin(async move {
+        let InviteCapabilityFixture {
+            unit,
+            member,
+            bob,
+            tail,
+            ..
+        } = fixture;
+        let at = unit.transactions[0].commit.committed_at;
+        let realm_id = &unit.transactions[0].event.realm_id;
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
+        let grant = invite_grant_request(
+            &pool,
+            &tail,
+            &unit,
+            &root_event_ref,
+            &member,
+            &["ak.invite.create"],
+        )
+        .await;
+        uow.commit_event(grant.clone()).await.unwrap();
+        let grant_id = arkret_wire::GrantId::from_event_id(&grant.authority_commit.event.event_id);
+
+        // The member's create is prepared against the grant's head, but the
+        // root's revoke of that grant commits at the same head first: the create
+        // cannot commit on that head, and sequenced after the revoke it is
+        // refused by the evaluator at its own cut.
+        let prepared = realm_event_request_as(
+            &grant,
+            &member,
+            arkret_wire::EventKind::InviteCreate,
+            invite_create_payload(&bob, '5', at),
+        );
+        let prepared = source_if_human(&pool, prepared).await;
+        let revoke = realm_event_request_as(
+            &grant,
+            &creator_account(&unit),
+            arkret_wire::EventKind::CapabilityRevoke,
+            serde_json::json!({
+                "grant_id": grant_id,
+                "expected_revision": {
+                    "commit_id": grant.authority_commit.commit.commit_id,
+                    "stream_position": grant.authority_commit.commit.stream_position,
+                }
+            }),
+        );
+        let revoke = source_if_human(&pool, revoke).await;
+        uow.commit_event(revoke.clone()).await.unwrap();
+        assert_refused_with_zero_writes(
+            &uow,
+            &store,
+            &pool,
+            &prepared,
+            soland_storage::ConflictCode::TemporarilyUnavailable,
+        )
+        .await;
+        let resequenced = realm_event_request_as(
+            &revoke,
+            &member,
+            arkret_wire::EventKind::InviteCreate,
+            invite_create_payload(&bob, '5', at),
+        );
+        let resequenced = source_if_human(&pool, resequenced).await;
+        assert_eq!(
+            resequenced.authority_commit.event,
+            prepared.authority_commit.event
+        );
+        assert_refused_with_zero_writes(
+            &uow,
+            &store,
+            &pool,
+            &resequenced,
+            soland_storage::ConflictCode::CapabilityDenied,
+        )
+        .await;
+        revoke
+    })
+}
+
+fn assert_invite_racing_revocation<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    fixture: &'a InviteCapabilityFixture,
+    revoke: &'a EventCommitRequest,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>> {
+    Box::pin(async move {
+        let InviteCapabilityFixture {
+            unit, member, bob, ..
+        } = fixture;
+        let at = unit.transactions[0].commit.committed_at;
+        let realm_id = &unit.transactions[0].event.realm_id;
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let root_event_ref = realm_root_authority_event_ref(&pool, realm_id).await;
+        // Racing a fresh grant's revoke against a create on one head leaves one
+        // winner; whichever order commits, the create never survives a revoke
+        // that precedes it.
+        // A distinct grant body: the first grant's exact Event is already committed.
+        let regrant = invite_grant_request(
+            &pool,
+            &revoke,
+            &unit,
+            &root_event_ref,
+            &member,
+            &["ak.invite.create", "ak.invite.revoke"],
+        )
+        .await;
+        uow.commit_event(regrant.clone()).await.unwrap();
+        let regrant_id =
+            arkret_wire::GrantId::from_event_id(&regrant.authority_commit.event.event_id);
+        let racing_create = realm_event_request_as(
+            &regrant,
+            &member,
+            arkret_wire::EventKind::InviteCreate,
+            invite_create_payload(&bob, '6', at),
+        );
+        let racing_create = source_if_human(&pool, racing_create).await;
+        let racing_revoke = realm_event_request_as(
+            &regrant,
+            &creator_account(&unit),
+            arkret_wire::EventKind::CapabilityRevoke,
+            serde_json::json!({
+                "grant_id": regrant_id,
+                "expected_revision": {
+                    "commit_id": regrant.authority_commit.commit.commit_id,
+                    "stream_position": regrant.authority_commit.commit.stream_position,
+                }
+            }),
+        );
+        let racing_revoke = source_if_human(&pool, racing_revoke).await;
+        let create_uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let revoke_uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let (create_result, revoke_result) = tokio::join!(
+            create_uow.commit_event(racing_create.clone()),
+            revoke_uow.commit_event(racing_revoke.clone())
+        );
+        match (create_result, revoke_result) {
+            (Ok(_), Err(error)) => {
+                assert_eq!(
+                    error.conflict_code(),
+                    Some(soland_storage::ConflictCode::TemporarilyUnavailable)
+                );
+                let after = realm_event_request_as(
+                    &racing_create,
+                    &creator_account(&unit),
+                    arkret_wire::EventKind::CapabilityRevoke,
+                    serde_json::to_value(&racing_revoke.authority_commit.event.payload).unwrap(),
+                );
+                let after = source_if_human(&pool, after).await;
+                let after = source_request(&pool, after).await;
+                uow.commit_event(after).await.unwrap();
+                assert_eq!(invite_families(&pool, &realm_id).await.lifecycle.len(), 1);
+            }
+            (Err(error), Ok(_)) => {
+                assert_eq!(
+                    error.conflict_code(),
+                    Some(soland_storage::ConflictCode::TemporarilyUnavailable)
+                );
+                let after = realm_event_request_as(
+                    &racing_revoke,
+                    &member,
+                    arkret_wire::EventKind::InviteCreate,
+                    invite_create_payload(&bob, '6', at),
+                );
+                let after = source_if_human(&pool, after).await;
+                assert_refused_with_zero_writes(
+                    &uow,
+                    &store,
+                    &pool,
+                    &after,
+                    soland_storage::ConflictCode::CapabilityDenied,
+                )
+                .await;
+                assert!(invite_families(&pool, &realm_id).await.lifecycle.is_empty());
+            }
+            (create, revoke) => panic!(
+                "expected exactly one winner: create ok={} revoke ok={}",
+                create.is_ok(),
+                revoke.is_ok()
+            ),
+        }
+    })
 }
 
 /// Real PostgreSQL: `ak.invite.revoke` and `ak.invite.cancel` move the
