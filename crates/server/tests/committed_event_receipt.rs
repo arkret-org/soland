@@ -121,6 +121,159 @@ fn seal_fact(
 }
 
 #[test]
+fn non_governance_service_receipt_verifies_frozen_source_and_fails_closed_without_it() {
+    runtime().block_on(async {
+        use arkret_models_collaboration::authority_commit::{
+            HistoricalProducerSignerFact, ServiceHistoricalSignerFact,
+        };
+        let receiver = soland_test_support::app_state_with_postgres_governance(
+            soland_test_support::app_config(),
+        );
+        let chain = GovernanceChain::new();
+        let suite = DigestSuite::Sha256;
+        let scope = ScopeRef::Realm {
+            realm_id: chain.realm_id.clone(),
+        };
+        let actor = arkret_wire::ActorId::service(
+            DidCoreId::new("ak:did_core:web:applet.example").unwrap(),
+        );
+        let applet =
+            arkret_wire::AppletId::new("ak:applet:018f0f51-7b44-7a2e-8c2f-9b1d6e3a4c5d").unwrap();
+        let coordinate = |byte| arkret_wire::CommittedEventRef {
+            event_id: arkret_wire::EventId::from_digest(suite, [byte; 32]),
+            commit_id: arkret_wire::RealmCommitId::from_digest([byte; 32]),
+            stream_ref: arkret_wire::CommitStreamRef::Realm {
+                realm_id: chain.realm_id.clone(),
+            },
+            stream_position: 0,
+        };
+        // A signature transcript fixture: admission/installation validation is
+        // exercised separately by the real Applet HTTP acceptance suite.
+        let mut raw = arkret_wire::test_support::raw_event_for_actor_at(
+            "ak.message.create",
+            scope.clone(),
+            actor.clone(),
+            serde_json::json!({"content":{"kind":"ak.content.text","text":"original"}}),
+            Utc::now() - Duration::seconds(1),
+        )
+        .unwrap();
+        raw.applet_id = Some(applet.clone());
+        raw.authorization_ref =
+            Some(arkret_wire::GrantId::from_event_id(&coordinate(32).event_id).into());
+        let seed = [78; 32];
+        let vm = method("did:web:applet.example", "producer");
+        let event = sign_event(raw, vm.clone(), seed);
+        let mut commit = chain.commit_next(&event, GovernanceSigner::CurrentStation);
+        let source = ServiceHistoricalSignerFact {
+            event_id: event.event_id.clone(),
+            actor,
+            verification_method: vm,
+            key: arkret_models_identity::ServiceHistoricalSigningKey {
+                public_key_b64u: arkret_wire::Base64UrlString::new(
+                    arkret_canonical::base64url_encode(
+                        ed25519_dalek::SigningKey::from_bytes(&seed)
+                            .verifying_key()
+                            .as_bytes(),
+                    ),
+                )
+                .unwrap(),
+                applet_id: applet,
+                registration_epoch: arkret_wire::Hash::new(format!("sha256:{}", "12".repeat(32)))
+                    .unwrap(),
+                registration_ref: coordinate(31),
+                authorization_ref: coordinate(32),
+                effective_scope: scope,
+            },
+            accepted_at: commit.committed_at,
+        };
+        commit.producer_signer_fact_digest = Some(source.digest().unwrap());
+        let commit = chain.seal(commit, GovernanceSigner::CurrentStation);
+        let source: HistoricalProducerSignerFact = source.into();
+        let store = receiver.test_persistence();
+        let receiver_id = receiver.service_core_id();
+        macro_rules! check {
+            ($commit:expr, $fact:expr) => {
+                verify_committed_event_receipt_with_fact(
+                    store.device_revocations(),
+                    &event,
+                    $commit,
+                    CommitContinuity::After(&chain.head),
+                    &chain.authority,
+                    &chain.keys,
+                    &receiver_id,
+                    suite,
+                    $fact,
+                )
+                .await
+            };
+        }
+        assert_eq!(
+            check!(&commit, Some(&source)).unwrap(),
+            ReceivedProducer::GovernanceCommittedService
+        );
+        assert_eq!(
+            refusal_code(check!(&commit, None)),
+            "temporarily_unavailable"
+        );
+        let legacy = chain.commit_next(&event, GovernanceSigner::CurrentStation);
+        assert_eq!(
+            refusal_code(check!(&legacy, None)),
+            "temporarily_unavailable"
+        );
+        assert_eq!(
+            refusal_code(check!(&legacy, Some(&source))),
+            "signature_invalid"
+        );
+        let HistoricalProducerSignerFact::Service(fact) = &source else {
+            unreachable!()
+        };
+        let mut substitutions = Vec::new();
+        let mut changed = fact.clone();
+        changed.key.registration_epoch =
+            arkret_wire::Hash::new(format!("sha256:{}", "13".repeat(32))).unwrap();
+        substitutions.push(changed);
+        let mut changed = fact.clone();
+        changed.key.authorization_ref = coordinate(33);
+        substitutions.push(changed);
+        let mut changed = fact.clone();
+        changed.key.public_key_b64u =
+            arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                ed25519_dalek::SigningKey::from_bytes(&[79; 32])
+                    .verifying_key()
+                    .as_bytes(),
+            ))
+            .unwrap();
+        substitutions.push(changed);
+        for changed in substitutions {
+            let changed = HistoricalProducerSignerFact::Service(changed);
+            assert_eq!(
+                refusal_code(check!(&commit, Some(&changed))),
+                "signature_invalid"
+            );
+        }
+        // A new governance signature over the wrong key cannot replace the
+        // independent verification of the Event's original producer proof.
+        let mut wrong_key = fact.clone();
+        wrong_key.key.public_key_b64u =
+            arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                ed25519_dalek::SigningKey::from_bytes(&[79; 32])
+                    .verifying_key()
+                    .as_bytes(),
+            ))
+            .unwrap();
+        let wrong_key: HistoricalProducerSignerFact = wrong_key.into();
+        let mut rebound = commit.clone();
+        rebound.producer_signer_fact_digest = Some(wrong_key.digest().unwrap());
+        let rebound = chain.seal(rebound, GovernanceSigner::CurrentStation);
+        assert_eq!(
+            refusal_code(check!(&rebound, Some(&wrong_key))),
+            "signature_invalid"
+        );
+        assert_nothing_written(&receiver, &event).await;
+    });
+}
+
+#[test]
 fn non_governance_receiver_verifies_original_human_fact_and_legacy_is_unavailable() {
     runtime().block_on(async {
         let receiver = soland_test_support::app_state_with_postgres_governance(

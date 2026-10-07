@@ -175,6 +175,12 @@ pub async fn verify_committed_event_receipt_with_source(
             });
         }
         (None, None) => {}
+        (Some(_), None) => {
+            return Err(ServiceError::protocol(
+                ErrorCode::TemporarilyUnavailable,
+                "original producer signer source is unavailable",
+            ));
+        }
         _ => {
             return Err(ServiceError::protocol(
                 ErrorCode::SignatureInvalid,

@@ -739,20 +739,6 @@ fn producer_fact_outcome(
     }
 }
 
-pub(crate) async fn retain_prepared_producer_in_connection(
-    conn: &mut AsyncPgConnection,
-    event: &arkret_wire::Event,
-    commit: &arkret_wire::RealmCommit,
-    fact: &arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact,
-) -> PersistenceResult<()> {
-    use arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact as Fact;
-    match fact {
-        Fact::Human(fact) => retain_prepared_human_in_connection(conn, event, commit, fact).await,
-        Fact::Service(fact) => {
-            retain_prepared_service_in_connection(conn, event, commit, fact).await
-        }
-    }
-}
 pub(crate) fn validate_producer_fact_binding(
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
