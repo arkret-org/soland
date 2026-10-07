@@ -4053,7 +4053,7 @@ async fn moderation_report_row_is_disclosed_to_the_realm_root_controller() {
             .unwrap()
             .current_state_entries
             .len(),
-        10
+        11
     );
 
     let report = moderation_report_request(
@@ -4067,7 +4067,16 @@ async fn moderation_report_row_is_disclosed_to_the_realm_root_controller() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(material.current_state_entries.len(), 11);
+    assert_eq!(material.current_state_entries.len(), 12);
+    assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
+        arkret_wire::TypedCurrentResult::Value {
+            selector: arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id: id },
+            source_stream_ref, revision, ..
+        } if id == &strand_id
+            && source_stream_ref == &strand.authority_commit.commit.stream_ref
+            && revision.commit_id == strand.authority_commit.commit.commit_id
+            && revision.stream_position == strand.authority_commit.commit.stream_position
+    )));
     assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
         arkret_wire::TypedCurrentResult::Value {
             selector: arkret_wire::CurrentSelector::ModerationReport { event_id },
