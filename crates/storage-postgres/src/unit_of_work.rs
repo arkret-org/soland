@@ -3102,6 +3102,7 @@ async fn commit_scope_current_results_inner(
     )).await?;
 
     Box::pin(crate::realm_bootstrap_current_results::commit_read_receipt_policy_authority_current_result_in_connection(conn, event, commit)).await?;
+    Box::pin(crate::realm_bootstrap_current_results::commit_preview_policy_authority_current_result_in_connection(conn, event, commit)).await?;
 
     Box::pin(
         crate::organization_moderation_gate::commit_realm_organization_current_result_in_connection(

@@ -265,6 +265,62 @@ pub(crate) async fn commit_realm_history_access_current_result_in_connection(
     .await
 }
 
+pub(crate) async fn commit_preview_policy_authority_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::RealmPreviewPolicy {
+        return Ok(());
+    }
+    crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+        conn,
+        event,
+        commit.committed_at,
+    )
+    .await?;
+    commit_preview_policy_current_result_in_connection(conn, event, commit).await
+}
+
+/// Retain payload.value only; the optional reason remains Event audit data.
+pub(crate) async fn commit_preview_policy_current_result_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<()> {
+    if event.kind != arkret_wire::EventKind::RealmPreviewPolicy {
+        return Ok(());
+    }
+    arkret_schema::validate_event_for_submit(event)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if event.scope_ref
+        != (arkret_wire::ScopeRef::Realm {
+            realm_id: event.realm_id.clone(),
+        })
+        || commit.stream_ref
+            != (arkret_wire::CommitStreamRef::Realm {
+                realm_id: event.realm_id.clone(),
+            })
+        || commit.realm_id != event.realm_id
+        || commit.event_ref != event.event_id
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "preview policy requires its exact Realm Event and covering Commit".to_owned(),
+        ));
+    }
+    let policy = event
+        .typed_payload::<arkret_wire::event_spec::RealmPreviewPolicy>()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    advance_singleton(
+        conn,
+        event,
+        commit,
+        "realm_preview_policy",
+        &result_value(&policy.value)?,
+    )
+    .await
+}
+
 async fn advance_singleton(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -338,7 +394,7 @@ async fn insert_singleton(
 
 #[cfg(test)]
 mod tests {
-    use soland_storage::{EventCommitUnitOfWork, EventStore};
+    use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork, EventStore};
 
     use super::*;
 
@@ -348,6 +404,155 @@ mod tests {
         current_commit_id: String,
         #[diesel(sql_type = Jsonb)]
         value: serde_json::Value,
+    }
+
+    #[tokio::test]
+    async fn preview_policy_current_is_atomic_authorized_and_excludes_audit_reason() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let discussion =
+            ordinary_realm::open_human_discussion(&pool, &uuid::Uuid::now_v7().to_string()).await;
+        let mut previous = discussion.head.authority_commit;
+        let founder = discussion.unit.transactions[0]
+            .event
+            .actor_id
+            .signing_principal_id();
+        let uow = crate::PgEventCommitUnitOfWork::new(pool.clone());
+        let mut first = None;
+        for value in [
+            serde_json::json!({"mode":"directory_card","audiences":["invited"],"fields":["title"]}),
+            serde_json::json!({"mode":"none","audiences":["anonymous"],"fields":["title"]}),
+        ] {
+            let request = ordinary_realm::next_request(
+                &previous,
+                arkret_wire::EventKind::RealmPreviewPolicy,
+                founder,
+                serde_json::json!({"value":value,"reason":"not part of current"}),
+                chrono::Utc::now(),
+            );
+            uow.commit_event(request.clone()).await.unwrap();
+            if first.is_none() {
+                first = Some(request.clone());
+            }
+            let material = crate::PgAuthorityCommitStore { pool: pool.clone() }
+                .realm_state_snapshot_material(&request.authority_commit.event.realm_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let row = material
+                .current_state_entries
+                .iter()
+                .find(|entry| {
+                    matches!(
+                        entry,
+                        arkret_wire::TypedCurrentResult::Value {
+                            selector: arkret_wire::CurrentSelector::RealmPreviewPolicy,
+                            ..
+                        }
+                    )
+                })
+                .expect("confirmed preview current in material");
+            let arkret_wire::TypedCurrentResult::Value {
+                revision,
+                value: actual,
+                source_stream_ref,
+                ..
+            } = row;
+            assert_eq!(actual, &value);
+            assert_eq!(
+                revision.commit_id,
+                request.authority_commit.commit.commit_id
+            );
+            assert_eq!(
+                revision.stream_position,
+                request.authority_commit.commit.stream_position
+            );
+            assert_eq!(
+                source_stream_ref,
+                &request.authority_commit.commit.stream_ref
+            );
+            previous = request.authority_commit;
+        }
+        uow.commit_event(first.unwrap()).await.unwrap();
+        let outsider = Box::pin(ordinary_realm::human_profile::admit(
+            &pool,
+            &ordinary_realm::station(),
+            "preview-outsider",
+        ))
+        .await;
+        let denied = ordinary_realm::next_request(
+            &previous,
+            arkret_wire::EventKind::RealmPreviewPolicy,
+            &outsider.principal_id,
+            serde_json::json!({"value":{"mode":"directory_card","audiences":["anonymous"],"fields":["title"]}}),
+            chrono::Utc::now(),
+        );
+        let denied = Box::pin(ordinary_realm::source_request(&pool, denied)).await;
+        let denied_error = uow.commit_event(denied.clone()).await.unwrap_err();
+        assert_eq!(
+            denied_error.conflict_code(),
+            Some(soland_storage::ConflictCode::CapabilityDenied),
+            "accepted human without Realm authorization: {denied_error:?}"
+        );
+        assert!(
+            crate::PgEventStore { pool: pool.clone() }
+                .get(denied.authority_commit.event.event_id.as_str())
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let candidate = ordinary_realm::next_request(
+            &previous,
+            arkret_wire::EventKind::RealmPreviewPolicy,
+            founder,
+            serde_json::json!({"value":{"mode":"directory_card","audiences":["invited"],"fields":["join_rule"]}}),
+            chrono::Utc::now(),
+        );
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query("CREATE FUNCTION preview_policy_current_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.result_family='realm_preview_policy' THEN RAISE EXCEPTION 'preview policy current fault'; END IF; RETURN NEW; END $$").execute(&mut *conn).await.unwrap();
+        diesel::sql_query("CREATE TRIGGER preview_policy_current_fault BEFORE INSERT OR UPDATE ON realm_bootstrap_current_results FOR EACH ROW EXECUTE FUNCTION preview_policy_current_fault()").execute(&mut *conn).await.unwrap();
+        drop(conn);
+        let failed = uow.commit_event(candidate.clone()).await;
+        let mut conn = pool.get().await.unwrap();
+        diesel::sql_query(
+            "DROP TRIGGER preview_policy_current_fault ON realm_bootstrap_current_results",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        diesel::sql_query("DROP FUNCTION preview_policy_current_fault()")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        assert!(
+            failed.is_err(),
+            "the injected current write must actually fail"
+        );
+        let current = diesel::sql_query("SELECT current_commit_id,value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_preview_policy'").bind::<Text,_>(candidate.authority_commit.event.realm_id.as_str()).get_result::<Row>(&mut *conn).await.unwrap();
+        assert_eq!(
+            current.current_commit_id,
+            previous.commit.commit_id.as_str()
+        );
+        assert_eq!(
+            current.value,
+            serde_json::json!({"mode":"none","audiences":["anonymous"],"fields":["title"]})
+        );
+        drop(conn);
+        assert!(
+            crate::PgEventStore { pool: pool.clone() }
+                .get(candidate.authority_commit.event.event_id.as_str())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            crate::PgAuthorityCommitStore { pool }
+                .committed_event_by_commit_id(&candidate.authority_commit.commit.commit_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

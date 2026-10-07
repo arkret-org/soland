@@ -997,6 +997,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 ("realm_freeze", None) => arkret_wire::CurrentSelector::RealmFreeze,
                 ("realm_authority_root", None) => arkret_wire::CurrentSelector::RealmAuthorityRoot,
                 ("realm_profile", None) => arkret_wire::CurrentSelector::RealmProfile,
+                ("realm_preview_policy", None) => arkret_wire::CurrentSelector::RealmPreviewPolicy,
                 ("realm_policy_bundle", None) => arkret_wire::CurrentSelector::RealmPolicyBundle,
                 ("schema_definition", Some(schema_id)) => arkret_wire::CurrentSelector::SchemaDefinition {
                     schema_id: serde_json::from_value(schema_id).map_err(PersistenceError::database)?,

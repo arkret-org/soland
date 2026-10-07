@@ -14,9 +14,7 @@ use arkret_wire::{
 };
 use chrono::{DateTime, Utc};
 
-use super::{
-    AppError, AppState, invalid_request, local_authority_bundle, nonce_for_request, unavailable,
-};
+use super::{AppError, AppState, invalid_request, local_authority_bundle, unavailable};
 
 const MAX_BUNDLE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -150,6 +148,9 @@ async fn fetch_candidate(
     .await
     .map_err(unavailable)?;
     if !response.status().is_success() {
+        if matches!(response.status().as_u16(), 403 | 404) {
+            return Err(AppError::not_found("Realm authority not disclosed"));
+        }
         return Err(unavailable(
             "Realm authority candidate did not return a bundle",
         ));
@@ -338,6 +339,7 @@ pub(in crate::routing) async fn resolve_verified_authority(
         nonce: nonce.clone(),
     };
     let mut verified: Vec<LocatedRealmAuthority> = Vec::new();
+    let mut fetch_unavailable = false;
     for candidate in hints {
         // A locator naming this Station is answered on the equivalent local
         // path: the bundle is still verified like any other candidate, but no
@@ -347,6 +349,9 @@ pub(in crate::routing) async fn resolve_verified_authority(
         } else {
             fetch_remote_candidate(state, candidate, &request).await
         };
+        fetch_unavailable |= fetched
+            .as_ref()
+            .is_err_and(|error| error.code != crate::error::ErrorCode::NotFound);
         if let Some(located) =
             verify_candidate(state, candidate.service_id.as_str(), &request, fetched).await
         {
@@ -357,6 +362,9 @@ pub(in crate::routing) async fn resolve_verified_authority(
         .iter()
         .map(|located| located.authority.clone())
         .collect();
+    if verified.is_empty() && !fetch_unavailable {
+        return Err(AppError::not_found("Realm authority not disclosed"));
+    }
     // No locator led to a verified current governance Station, or the verified
     // ones disagree. Either way the Realm's current authority cannot be reached
     // now: a retryable upstream failure, never an internal error and never a
@@ -399,13 +407,13 @@ async fn fetch_remote_candidate(
 pub(super) async fn resolve_join_target_authority(
     state: &AppState,
     target: &RealmJoinTarget,
-    request_id: &RequestId,
+    _request_id: &RequestId,
 ) -> Result<LocatedRealmAuthority, AppError> {
     resolve_verified_authority(
         state,
         &target.realm_id,
         &target.authority_locator_hints,
-        &nonce_for_request(request_id)?,
+        &super::preview::fresh_nonce()?,
     )
     .await
 }

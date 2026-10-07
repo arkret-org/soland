@@ -781,6 +781,19 @@ pub(crate) async fn recover_forwarded_original(
         .map_err(|e| temporarily_unavailable(e.message))?
     };
     validate_recovery_caller(state, session, event).await?;
+    if attempt.accepted_commit.is_none() {
+        let stream = arkret_wire::CommitStreamRef::from_scope(
+            &event.scope_ref,
+            Some(event.realm_id.clone()),
+        )
+        .map_err(wire_refusal)?;
+        if commits.replica_anchor_for_stream(&stream).await?.is_none() {
+            // A queued first join has no accepted result to recover. Continue
+            // through current admission and exact forwarding; the replica
+            // recovery helper must still require an Accepted opening join.
+            return Ok(None);
+        }
+    }
     let original_commit = super::replica_anchor::ensure_forwarded_target(
         state,
         &governance,

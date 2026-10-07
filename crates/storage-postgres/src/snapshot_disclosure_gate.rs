@@ -36,6 +36,7 @@ pub(crate) const DISCLOSED_EVENT_KINDS: &[EventKind] = &[
     EventKind::RealmJoinRule,
     EventKind::RealmHistoryAccess,
     EventKind::RealmReadReceiptPolicy,
+    EventKind::RealmPreviewPolicy,
     EventKind::RealmDiscovery,
     EventKind::RealmAlias,
     EventKind::RealmPlaintextVisibleServices,
@@ -1501,6 +1502,9 @@ pub(crate) fn disclose_to_account(
                 let policy: arkret_models_collaboration::events_payloads::ReadReceiptPolicyPayload =
                     serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
                 policy.validate().map_err(PersistenceError::database)?;
+            }
+            CurrentSelector::RealmPreviewPolicy => {
+                let _: arkret_models_collaboration::events_payloads::preview::PreviewPolicyPayloadValue = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
             }
             CurrentSelector::MemberState { actor_id } => {
                 own_join |=

@@ -7,6 +7,28 @@ use arkret_models_collaboration::events_payloads::call::{
 use super::*;
 
 impl ProjectionState {
+    /// Cache an already accepted preview policy without using it for admission.
+    pub(crate) fn apply_realm_preview_policy(&mut self, operation: &Operation) -> ProjectionEffect {
+        let policy = match serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::preview::PreviewPolicyPayload,
+        >(operation.payload.clone())
+        {
+            Ok(policy) => policy,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        };
+        let realm_id = operation.realm_id.to_string();
+        self.set_realm_facet(
+            &realm_id,
+            facet::REALM_PREVIEW_POLICY,
+            serde_json::to_value(policy.value).expect("serializable preview policy"),
+        );
+        ProjectionEffect::RealmPreviewPolicyProjected { realm_id }
+    }
+
     /// Apply one closed Realm-bootstrap facet.
     ///
     /// Each of these kinds writes exactly one Realm-singleton facet whose

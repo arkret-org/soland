@@ -373,7 +373,7 @@ impl GovernedRealm {
     }
 }
 
-async fn set_preview_policy(
+async fn set_preview_metadata(
     store: &dyn soland_storage::PersistenceStore,
     realm_id: &RealmId,
     policy: Option<serde_json::Value>,
@@ -404,6 +404,34 @@ async fn set_preview_policy(
         )
         .await
         .unwrap();
+}
+
+async fn set_preview_policy(
+    store: &dyn soland_storage::PersistenceStore,
+    realm: &mut GovernedRealm,
+    policy: Option<serde_json::Value>,
+) {
+    let value = policy.unwrap_or_else(
+        || serde_json::json!({"mode":"none","audiences":["anonymous"],"fields":["title"]}),
+    );
+    let event = fixture_event(
+        EventKind::RealmPreviewPolicy,
+        ScopeRef::Realm {
+            realm_id: realm.realm_id.clone(),
+        },
+        &realm.founder,
+        serde_json::json!({"value":value,"reason":"preview policy fixture"}),
+        at(),
+    );
+    let transaction = realm_transaction(
+        &realm.authority,
+        &realm.method,
+        &event,
+        realm.head.stream_position + 1,
+        Some(realm.head.commit_id.clone()),
+    );
+    commit_projected_invite(store, transaction.clone()).await;
+    realm.head = transaction.commit;
 }
 
 fn station() -> (
@@ -470,12 +498,15 @@ async fn governance_preview_discloses_only_policy_fields_to_an_admitted_audience
     ));
     assert_not_found(&state, &request(&unknown, &bob, None)).await;
     assert_not_found(&state, &request(&realm.realm_id, &bob, None)).await;
+    // An unconfirmed metadata cache cannot create a preview entitlement.
+    set_preview_metadata(store.as_ref(), &realm.realm_id, Some(serde_json::json!({"mode":"directory_card","audiences":["anonymous"],"fields":["title"]}))).await;
+    assert_not_found(&state, &request(&realm.realm_id, &bob, None)).await;
 
     // An invited-only policy discloses nothing to a requester without a
     // bound invite, and exactly the listed fields to the bound invitee.
     set_preview_policy(
         store.as_ref(),
-        &realm.realm_id,
+        &mut realm,
         Some(serde_json::json!({
             "mode":"directory_card",
             "audiences":["invited"],
@@ -546,7 +577,7 @@ async fn governance_preview_discloses_only_policy_fields_to_an_admitted_audience
     // preview: only the required members, no display name.
     set_preview_policy(
         store.as_ref(),
-        &realm.realm_id,
+        &mut realm,
         Some(serde_json::json!({
             "mode":"directory_card",
             "audiences":["authenticated"],
@@ -563,7 +594,7 @@ async fn governance_preview_discloses_only_policy_fields_to_an_admitted_audience
     // A current member is admitted by the realm_member audience only.
     set_preview_policy(
         store.as_ref(),
-        &realm.realm_id,
+        &mut realm,
         Some(serde_json::json!({
             "mode":"directory_card",
             "audiences":["realm_member"],
@@ -609,7 +640,7 @@ async fn governance_preview_discloses_only_policy_fields_to_an_admitted_audience
     // Mode none is no preview at all.
     set_preview_policy(
         store.as_ref(),
-        &realm.realm_id,
+        &mut realm,
         Some(serde_json::json!({
             "mode":"none",
             "audiences":["anonymous"],
@@ -622,7 +653,7 @@ async fn governance_preview_discloses_only_policy_fields_to_an_admitted_audience
     // A Realm governed by another Station is not answered here, even with a
     // permissive policy in this Station's projection.
     let elsewhere = DidCoreId::new("ak:did_core:web:other-governance.example").unwrap();
-    let foreign = GovernedRealm::admit(
+    let mut foreign = GovernedRealm::admit(
         store.as_ref(),
         &elsewhere,
         arkret_wire::DidUrl::new("did:web:other-governance.example#authority").unwrap(),
@@ -630,7 +661,7 @@ async fn governance_preview_discloses_only_policy_fields_to_an_admitted_audience
     .await;
     set_preview_policy(
         store.as_ref(),
-        &foreign.realm_id,
+        &mut foreign,
         Some(serde_json::json!({
             "mode":"directory_card",
             "audiences":["anonymous"],

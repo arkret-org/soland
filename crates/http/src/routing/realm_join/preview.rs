@@ -54,7 +54,7 @@ fn governance_unavailable(error: impl std::fmt::Display) -> AppError {
     )
 }
 
-fn fresh_nonce() -> Result<Base64UrlString, AppError> {
+pub(super) fn fresh_nonce() -> Result<Base64UrlString, AppError> {
     Base64UrlString::new(
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>()),
     )
@@ -83,9 +83,21 @@ pub(super) async fn self_preview(
         .await
         .map_err(invalid_request)?;
     body.validate().map_err(invalid_request)?;
-    // The hint set was validated above, so a failure here means no locator
-    // led to a verified, converging current governance Station: the target
-    // is unresolvable and shares the non-enumerating `not_found`.
+    let started = tokio::time::Instant::now();
+    let answer = Box::pin(resolve_self_preview(state, account_id, body)).await;
+    tokio::time::sleep_until(started + PEER_PREVIEW_TIMING_FLOOR).await;
+    answer
+}
+
+/// Hold every target-dependent self answer to the same floor, including
+/// locator refusals and the equivalent local governance path.
+async fn resolve_self_preview(
+    state: &AppState,
+    account_id: AccountId,
+    body: SelfRealmJoinPreviewRequestBody,
+) -> JsonResult<SelfRealmJoinPreviewOutcome> {
+    // Undisclosed or invalid evidence remains non-enumerating. Transport
+    // failure and divergent verified chains require a retry without changing source.
     let located = super::resolve_verified_authority(
         state,
         &body.target.realm_id,
@@ -93,7 +105,13 @@ pub(super) async fn self_preview(
         &fresh_nonce()?,
     )
     .await
-    .map_err(|_| preview_not_found())?;
+    .map_err(|error| {
+        if error.code == crate::error::ErrorCode::TemporarilyUnavailable {
+            error
+        } else {
+            preview_not_found()
+        }
+    })?;
     let peer_request = PeerRealmJoinPreviewRequestBody {
         request_id: body.request_id.clone(),
         realm_id: body.target.realm_id.clone(),
@@ -192,9 +210,6 @@ pub(super) async fn governance_preview(
         }
         None => false,
     };
-    let Some(policy) = effective_preview_policy(state, &request.realm_id).await? else {
-        return Err(preview_not_found());
-    };
     let member = authorities
         .local_current_member_joined(
             &request.realm_id,
@@ -215,6 +230,13 @@ pub(super) async fn governance_preview(
             "the governing tenure changed while the preview was read",
         ));
     }
+    let Some(policy) = singleton_value(
+        &material.current_state_entries,
+        &CurrentSelector::RealmPreviewPolicy,
+    )
+    .and_then(|value| serde_json::from_value::<PreviewPolicyPayloadValue>(value.clone()).ok()) else {
+        return Err(preview_not_found());
+    };
     disclose(
         &policy,
         PreviewAudience { invited, member },
@@ -245,23 +267,6 @@ async fn invite_binds_requester(
             && invite.state == arkret_wire::InviteState::Pending
             && invite.expires_at > at
     }))
-}
-
-/// The accepted `ak.realm.preview_policy` value of this Realm, as the
-/// governing Station projected it from its committed Events. A missing or
-/// undecodable policy is "no effective preview policy".
-async fn effective_preview_policy(
-    state: &AppState,
-    realm_id: &RealmId,
-) -> Result<Option<PreviewPolicyPayloadValue>, AppError> {
-    let meta = state
-        .realms()
-        .realm_metadata(realm_id.as_str())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(meta
-        .and_then(|meta| meta.preview_policy)
-        .and_then(|policy| serde_json::from_value::<PreviewPolicyPayloadValue>(policy).ok()))
 }
 
 #[derive(Clone, Copy, Debug)]

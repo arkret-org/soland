@@ -765,6 +765,19 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
         let singleton = match selector {
             S::RealmGenesis => Some("realm_genesis"),
             S::RealmProfile => Some("realm_profile"),
+            S::RealmPreviewPolicy => {
+                if source_stream_ref
+                    != &(arkret_wire::CommitStreamRef::Realm {
+                        realm_id: realm_id.clone(),
+                    })
+                {
+                    return Err(malformed(
+                        "preview policy requires the exact Realm source stream",
+                    ));
+                }
+                let _: arkret_models_collaboration::events_payloads::preview::PreviewPolicyPayloadValue = serde_json::from_value(value.clone()).map_err(malformed)?;
+                Some("realm_preview_policy")
+            }
             S::RealmReadReceiptPolicy => {
                 if source_stream_ref
                     != &(arkret_wire::CommitStreamRef::Realm {
@@ -1402,6 +1415,9 @@ pub(crate) async fn advance_in_connection(
         }
         arkret_wire::EventKind::RealmReadReceiptPolicy => {
             crate::realm_bootstrap_current_results::commit_read_receipt_policy_current_result_in_connection(conn, event, commit).await?;
+        }
+        arkret_wire::EventKind::RealmPreviewPolicy => {
+            crate::realm_bootstrap_current_results::commit_preview_policy_current_result_in_connection(conn, event, commit).await?;
         }
         arkret_wire::EventKind::RealmProfile => {
             crate::realm_bootstrap_current_results::commit_realm_profile_current_result_in_connection(
@@ -2182,6 +2198,7 @@ mod tests {
             "realm_join_rule",
             "realm_history_access",
             "realm_read_receipt_policy",
+            "realm_preview_policy",
             "realm_discovery",
             "realm_alias",
             "realm_plaintext_visible_services",

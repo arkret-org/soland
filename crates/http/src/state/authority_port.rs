@@ -86,6 +86,7 @@ fn self_event_route(kind: &arkret_wire::EventKind) -> ServiceResult<SelfEventRou
         | EventKind::DirectConversationBound
         | EventKind::RealmSetDefaultStrand
         | EventKind::RealmReadReceiptPolicy
+        | EventKind::RealmPreviewPolicy
         | EventKind::MemberIdentityUpdate
         | EventKind::CallCreate
         | EventKind::MessageCreate
@@ -781,6 +782,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::RealmReadReceiptPolicy,
+            EventKind::RealmPreviewPolicy,
             EventKind::RealmTombstone,
             EventKind::RealmDestroy,
             EventKind::RealmArchive,
@@ -796,7 +798,10 @@ mod tests {
             EventKind::StrandMove,
             EventKind::StrandReorder,
             EventKind::StrandWatchSet,
+            EventKind::AgentInteractionSet,
             EventKind::SpaceCreate,
+            EventKind::SpaceParent,
+            EventKind::SpaceTombstone,
             EventKind::RealmSetDefaultStrand,
             EventKind::CallCreate,
             EventKind::MessageCreate,
@@ -845,6 +850,7 @@ mod tests {
             EventKind::StrandCreate,
             EventKind::RealmProfile,
             EventKind::RealmReadReceiptPolicy,
+            EventKind::RealmPreviewPolicy,
             EventKind::RealmTombstone,
             EventKind::RealmDestroy,
             EventKind::RealmArchive,
@@ -860,7 +866,10 @@ mod tests {
             EventKind::StrandMove,
             EventKind::StrandReorder,
             EventKind::StrandWatchSet,
+            EventKind::AgentInteractionSet,
             EventKind::SpaceCreate,
+            EventKind::SpaceParent,
+            EventKind::SpaceTombstone,
             EventKind::DirectConversationBound,
             EventKind::RealmSetDefaultStrand,
             EventKind::CallCreate,

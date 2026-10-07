@@ -671,7 +671,7 @@ const EFFECT_MANIFEST: &[EffectRegistration] = &[
         owner: EventEffectOwnership::TypedResultWriter,
         scope: EventWireScope::DurableEvent,
         reducer_input: true,
-        slot: CacheSlot::FailClosed,
+        slot: CacheSlot::Shared(apply_realm_preview_policy_dispatch),
     },
     EffectRegistration {
         kind: "ak.realm.profile",

@@ -80,7 +80,12 @@ pub(crate) async fn local_authority_bundle(
             crate::wire::now(),
         )
         .await
-        .map_err(unavailable)
+        .map_err(|error| match error {
+            soland_services::ServiceError::NotFound(_) => {
+                AppError::not_found("Realm authority not found")
+            }
+            other => unavailable(other),
+        })
 }
 
 #[handler]
