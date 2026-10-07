@@ -187,6 +187,8 @@ async fn third_party_claim_verifies_signatures_at_cut_and_accepts_exact_claimant
         "subject_signature",
         "pcr_device",
         "subject_key",
+        "binding_key",
+        "event_digest",
         "proof_cut",
         "create_ref",
         "token",
@@ -227,6 +229,10 @@ async fn third_party_claim_verifies_signatures_at_cut_and_accepts_exact_claimant
         );
         match case {
             "subject_key" => proof.subject_public_key = [0u8; 32],
+            "binding_key" => proof.binding_public_key = [0u8; 32],
+            "event_digest" => {
+                proof.event_digest = format!("sha256:{}", "0".repeat(64));
+            }
             "proof_cut" => proof.committed_at += chrono::TimeDelta::seconds(1),
             "create_ref" => proof.create_ref.stream_position += 1,
             _ => (),
@@ -396,18 +402,18 @@ async fn third_party_claim_verifies_signatures_at_cut_and_accepts_exact_claimant
         second.is_ok(),
         "one concurrent claim must win: {first:?} {second:?}"
     );
-    let (request, proof, subject, subject_key) = if first.is_ok() {
+    let (request, subject, subject_key) = if first.is_ok() {
         assert_eq!(
             event_row_count(&pool, rival.authority_commit.event.event_id.as_str()).await,
             0
         );
-        (request, proof, subject, subject_key)
+        (request, subject, subject_key)
     } else {
         assert_eq!(
             event_row_count(&pool, request.authority_commit.event.event_id.as_str()).await,
             0
         );
-        (rival, rival_proof, rival_subject, rival_key)
+        (rival, rival_subject, rival_key)
     };
     assert_eq!(
         member_snapshot(&pool, realm).await,
@@ -415,9 +421,16 @@ async fn third_party_claim_verifies_signatures_at_cut_and_accepts_exact_claimant
         "accepted claim is a proposal and cannot write membership"
     );
     // Exact replay returns the stored effect; evidence is not fetched anew.
-    uow.commit_event_batch(claim_batch(request.clone(), Some(proof)))
+    let accepted_state = invite_families(&pool, realm).await;
+    uow.commit_event_batch(claim_batch(request.clone(), None))
         .await
         .unwrap();
+    assert_eq!(invite_families(&pool, realm).await, accepted_state);
+    assert_eq!(
+        event_row_count(&pool, request.authority_commit.event.event_id.as_str()).await,
+        1,
+        "exact retry must not create another canonical Event"
+    );
     let (reused, reused_proof) = claim_request(
         &request,
         &create,
