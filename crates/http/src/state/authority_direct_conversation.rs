@@ -281,6 +281,15 @@ pub(super) async fn submit_peer_direct_conversation_founding(
             .each_ref()
             .map(|item| item.event_submission.clone()),
     };
+    if request.committed_events.iter().any(|item| matches!(
+        item.producer_signer_fact,
+        Some(arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Service(_))
+    )) {
+        return Err(ServiceError::protocol(
+            arkret_wire::ErrorCode::SignatureInvalid,
+            "Direct Conversation founding requires original Account producer sources",
+        ));
+    }
     let transactions = request
         .committed_events
         .each_ref()
@@ -288,7 +297,9 @@ pub(super) async fn submit_peer_direct_conversation_founding(
             expected_authority: authority.clone(),
             event: item.event_submission.event.clone(),
             commit: item.source_commit.clone(),
-            producer_signer_fact: item.producer_signer_fact.clone(),
+            producer_signer_fact: item.producer_signer_fact.as_ref().and_then(
+                arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::as_human
+            ).cloned(),
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -384,7 +395,7 @@ pub(super) async fn submit_peer_direct_conversation_founding(
                 &request.committed_events[index - 1].source_commit,
             )
         };
-        soland_services::committed_receipt::verify_committed_event_receipt_with_fact(
+        soland_services::committed_receipt::verify_committed_event_receipt_with_source(
             state.persistence(),
             &item.event_submission.event,
             commit,

@@ -1663,8 +1663,8 @@ pub(crate) async fn scan_stream_for_peer(
         let mut producer_signer_facts = Vec::new();
         for row in &committed_events {
             if let CommittedEventView::Full(full) = row {
-                if let Some(fact) = crate::agent_producer_signer_keys::human_source_for_commit_in_connection(conn, &full.event, &full.commit).await? {
-                    producer_signer_facts.push(arkret_models_collaboration::authority_commit::HumanHistoricalSignerFactEntry {
+                if let Some(fact) = crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(conn, &full.event, &full.commit).await? {
+                    producer_signer_facts.push(arkret_models_collaboration::authority_commit::HistoricalProducerSignerFactEntry {
                         target: arkret_wire::CommittedEventRef { event_id: full.event.event_id.clone(), commit_id: full.commit.commit_id.clone(), stream_ref: full.commit.stream_ref.clone(), stream_position: full.commit.stream_position },
                         producer_signer_fact: fact,
                     });

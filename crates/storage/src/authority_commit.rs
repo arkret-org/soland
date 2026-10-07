@@ -1259,7 +1259,7 @@ pub struct CommittedReplica {
     pub event: arkret_wire::Event,
     pub commit: arkret_wire::RealmCommit,
     pub producer_signer_fact:
-        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
     /// The immutable Genesis selector carried by an authenticated
     /// committed-replication item. A verified scan has no such carrier.
     pub genesis_event_ref: Option<EventId>,
@@ -1401,6 +1401,15 @@ pub trait AuthorityCommitStore: Send + Sync {
     ) -> PersistenceResult<
         Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
     >;
+    async fn historical_producer_signer_fact(
+        &self,
+        event: &Event,
+        commit: &RealmCommit,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+    > {
+        Ok(self.human_signer_fact(event, commit).await?.map(Into::into))
+    }
     /// Read an immutable source-only candidate. Admission repeats this at the locked cut.
     async fn prepare_human_signer_fact(
         &self,

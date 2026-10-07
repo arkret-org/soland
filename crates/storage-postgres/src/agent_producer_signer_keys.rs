@@ -1,7 +1,7 @@
 //! Historical producer keys frozen in the original admission transaction.
 //!
 //! The legacy table name is retained; its closed result now holds either
-//! registered Agent or account-device selectors, never inferred live keys.
+//! registered Agent, account-device or Applet Service selectors, never inferred live keys.
 
 use arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload;
 use arkret_models_identity::{
@@ -665,18 +665,7 @@ pub(crate) async fn retain_prepared_human_in_connection(
     commit: &arkret_wire::RealmCommit,
     fact: &arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact,
 ) -> PersistenceResult<()> {
-    validate_human_fact_binding(event, commit, Some(fact))?;
-    retain_outcome_in_connection(conn, event, commit, human_fact_outcome(fact, commit)).await?;
-    let written = sql_query("UPDATE agent_producer_signer_keys SET human_source_fact=$2 WHERE commit_id=$1 AND human_source_fact IS NULL")
-        .bind::<Text,_>(commit.commit_id.as_str())
-        .bind::<Jsonb,_>(serde_json::to_value(fact).map_err(PersistenceError::database)?)
-        .execute(&mut *conn).await.map_err(PersistenceError::database)?;
-    if written != 1 {
-        return Err(PersistenceError::Conflict(
-            "Human original source was already frozen".into(),
-        ));
-    }
-    Ok(())
+    retain_prepared_producer_in_connection(conn, event, commit, &fact.clone().into()).await
 }
 
 pub(crate) async fn human_source_for_commit_in_connection(
@@ -686,12 +675,106 @@ pub(crate) async fn human_source_for_commit_in_connection(
 ) -> PersistenceResult<
     Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
 > {
+    let fact = producer_source_for_commit_in_connection(conn, event, commit).await?;
+    fact.map(|source| match source {
+        arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Human(
+            fact,
+        ) => Ok(fact),
+        _ => Err(PersistenceError::Conflict(
+            "Human source lookup names a Service producer".into(),
+        )),
+    })
+    .transpose()
+}
+
+pub(crate) fn validate_producer_fact_binding(
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    fact: Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+) -> PersistenceResult<()> {
+    match (commit.producer_signer_fact_digest.as_ref(), fact) {
+        (Some(_), Some(fact)) => {
+            let suite = event.realm_id.digest_suite_code().digest_suite();
+            fact.validate_commit_binding(
+                &arkret_wire::CommittedEventFullView {
+                    event: event.clone(),
+                    commit: commit.clone(),
+                },
+                suite,
+            )
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            arkret_identity::account_device_signer_evidence::verify_historical_producer_event_signature(event, fact, suite)
+                .map_err(|error| PersistenceError::Conflict(format!("original producer signature is invalid: {error}")))?;
+        }
+        (None, None) => {}
+        _ => {
+            return Err(PersistenceError::Conflict(
+                "original producer source and signed Commit digest differ".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn producer_fact_outcome(
+    fact: &arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact,
+    commit: &arkret_wire::RealmCommit,
+) -> SignerKeyQueryResult {
+    use arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact as Fact;
+    match fact {
+        Fact::Human(fact) => human_fact_outcome(fact, commit),
+        Fact::Service(fact) => SignerKeyQueryResult::HistoricalServiceResolved {
+            selector: SignerKeyQuerySelector::HistoricalEvent {
+                sender: HistoricalSignerKeyQuerySender::Service {
+                    actor: fact.actor.clone(),
+                    verification_method: fact.verification_method.clone(),
+                    committed_event_ref: arkret_wire::CommittedEventRef {
+                        event_id: fact.event_id.clone(),
+                        commit_id: commit.commit_id.clone(),
+                        stream_ref: commit.stream_ref.clone(),
+                        stream_position: commit.stream_position,
+                    },
+                },
+            },
+            key: fact.key.clone(),
+            accepted_at: fact.accepted_at,
+        },
+    }
+}
+
+pub(crate) async fn retain_prepared_producer_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    fact: &arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact,
+) -> PersistenceResult<()> {
+    validate_producer_fact_binding(event, commit, Some(fact))?;
+    retain_outcome_in_connection(conn, event, commit, producer_fact_outcome(fact, commit)).await?;
+    let written = sql_query("UPDATE agent_producer_signer_keys SET human_source_fact=$2 WHERE commit_id=$1 AND human_source_fact IS NULL")
+        .bind::<Text,_>(commit.commit_id.as_str())
+        .bind::<Jsonb,_>(serde_json::to_value(fact).map_err(PersistenceError::database)?)
+        .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+    if written != 1 {
+        return Err(PersistenceError::Conflict(
+            "original producer source was already frozen".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) async fn producer_source_for_commit_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<
+    Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+> {
     let row = sql_query("SELECT human_source_fact AS payload FROM agent_producer_signer_keys WHERE commit_id=$1 AND human_source_fact IS NOT NULL")
         .bind::<Text,_>(commit.commit_id.as_str()).get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
     let fact = row
         .map(|row| serde_json::from_value(row.payload).map_err(PersistenceError::database))
         .transpose()?;
-    validate_human_fact_binding(event, commit, fact.as_ref())?;
+    validate_producer_fact_binding(event, commit, fact.as_ref())?;
     Ok(fact)
 }
 
@@ -749,10 +832,12 @@ pub(crate) async fn read(
         serde_json::from_value(row.envelope).map_err(PersistenceError::database)?;
     let commit: arkret_wire::RealmCommit =
         serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
-    if event
+    if (event
         .human_device_producer()
         .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?
         .is_some()
+        || (event.applet_id.is_some()
+            && matches!(event.actual_signer(), arkret_wire::ActorId::Service { .. })))
         && !native_control_target_in_connection(&mut conn, &event.realm_id).await?
     {
         let Some(raw) = row.human_source_fact else {
@@ -760,14 +845,18 @@ pub(crate) async fn read(
             return Ok(None);
         };
         let fact = serde_json::from_value(raw).map_err(PersistenceError::database)?;
-        validate_human_fact_binding(&event, &commit, Some(&fact))?;
-        if outcome != human_fact_outcome(&fact, &commit) {
+        validate_producer_fact_binding(&event, &commit, Some(&fact))?;
+        if outcome != producer_fact_outcome(&fact, &commit) {
             historical_fact_diagnostic("ordinary_read", "immutable_fact_outcome_mismatch");
             return Ok(None);
         }
     }
     let matches = outcome.selector() == selector
-        && matches!(outcome, SignerKeyQueryResult::HistoricalResolved { .. });
+        && matches!(
+            outcome,
+            SignerKeyQueryResult::HistoricalResolved { .. }
+                | SignerKeyQueryResult::HistoricalServiceResolved { .. }
+        );
     historical_fact_diagnostic(
         "ordinary_read",
         if matches {

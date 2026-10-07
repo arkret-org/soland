@@ -7,7 +7,7 @@ use arkret_models_collaboration::events_payloads::moderation::FrankingProof;
 use arkret_wire::{ActorId, Base64UrlString, EventKind};
 use ed25519_dalek::Signer as _;
 use soland_services::committed_receipt::{
-    CommitContinuity, ReceivedProducer, verify_committed_event_receipt_with_fact,
+    CommitContinuity, ReceivedProducer, verify_committed_event_receipt_with_source,
 };
 use soland_services::{ServiceError, ServiceResult};
 
@@ -137,9 +137,9 @@ pub(crate) async fn verify_franking_committed_pair(
     }
     let producer_signer_fact = state
         .authority_commits()
-        .human_signer_fact(&pair.event, &pair.commit)
+        .historical_producer_signer_fact(&pair.event, &pair.commit)
         .await?;
-    let received = verify_committed_event_receipt_with_fact(
+    let received = verify_committed_event_receipt_with_source(
         state.persistence(),
         &pair.event,
         &pair.commit,

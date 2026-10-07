@@ -27,7 +27,7 @@ use arkret_wire::{
     RequestId, StreamScanDirection, StreamScanOutcome, StreamScanRequest,
 };
 use soland_services::committed_receipt::{
-    CommitContinuity, verify_committed_event_receipt_with_fact,
+    CommitContinuity, verify_committed_event_receipt_with_source,
 };
 use soland_storage::{
     CommittedChainNode, CommittedReplica, CommittedReplicaRole, ReplicaAnchorInstall,
@@ -620,11 +620,11 @@ pub(crate) async fn ensure_forwarded_target(
                 return Err("forward recovery original is not covered by the held prefix".into());
             }
             let fact = commits
-                .human_signer_fact(&original.event, &original.commit)
+                .historical_producer_signer_fact(&original.event, &original.commit)
                 .await
                 .map_err(temporary)?;
             ensure_historical_method_key(state, located, &original.commit.signature).await?;
-            verify_committed_event_receipt_with_fact(
+            verify_committed_event_receipt_with_source(
                 state.persistence(),
                 &original.event,
                 &original.commit,
@@ -696,7 +696,7 @@ pub(crate) async fn ensure_forwarded_target(
                     unreachable!("the target validator requires Full");
                 };
                 ensure_historical_method_key(state, located, &commit.signature).await?;
-                verify_committed_event_receipt_with_fact(
+                verify_committed_event_receipt_with_source(
                     state.persistence(),
                     &full.event,
                     commit,
@@ -791,11 +791,11 @@ async fn open_forwarded_join(
             return Err("pending opening join differs from its frozen Full".into());
         }
         let fact = commits
-            .human_signer_fact(&original.event, &original.commit)
+            .historical_producer_signer_fact(&original.event, &original.commit)
             .await
             .map_err(temporary)?;
         ensure_historical_method_key(state, located, &commit.signature).await?;
-        verify_committed_event_receipt_with_fact(
+        verify_committed_event_receipt_with_source(
             state.persistence(),
             &original.event,
             &original.commit,
@@ -849,7 +849,7 @@ async fn open_forwarded_join(
                         .map(|entry| entry.producer_signer_fact.clone());
                     ensure_historical_method_key(state, located, &commit.signature).await?;
                     require_forward_source(state, session, event, located).await?;
-                    verify_committed_event_receipt_with_fact(
+                    verify_committed_event_receipt_with_source(
                         state.persistence(),
                         &full.event,
                         &full.commit,
@@ -1069,14 +1069,14 @@ async fn store_scanned(
     located: &mut LocatedRealmAuthority,
     held: &RealmCommit,
     item: &CommittedEventView,
-    fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    fact: Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
 ) -> Result<(), String> {
     let commit = item.commit();
     ensure_historical_method_key(state, located, &commit.signature).await?;
     let commits = state.authority_commits();
     match item {
         CommittedEventView::Full(view) => {
-            verify_committed_event_receipt_with_fact(
+            verify_committed_event_receipt_with_source(
                 state.persistence(),
                 &view.event,
                 commit,

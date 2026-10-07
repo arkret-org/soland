@@ -753,7 +753,7 @@ pub(crate) async fn plan_realm_fanout_in_connection(
     let genesis_event_ref = accepted_mls_genesis_for_fanout(conn, event).await?;
     freeze_welcomes_in_connection(conn, event, commit, welcomes).await?;
     let producer_signer_fact =
-        crate::agent_producer_signer_keys::human_source_for_commit_in_connection(
+        crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(
             conn, event, commit,
         )
         .await?;

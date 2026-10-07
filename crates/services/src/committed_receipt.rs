@@ -1,7 +1,7 @@
 //! Non-governance receipt of one committed Event (federation §3,
 //! device-lifecycle §8.2.2).
 //!
-//! Digest-bearing ordinary Human receipts use the exact original frozen fact:
+//! Digest-bearing ordinary Human and Applet Service receipts use the exact original frozen fact:
 //! governance chain, Commit content ID/signature, target binding and real Event
 //! Ed signature are independently checked. Receipt never resolves current PCR
 //! keys for these rows. Legacy/native receipts keep their separate role gates;
@@ -39,6 +39,9 @@ pub enum ReceivedProducer {
     /// A human device of an Account this Station hosts; its producer proof
     /// verifies under the original frozen fact, independently of current PCR.
     HostedHumanDevice(HumanDeviceProducer),
+    /// An Applet Service whose original installation and producer key were
+    /// verified through the immutable source bound by the governance Commit.
+    GovernanceCommittedService,
     /// Not a human Account device (Agent, Service or controller method); the
     /// caller applies that producer's own signer evidence rule.
     OtherSigner,
@@ -119,6 +122,37 @@ pub async fn verify_committed_event_receipt_with_fact(
     digest_suite: DigestSuite,
     fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
 ) -> ServiceResult<ReceivedProducer> {
+    let source = fact
+        .cloned()
+        .map(arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Human);
+    verify_committed_event_receipt_with_source(
+        local_pcr,
+        event,
+        commit,
+        continuity,
+        authority,
+        keys,
+        receiver,
+        digest_suite,
+        source.as_ref(),
+    )
+    .await
+}
+
+/// Verify either registered original producer source. Neither branch resolves
+/// a current key or replays hidden authorization history at the receiver.
+#[allow(clippy::too_many_arguments)]
+pub async fn verify_committed_event_receipt_with_source(
+    local_pcr: &dyn DeviceRevocationStore,
+    event: &Event,
+    commit: &RealmCommit,
+    continuity: CommitContinuity<'_>,
+    authority: &VerifiedRealmAuthority,
+    keys: &(dyn RealmAuthorityKeyDirectory + Sync),
+    receiver: &DidCoreId,
+    digest_suite: DigestSuite,
+    fact: Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+) -> ServiceResult<ReceivedProducer> {
     let received = verify_non_governance_committed_event(
         event,
         commit,
@@ -130,24 +164,34 @@ pub async fn verify_committed_event_receipt_with_fact(
     )?;
     match (commit.producer_signer_fact_digest.as_ref(), fact) {
         (Some(_), Some(fact)) => {
-            arkret_identity::account_device_signer_evidence::verify_historical_human_committed_event(
+            arkret_identity::account_device_signer_evidence::verify_historical_producer_committed_event(
                 &arkret_wire::CommittedEventFullView { event: event.clone(), commit: commit.clone() },
                 fact, authority, keys, digest_suite,
             ).map_err(|e| ServiceError::protocol(ErrorCode::SignatureInvalid, e))?;
-            return Ok(received);
+            return Ok(if matches!(
+                fact,
+                arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Service(_)
+            ) {
+                ReceivedProducer::GovernanceCommittedService
+            } else {
+                received
+            });
         }
         (None, None) => {}
         _ => {
             return Err(ServiceError::protocol(
                 ErrorCode::SignatureInvalid,
-                "original Human source and Commit digest must be paired",
+                "original producer source and Commit digest must be paired",
             ));
         }
     }
-    if received != ReceivedProducer::OtherSigner {
+    if received != ReceivedProducer::OtherSigner
+        || (event.applet_id.is_some()
+            && matches!(event.actual_signer(), arkret_wire::ActorId::Service { .. }))
+    {
         return Err(ServiceError::protocol(
             ErrorCode::TemporarilyUnavailable,
-            "original ordinary Human signer source is unavailable",
+            "original ordinary producer signer source is unavailable",
         ));
     }
     // Native PCR audit does not enter this ordinary Full receipt boundary.

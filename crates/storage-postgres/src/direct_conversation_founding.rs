@@ -915,7 +915,7 @@ pub(crate) async fn admit_self_direct_conversation_founding_unit(
                                 CommittedEventSubmission {
                                     event_submission: unit.submission.events[index].clone(),
                                     source_commit: commits[index].clone(),
-                                    producer_signer_fact: unit.transactions[index].producer_signer_fact.clone(),
+                                    producer_signer_fact: unit.transactions[index].producer_signer_fact.clone().map(Into::into),
                                     genesis_event_ref: None,
                                     welcomes: None,
                                 }

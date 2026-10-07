@@ -2523,6 +2523,20 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         .await
     }
 
+    async fn historical_producer_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+    > {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(
+            &mut conn, event, commit,
+        )
+        .await
+    }
+
     async fn prepare_human_signer_fact(
         &self,
         event: &arkret_wire::Event,

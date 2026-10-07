@@ -443,6 +443,19 @@ impl AuthorityCommitApplication {
         Ok(self.store().human_signer_fact(event, commit).await?)
     }
 
+    pub async fn historical_producer_signer_fact(
+        &self,
+        event: &Event,
+        commit: &RealmCommit,
+    ) -> ServiceResult<
+        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+    > {
+        Ok(self
+            .store()
+            .historical_producer_signer_fact(event, commit)
+            .await?)
+    }
+
     pub async fn prepare_human_signer_fact(
         &self,
         event: &Event,

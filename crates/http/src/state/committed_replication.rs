@@ -26,7 +26,7 @@ use arkret_models_collaboration::governance::membership_invite::{
 use arkret_wire::{CommitStreamRef, ErrorCode, RealmId};
 use soland_services::authority_commit::AuthenticatedPeerContext;
 use soland_services::committed_receipt::{
-    CommitContinuity, verify_committed_event_receipt_with_fact,
+    CommitContinuity, verify_committed_event_receipt_with_source,
 };
 use soland_services::{ServiceError, ServiceResult};
 use soland_storage::{
@@ -272,7 +272,7 @@ async fn replicate_one(
         if existing.commit == *commit && existing.event == *event {
             let original_fact = state
                 .authority_commits()
-                .human_signer_fact(event, commit)
+                .historical_producer_signer_fact(event, commit)
                 .await?;
             if original_fact != item.producer_signer_fact {
                 return Err(ServiceError::Conflict(
@@ -353,7 +353,7 @@ async fn replicate_one(
         .map_or(CommittedReplicaRole::HeldStream, |member_account_id| {
             CommittedReplicaRole::OpeningJoin { member_account_id }
         });
-    verify_committed_event_receipt_with_fact(
+    verify_committed_event_receipt_with_source(
         state.persistence(),
         event,
         commit,

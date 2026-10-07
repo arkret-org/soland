@@ -722,7 +722,7 @@ pub(super) async fn install_committed_replica_in_connection(
     conn: &mut AsyncPgConnection,
     replica: &CommittedReplica,
 ) -> Result<CommittedReplicaOutcome, PgTransactionError> {
-    crate::agent_producer_signer_keys::validate_human_fact_binding(
+    crate::agent_producer_signer_keys::validate_producer_fact_binding(
         &replica.event,
         &replica.commit,
         replica.producer_signer_fact.as_ref(),
@@ -731,7 +731,7 @@ pub(super) async fn install_committed_replica_in_connection(
     match outcome {
         CommittedReplicaOutcome::Stored => {
             if let Some(fact) = replica.producer_signer_fact.as_ref() {
-                crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
+                crate::agent_producer_signer_keys::retain_prepared_producer_in_connection(
                     conn,
                     &replica.event,
                     &replica.commit,
@@ -742,7 +742,7 @@ pub(super) async fn install_committed_replica_in_connection(
         }
         CommittedReplicaOutcome::Duplicate => {
             let original =
-                crate::agent_producer_signer_keys::human_source_for_commit_in_connection(
+                crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(
                     conn,
                     &replica.event,
                     &replica.commit,
@@ -750,7 +750,7 @@ pub(super) async fn install_committed_replica_in_connection(
                 .await?;
             if original != replica.producer_signer_fact {
                 return Err(PersistenceError::Conflict(
-                    "replicated Human source differs from frozen original".into(),
+                    "replicated producer source differs from frozen original".into(),
                 )
                 .into());
             }

@@ -2383,7 +2383,8 @@ async fn verify_invite_commit(
     match received {
         soland_services::committed_receipt::ReceivedProducer::GovernanceCommittedHumanDevice
         | soland_services::committed_receipt::ReceivedProducer::HostedHumanDevice(_) => Ok(()),
-        soland_services::committed_receipt::ReceivedProducer::OtherSigner => Err(unavailable(
+        soland_services::committed_receipt::ReceivedProducer::OtherSigner
+        | soland_services::committed_receipt::ReceivedProducer::GovernanceCommittedService => Err(unavailable(
             "invite producer is not a human Account device; its signer evidence is not connected"
                 .to_owned(),
         )),
