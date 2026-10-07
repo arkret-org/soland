@@ -86,7 +86,28 @@ fn payload<T: serde::de::DeserializeOwned>(event: &Event) -> ServiceResult<T> {
 /// `genesis_material` is the raw GroupInfo and ratchet tree an
 /// `authority_forward` of a cross-Station Genesis carried (§5.1.2); a
 /// same-Station Genesis reads its local Blobs and passes `None`.
-pub(super) async fn admit_mls_event(
+pub(super) fn admit_mls_event<'a>(
+    state: &'a AppState,
+    event: &'a Event,
+    welcomes: &'a [MlsWelcomeDelivery],
+    genesis_material: Option<&'a MlsGenesisMaterial>,
+    producer: AdmittedProducer,
+    producer_key: &'a arkret_signatures::PublicKeyMaterial,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = ServiceResult<AuthoritySubmitOutcome>> + Send + 'a>,
+> {
+    // Keep the public-transition future out of ordinary submit-port frames.
+    Box::pin(admit_mls_event_inner(
+        state,
+        event,
+        welcomes,
+        genesis_material,
+        producer,
+        producer_key,
+    ))
+}
+
+async fn admit_mls_event_inner(
     state: &AppState,
     event: &Event,
     welcomes: &[MlsWelcomeDelivery],
@@ -121,7 +142,15 @@ pub(super) async fn admit_mls_event(
         }
     };
     let welcomes = verify_welcomes(state, event, welcomes, &added_leaves, producer_key).await?;
-    super::authority_self_event_unit::commit_event_unit(
+    let refusal_authority = if event.kind == EventKind::MlsCommit {
+        state
+            .authority_commits()
+            .current_authority(&event.realm_id)
+            .await?
+    } else {
+        None
+    };
+    let outcome = super::authority_self_event_unit::commit_event_unit(
         state,
         &EventAdmissionSubmission::new(event.clone()),
         producer,
@@ -133,7 +162,22 @@ pub(super) async fn admit_mls_event(
             ..SelfEventUnitEffects::default()
         },
     )
-    .await
+    .await?;
+    if let AuthoritySubmitOutcome::Rejected {
+        status: arkret_wire::AuthorityRejectionStatus::Rejected,
+        reason_code,
+    } = &outcome
+        && event.kind == EventKind::MlsCommit
+    {
+        let authority = refusal_authority
+            .ok_or_else(|| failed_precondition("MLS refusal has no current authority"))?;
+        return state
+            .authority_commits()
+            .finalize_mls_rejection(event, &authority, reason_code)
+            .await
+            .map_err(Into::into);
+    }
+    Ok(outcome)
 }
 
 /// Sign the original local claim's Add proof after the covering Commit has

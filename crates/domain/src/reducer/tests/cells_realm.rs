@@ -693,7 +693,12 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
             "initial_discoverability": "invite_only"
         }
     });
-    let first = apply_projected_create(&mut state, realm_id, payload.clone(), &hlc);
+    let create = make_operation(
+        arkret_wire::EventKind::RealmCreate,
+        realm_id,
+        payload.clone(),
+    );
+    let first = state.apply_projected(&create, &hlc);
     assert!(matches!(
         first,
         ProjectionEffect::RealmLifecycle { action, .. } if action == "create"
@@ -707,12 +712,17 @@ fn realm_create_requires_explicit_creator_member_and_rejects_duplicate_create() 
         "ordinary create must not synthesize membership; the final bootstrap slot owns it"
     );
     assert_eq!(
-        state
-            .realm_authority_root(realm_id)
-            .and_then(|root| root.get("governance_station_id"))
-            .and_then(Value::as_str),
-        Some(FIXTURE_GOVERNANCE_STATION),
-        "genesis folds the declared governance Station into the authority root"
+        state.realm_authority_root(realm_id),
+        Some(
+            &serde_json::to_value(arkret_wire::RealmAuthorityRootValue {
+                controller_actor_id: create.context.sender.clone(),
+                controller_epoch: 0,
+                authority_generation: 0,
+                authority_event_ref: create.context.accepted_event_id.clone(),
+            })
+            .unwrap()
+        ),
+        "genesis derives the closed four-field root from its exact accepted Event"
     );
 
     let duplicate = apply_projected_create(&mut state, realm_id, payload, &hlc);

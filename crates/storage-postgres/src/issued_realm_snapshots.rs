@@ -618,6 +618,7 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::Circle { .. }
             | CurrentSelector::Strand { .. }
+            | CurrentSelector::CalendarScheduleSource { .. }
             | CurrentSelector::Space { .. }
             | CurrentSelector::SpaceParent { .. }
             | CurrentSelector::SpaceChildScopePolicy { .. }
@@ -1623,7 +1624,34 @@ mod tests {
             error.conflict_code(),
             Some(soland_storage::ConflictCode::TemporarilyUnavailable),
         );
-        assert!(error.to_string().contains("concurrent update"));
+        // Match our SQLSTATE 40001 mapping, not PostgreSQL's localized text.
+        assert!(
+            error
+                .to_string()
+                .contains("the snapshot transaction lost a concurrent write race"),
+            "expected serialization failure mapping: {error}",
+        );
+        let retained =
+            sql_query("SELECT snapshot_json FROM realm_state_snapshots WHERE snapshot_id=$1")
+                .bind::<Text, _>(snapshot.snapshot_id.as_str())
+                .get_result::<SnapshotJsonRow>(&mut *stale)
+                .await
+                .unwrap();
+        assert_eq!(
+            retained.snapshot_json,
+            serde_json::to_value(&snapshot).unwrap()
+        );
+        let count = sql_query(
+            "SELECT COUNT(*) AS present FROM realm_state_snapshot_issuances WHERE snapshot_id=$1",
+        )
+        .bind::<Text, _>(snapshot.snapshot_id.as_str())
+        .get_result::<CountRow>(&mut *stale)
+        .await
+        .unwrap();
+        assert_eq!(
+            count.present, 1,
+            "failed issuance must create no duplicate row"
+        );
         // A new transaction sees the unchanged object and safely reissues it.
         let reissued = stale
             .transaction::<_, PgTransactionError, _>(async |conn| {

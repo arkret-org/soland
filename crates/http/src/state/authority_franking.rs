@@ -137,7 +137,7 @@ pub(crate) async fn verify_franking_committed_pair(
     }
     let producer_signer_fact = state
         .authority_commits()
-        .historical_producer_signer_fact(&pair.event, &pair.commit)
+        .producer_signer_fact(&pair.event, &pair.commit)
         .await?;
     let received = verify_committed_event_receipt_with_source(
         state.persistence(),

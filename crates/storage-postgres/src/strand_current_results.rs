@@ -210,7 +210,7 @@ async fn commit_strand_create_current_result_with_authority_in_connection(
     .bind::<BigInt, _>(stream_position)
     .bind::<Jsonb, _>(&value)
     .bind::<Timestamptz, _>(commit.committed_at)
-    .execute(conn)
+    .execute(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
     if inserted != 1 {
@@ -218,6 +218,7 @@ async fn commit_strand_create_current_result_with_authority_in_connection(
             "Strand current result already exists".to_owned(),
         ));
     }
+    refresh_calendar_source_in_connection(conn, event, commit, strand_id.as_str()).await?;
     Ok(())
 }
 
@@ -368,10 +369,11 @@ pub(crate) async fn commit_strand_transition_in_connection(
         .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(target.as_str())
         .bind::<Text,_>(commit.commit_id.as_str()).bind::<BigInt,_>(position).bind::<Jsonb,_>(&post)
         .bind::<Timestamptz,_>(commit.committed_at).bind::<Text,_>(&row.current_commit_id)
-        .execute(conn).await.map_err(PersistenceError::database)?;
+        .execute(&mut *conn).await.map_err(PersistenceError::database)?;
     if changed != 1 {
         return Err(reject("Strand current changed before transition"));
     }
+    refresh_calendar_source_in_connection(conn, event, commit, target.as_str()).await?;
     Ok(())
 }
 
@@ -712,11 +714,125 @@ async fn store_patched_strand(
     .bind::<Jsonb, _>(post)
     .bind::<Timestamptz, _>(commit.committed_at)
     .bind::<Text, _>(&row.current_commit_id)
-    .execute(conn)
+    .execute(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
     if updated != 1 {
         return Err(reject("Strand current changed before patch"));
+    }
+    refresh_calendar_source_in_connection(conn, event, commit, payload.target_ref.as_str()).await?;
+    Ok(())
+}
+
+/// Refresh the registered source alongside its paired Strand current write.
+pub(crate) async fn refresh_calendar_source_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    strand_id: &str,
+) -> PersistenceResult<()> {
+    use arkret_wire::{
+        CalendarMetadataContext, CalendarScheduleSourceValue, CommittedEventRef, CurrentRevision,
+        EventKind, ScopeRef,
+    };
+    #[derive(diesel::QueryableByName)]
+    struct SourceRow {
+        #[diesel(sql_type = Jsonb)]
+        value: Value,
+        #[diesel(sql_type = diesel::sql_types::Nullable<Jsonb>)]
+        calendar_schedule_source_value: Option<Value>,
+    }
+    let row = diesel::sql_query("SELECT value,calendar_schedule_source_value FROM strand_current_results WHERE realm_id=$1 AND strand_id=$2 AND current_commit_id=$3 AND current_stream_position=$4 FOR UPDATE")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(strand_id).bind::<Text,_>(commit.commit_id.as_str())
+        .bind::<BigInt,_>(i64::try_from(commit.stream_position).map_err(PersistenceError::database)?)
+        .get_result::<SourceRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let strand: arkret_models_collaboration::objects::strand::Strand =
+        serde_json::from_value(row.value.clone()).map_err(PersistenceError::database)?;
+    let scope = match strand.scope_circle_id {
+        Some(circle_id) => ScopeRef::Circle {
+            realm_id: event.realm_id.clone(),
+            circle_id,
+        },
+        None => ScopeRef::Realm {
+            realm_id: event.realm_id.clone(),
+        },
+    };
+    let mut source = row
+        .calendar_schedule_source_value
+        .map(serde_json::from_value::<CalendarScheduleSourceValue>)
+        .transpose()
+        .map_err(PersistenceError::database)?
+        .unwrap_or(CalendarScheduleSourceValue {
+            effective_scope: scope.clone(),
+            source: None,
+            strand_revision: CurrentRevision {
+                commit_id: commit.commit_id.clone(),
+                stream_position: commit.stream_position,
+            },
+            metadata_context: None,
+        });
+    let reference = CommittedEventRef {
+        event_id: event.event_id.clone(),
+        commit_id: commit.commit_id.clone(),
+        stream_ref: commit.stream_ref.clone(),
+        stream_position: commit.stream_position,
+    };
+    let patch = event.payload.get("patch").and_then(Value::as_object);
+    let encrypted_write = event.kind == EventKind::StrandCreate
+        || patch.is_some_and(|patch| patch.contains_key("encrypted_metadata"));
+    let eligible = if event.kind == EventKind::StrandCreate {
+        row.value.pointer("/metadata/fields/calendar").is_some()
+            || strand.encrypted_metadata.is_some()
+    } else if event.kind == EventKind::StrandUpdate {
+        patch.is_some_and(|patch| {
+            patch.keys().any(|path| {
+                matches!(
+                    path.as_str(),
+                    "metadata"
+                        | "metadata.fields"
+                        | "metadata.fields.calendar"
+                        | "encrypted_metadata"
+                ) || path.starts_with("metadata.fields.calendar.")
+            })
+        })
+    } else {
+        false
+    };
+    if eligible {
+        source.source = Some(reference.clone());
+    }
+    source.effective_scope = scope;
+    source.strand_revision = CurrentRevision {
+        commit_id: commit.commit_id.clone(),
+        stream_position: commit.stream_position,
+    };
+    if let Some(envelope) = &strand.encrypted_metadata {
+        if encrypted_write {
+            source.metadata_context = Some(CalendarMetadataContext {
+                source: reference,
+                event_kind: event.kind.clone(),
+                signer_id: event.actual_signer().clone(),
+                payload_digest: envelope
+                    .payload_digest()
+                    .map_err(PersistenceError::database)?,
+            });
+        } else if source.metadata_context.is_none() {
+            return Err(reject(
+                "encrypted Calendar metadata has no original context",
+            ));
+        }
+    } else {
+        source.metadata_context = None;
+    }
+    source
+        .validate_for_current(&event.realm_id, &commit.stream_ref, &source.strand_revision)
+        .map_err(PersistenceError::database)?;
+    let changed = diesel::sql_query("UPDATE strand_current_results SET calendar_schedule_source_value=$3 WHERE realm_id=$1 AND strand_id=$2 AND current_commit_id=$4")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(strand_id)
+        .bind::<Jsonb,_>(serde_json::to_value(source).map_err(PersistenceError::database)?).bind::<Text,_>(commit.commit_id.as_str())
+        .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+    if changed != 1 {
+        return Err(reject("Calendar current pairing changed"));
     }
     Ok(())
 }

@@ -69,12 +69,31 @@ pub(crate) fn registered_executor(
 
 /// The caller supplies a fresh DID document, not a verified flag. The current
 /// registration evidence re-binds its whole material and producer method here.
-pub(crate) async fn require_applet_producer_in_connection(
+pub(crate) fn require_applet_producer_in_connection<'a>(
+    conn: &'a mut AsyncPgConnection,
+    event: &'a Event,
+    guard: &'a AppletEventProducerGuard,
+    at: chrono::DateTime<chrono::Utc>,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = PersistenceResult<
+                    arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact,
+                >,
+            > + Send
+            + 'a,
+    >,
+> {
+    // Ordinary Human commits must not inherit the Service admission frame.
+    Box::pin(require_applet_producer_inner(conn, event, guard, at))
+}
+
+async fn require_applet_producer_inner(
     conn: &mut AsyncPgConnection,
     event: &Event,
     guard: &AppletEventProducerGuard,
     at: chrono::DateTime<chrono::Utc>,
-) -> PersistenceResult<()> {
+) -> PersistenceResult<arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact> {
     let registration = registration(conn, event).await?;
     let service = ActorId::service(registration.service_id.clone());
     let executor = registered_executor(event, &registration)?;
@@ -306,7 +325,45 @@ pub(crate) async fn require_applet_producer_in_connection(
         &mut BTreeSet::new(),
         0,
     )?;
-    Ok(())
+    #[derive(diesel::QueryableByName)]
+    struct CommitSource {
+        #[diesel(sql_type=Jsonb)]
+        commit_json: Value,
+    }
+    let registration_commit = sql_query("SELECT c.commit_json FROM applet_registration_current_results r JOIN realm_commits c ON c.commit_id=r.current_commit_id AND c.stream_position=r.current_stream_position AND c.realm_id=r.realm_id WHERE r.realm_id=$1 AND r.applet_id=$2")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(registration.applet_id.as_str()).get_result::<CommitSource>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let authorization_event = grant_id.as_str().replacen("ak:grant:", "ak:event:", 1);
+    let grant_commit = sql_query("SELECT c.commit_json FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.envelope->>'event_id'=$1 AND e.realm_id=$2 AND e.kind='ak.capability.grant' AND e.state='committed'")
+        .bind::<Text,_>(authorization_event).bind::<Text,_>(event.realm_id.as_str()).get_result::<CommitSource>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let coordinate = |row: CommitSource| -> PersistenceResult<arkret_wire::CommittedEventRef> {
+        let commit: arkret_wire::RealmCommit =
+            serde_json::from_value(row.commit_json).map_err(PersistenceError::database)?;
+        Ok(arkret_wire::CommittedEventRef {
+            event_id: commit.event_ref,
+            commit_id: commit.commit_id,
+            stream_ref: commit.stream_ref,
+            stream_position: commit.stream_position,
+        })
+    };
+    let fact = arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact {
+        event_id: event.event_id.clone(),
+        actor: service,
+        verification_method: proof.verification_method.clone(),
+        key: arkret_models_identity::ServiceHistoricalSigningKey {
+            public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
+                key.ed25519_bytes().map_err(denied)?,
+            ))
+            .map_err(denied)?,
+            applet_id: registration.applet_id.clone(),
+            registration_epoch: registration.registration_epoch.clone(),
+            registration_ref: coordinate(registration_commit)?,
+            authorization_ref: coordinate(grant_commit)?,
+            effective_scope: event.scope_ref.clone(),
+        },
+        accepted_at: arkret_canonical::normalize_timestamp_canonical(at),
+    };
+    fact.validate_event_binding(event, suite).map_err(denied)?;
+    Ok(fact)
 }
 
 async fn accepted_event(conn: &mut AsyncPgConnection, id: &EventId) -> PersistenceResult<Event> {

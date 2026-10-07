@@ -183,6 +183,7 @@ pub(crate) async fn commit_realm_authority_root_current_result_in_connection(
                 "controller_actor_id": current.controller_actor_id,
                 "controller_epoch": current.controller_epoch,
                 "authority_generation": current.authority_generation,
+                "authority_event_ref": current.authority_event_ref,
             }))
             .map_err(PersistenceError::database)?;
             if digest.as_str() != payload.expected_state_digest.as_str() {
@@ -214,6 +215,7 @@ pub(crate) async fn commit_realm_authority_root_current_result_in_connection(
                 "controller_actor_id": current.controller_actor_id,
                 "controller_epoch": current.controller_epoch,
                 "authority_generation": current.authority_generation,
+                "authority_event_ref": current.authority_event_ref,
             }))
             .map_err(PersistenceError::database)?;
             if digest.as_str() != payload.expected_state_digest.as_str() {
@@ -683,7 +685,21 @@ async fn require_non_event_registration_binding(
     Ok(())
 }
 
-async fn materialize_capability_grant(
+fn materialize_capability_grant<'a>(
+    conn: &'a mut AsyncPgConnection,
+    event: &'a arkret_wire::Event,
+    commit: &'a arkret_wire::RealmCommit,
+    grant_id: GrantId,
+    body: arkret_models_collaboration::events_payloads::CapabilityGrantCreateBody,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = PersistenceResult<CapabilityGrant>> + Send + 'a>,
+> {
+    Box::pin(materialize_capability_grant_inner(
+        conn, event, commit, grant_id, body,
+    ))
+}
+
+async fn materialize_capability_grant_inner(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
@@ -929,7 +945,17 @@ async fn materialize_capability_grant(
 
 /// Materialize one of the four registered `capability_grant` writers inside
 /// the same PostgreSQL transaction as its Event and RealmCommit.
-pub(crate) async fn commit_capability_grant_current_result_in_connection(
+pub(crate) fn commit_capability_grant_current_result_in_connection<'a>(
+    conn: &'a mut AsyncPgConnection,
+    event: &'a arkret_wire::Event,
+    commit: &'a arkret_wire::RealmCommit,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = PersistenceResult<()>> + Send + 'a>> {
+    Box::pin(commit_capability_grant_current_result_inner(
+        conn, event, commit,
+    ))
+}
+
+async fn commit_capability_grant_current_result_inner(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,

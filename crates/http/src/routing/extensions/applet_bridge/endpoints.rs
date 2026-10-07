@@ -597,6 +597,25 @@ async fn revoke_install_endpoint(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AppletRevokeOutcome> {
+    revoke_install_future(aa, body, depot, req).await
+}
+
+fn revoke_install_future<'a>(
+    aa: AuthArgs,
+    body: JsonBody<AppletRevokeRequestBody>,
+    depot: &'a mut Depot,
+    req: &'a mut Request,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = JsonResult<AppletRevokeOutcome>> + Send + 'a>>
+{
+    Box::pin(revoke_install_inner(aa, body, depot, req))
+}
+
+async fn revoke_install_inner(
+    aa: AuthArgs,
+    body: JsonBody<AppletRevokeRequestBody>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AppletRevokeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let applet_id = applet_id_param(req)?;

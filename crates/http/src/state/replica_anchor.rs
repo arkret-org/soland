@@ -24,7 +24,7 @@ use arkret_models_collaboration::governance::realm_join_intake::{
 };
 use arkret_wire::{
     CommitStreamHead, CommitStreamRef, CommittedEventView, DidCoreId, RealmCommit, RealmId,
-    RequestId, StreamScanDirection, StreamScanOutcome, StreamScanRequest,
+    RequestId, StreamScanDirection, StreamScanRequest,
 };
 use soland_services::committed_receipt::{
     CommitContinuity, verify_committed_event_receipt_with_source,
@@ -620,7 +620,7 @@ pub(crate) async fn ensure_forwarded_target(
                 return Err("forward recovery original is not covered by the held prefix".into());
             }
             let fact = commits
-                .historical_producer_signer_fact(&original.event, &original.commit)
+                .producer_signer_fact(&original.event, &original.commit)
                 .await
                 .map_err(temporary)?;
             ensure_historical_method_key(state, located, &original.commit.signature).await?;
@@ -791,7 +791,7 @@ async fn open_forwarded_join(
             return Err("pending opening join differs from its frozen Full".into());
         }
         let fact = commits
-            .historical_producer_signer_fact(&original.event, &original.commit)
+            .producer_signer_fact(&original.event, &original.commit)
             .await
             .map_err(temporary)?;
         ensure_historical_method_key(state, located, &commit.signature).await?;

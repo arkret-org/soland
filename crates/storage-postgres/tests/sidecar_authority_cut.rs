@@ -39,7 +39,8 @@ async fn source_candidate(
     tx.producer_signer_fact = PgAuthorityCommitStore { pool: pool.clone() }
         .prepare_human_signer_fact(&tx.event, tx.commit.committed_at)
         .await
-        .unwrap();
+        .unwrap()
+        .map(Into::into);
     assert!(tx.producer_signer_fact.is_some());
     tx.commit.producer_signer_fact_digest = tx
         .producer_signer_fact

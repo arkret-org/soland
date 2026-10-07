@@ -186,7 +186,7 @@ pub(super) async fn exact_replay(
 ) -> ServiceResult<Option<AuthoritySubmitOutcome>> {
     let Some(existing) = state
         .authority_commits()
-        .committed_event(&event.event_id)
+        .queued_event(&event.event_id)
         .await?
     else {
         return Ok(None);
@@ -197,10 +197,23 @@ pub(super) async fn exact_replay(
                 .to_owned(),
         ));
     }
-    Ok(Some(AuthoritySubmitOutcome::Accepted {
-        status: AuthorityCommitStatus::Duplicate,
-        commit: existing.commit,
-    }))
+    if let Some(commit) = existing.committed {
+        return Ok(Some(AuthoritySubmitOutcome::Accepted {
+            status: AuthorityCommitStatus::Duplicate,
+            commit,
+        }));
+    }
+    if event.kind == arkret_wire::EventKind::MlsCommit
+        && existing.status == soland_storage::QueuedEventStatus::Rejected
+    {
+        return Ok(Some(AuthoritySubmitOutcome::Rejected {
+            status: arkret_wire::AuthorityRejectionStatus::Rejected,
+            reason_code: existing.rejection_reason.ok_or_else(|| {
+                ServiceError::Internal("durable MLS refusal has no reason".into())
+            })?,
+        }));
+    }
+    Ok(None)
 }
 
 /// Admit one producer-verified Event through the guarded unit.
@@ -361,7 +374,16 @@ fn commit_event_unit_with_idempotency_impl<'a>(
             arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
         );
         let candidate = match &producer {
-            AdmittedProducer::Forwarded(retained) => Some(&retained.producer_signer_fact),
+            AdmittedProducer::Forwarded(retained) => {
+                Some(retained.producer_signer_fact.clone().into())
+            }
+            AdmittedProducer::Applet(guard) => Some(
+                state
+                    .authority_commits()
+                    .prepare_service_signer_fact(event, guard, committed_at)
+                    .await?
+                    .into(),
+            ),
             _ => None,
         };
         let mut transaction = match mls {
@@ -376,7 +398,7 @@ fn commit_event_unit_with_idempotency_impl<'a>(
                         method,
                         state.notary_signing_key().as_ref(),
                         committed_at,
-                        candidate,
+                        candidate.as_ref(),
                     )
                     .await?
             }
@@ -389,7 +411,7 @@ fn commit_event_unit_with_idempotency_impl<'a>(
                         method,
                         state.notary_signing_key().as_ref(),
                         committed_at,
-                        candidate,
+                        candidate.as_ref(),
                     )
                     .await?
             }

@@ -1061,7 +1061,7 @@ pub(crate) async fn materialize_peer_direct_conversation_founding_unit(
                 serde_json::from_value(occupied.commits_json).map_err(PersistenceError::database)?;
             if occupied.founding_unit_digest == digest && stored == commits {
                 for transaction in &unit.transactions {
-                    let original = crate::agent_producer_signer_keys::human_source_for_commit_in_connection(conn, &transaction.event, &transaction.commit).await?;
+                    let original = crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(conn, &transaction.event, &transaction.commit).await?;
                     if original != transaction.producer_signer_fact {
                         return Err(PersistenceError::Conflict("Direct founding source differs from original".into()).into());
                     }

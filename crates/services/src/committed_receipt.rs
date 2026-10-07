@@ -120,11 +120,8 @@ pub async fn verify_committed_event_receipt_with_fact(
     keys: &(dyn RealmAuthorityKeyDirectory + Sync),
     receiver: &DidCoreId,
     digest_suite: DigestSuite,
-    fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    fact: Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
 ) -> ServiceResult<ReceivedProducer> {
-    let source = fact
-        .cloned()
-        .map(arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Human);
     verify_committed_event_receipt_with_source(
         local_pcr,
         event,
@@ -134,7 +131,7 @@ pub async fn verify_committed_event_receipt_with_fact(
         keys,
         receiver,
         digest_suite,
-        source.as_ref(),
+        fact,
     )
     .await
 }

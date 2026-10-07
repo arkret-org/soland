@@ -173,8 +173,9 @@ pub(super) fn protocol_router() -> Router {
                 .push(Router::with_path("viewer").get(account_viewer))
                 .push(Router::with_path("current-principal").post(current_principal::resolve))
                 // spec `events_sync` surface group (core tier) binds
-                // `ak.self.account.command.update_profile.v1` to POST /_arkret/self/account/profile;
-                // describe advertises it, so it MUST resolve on the protocol surface.
+                // `ak.self.account.command.update_profile.v1` to POST
+                // /_arkret/self/account/profile; describe advertises it, so it MUST
+                // resolve on the protocol surface.
                 .push(Router::with_path("profile").post(update_profile)),
         )
         .push(contact_routes())

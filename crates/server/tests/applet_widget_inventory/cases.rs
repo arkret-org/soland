@@ -186,7 +186,7 @@ async fn widget_native_grant(fixture: &Fixture) -> arkret_wire::GrantId {
         .unwrap(),
     );
     let grant = arkret_wire::GrantId::from_event_id(&event.event_id);
-    accepted_admin_domain_event(fixture, event).await;
+    Box::pin(accepted_admin_domain_event(fixture, event)).await;
     grant
 }
 #[tokio::test]
@@ -196,9 +196,9 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
         arkret_wire::AppletRevokeMode::RevokeRuntimeOnly,
         arkret_wire::AppletRevokeMode::RevokeAll,
     ] {
-        let fixture = Fixture::new().await;
-        let install = fixture.install_widget().await;
-        let grant = widget_native_grant(&fixture).await;
+        let fixture = Box::new(Box::pin(Fixture::new()).await);
+        let install = Box::new(Box::pin(fixture.install_widget()).await);
+        let grant = Box::pin(widget_native_grant(&fixture)).await;
         let selector = AppletWidgetInstallSelector {
             applet_id: install.package.applet_id.clone(),
             effective_scope: ScopeRef::Realm {
@@ -314,7 +314,7 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
         request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::HumanDevice(
             device_selector,
         ));
-        request = ordinary_realm::source_request(&fixture.pool, request).await;
+        request = Box::pin(ordinary_realm::source_request(&fixture.pool, request)).await;
         request.authority_commit.commit.signature =
             arkret_signatures::detached_object::sign_detached_object(
                 &arkret_canonical::unsigned_value(&request.authority_commit.commit, &["signature"])
@@ -338,13 +338,13 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
         let mut wrong_token = request.clone();
         wrong_token.widget_token_gate.as_mut().unwrap().token_digest =
             Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap();
-        assert!(uow.commit_event(wrong_token).await.is_err());
+        assert!(Box::pin(uow.commit_event(wrong_token)).await.is_err());
         assert_eq!(
             before_write,
             authority_snapshot(&fixture.pool).await,
             "widget refusal partially wrote canonical data"
         );
-        uow.commit_event(request).await.unwrap();
+        Box::pin(uow.commit_event(request)).await.unwrap();
         assert_accepted_event(&fixture, &event).await;
         let native_before = authority_snapshot(&fixture.pool).await;
         let install_before = store

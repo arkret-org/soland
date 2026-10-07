@@ -1561,7 +1561,17 @@ pub(crate) async fn lock_realm_authorization_cut(
 
 /// Authorize `event` as a capability-gated Realm Event at the accepting
 /// transaction's cut and return that cut for kind-specific rules.
-pub(crate) async fn authorize_capability_gated_event_in_connection(
+pub(crate) fn authorize_capability_gated_event_in_connection<'a>(
+    conn: &'a mut AsyncPgConnection,
+    event: &'a arkret_wire::Event,
+    at: chrono::DateTime<chrono::Utc>,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = PersistenceResult<RealmAuthorizationCut>> + Send + 'a>,
+> {
+    Box::pin(authorize_capability_gated_event_inner(conn, event, at))
+}
+
+async fn authorize_capability_gated_event_inner(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     at: chrono::DateTime<chrono::Utc>,

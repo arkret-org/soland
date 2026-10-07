@@ -297,9 +297,7 @@ pub(super) async fn submit_peer_direct_conversation_founding(
             expected_authority: authority.clone(),
             event: item.event_submission.event.clone(),
             commit: item.source_commit.clone(),
-            producer_signer_fact: item.producer_signer_fact.as_ref().and_then(
-                arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::as_human
-            ).cloned(),
+            producer_signer_fact: item.producer_signer_fact.clone(),
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,

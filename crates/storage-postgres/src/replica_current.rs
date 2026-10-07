@@ -650,6 +650,10 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
     entries: &[arkret_wire::TypedCurrentResult],
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
+    arkret_models_collaboration::exact_current_results::validate_calendar_current_pairs(
+        realm_id, entries,
+    )
+    .map_err(malformed)?;
     let mut selectors = std::collections::BTreeSet::new();
     for entry in entries {
         let arkret_wire::TypedCurrentResult::Value { selector, .. } = entry;
@@ -953,6 +957,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
                 )
                 .await?;
             }
+            S::CalendarScheduleSource { .. } => {}
             S::Rsvp {
                 event_ref,
                 occurrence,
@@ -1087,6 +1092,46 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
                     "a row family is outside the member bootstrap disclosure subset",
                 ));
             }
+        }
+    }
+    for entry in entries {
+        let arkret_wire::TypedCurrentResult::Value {
+            selector,
+            source_stream_ref,
+            revision,
+            value,
+        } = entry;
+        if let arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id } = selector {
+            let paired = entries.iter().find_map(|entry| {
+                let arkret_wire::TypedCurrentResult::Value { selector, source_stream_ref: stream, revision: basis, value } = entry;
+                matches!(selector, arkret_wire::CurrentSelector::Strand { strand_id: id } if id == strand_id)
+                    .then_some((stream, basis, value))
+            }).ok_or_else(|| malformed("Calendar source has no paired Strand"))?;
+            if paired.0 != source_stream_ref || paired.1 != revision {
+                return Err(malformed("Calendar and Strand cuts differ"));
+            }
+            let source: arkret_wire::CalendarScheduleSourceValue =
+                serde_json::from_value(value.clone()).map_err(malformed)?;
+            source
+                .validate_for_current(realm_id, source_stream_ref, revision)
+                .map_err(malformed)?;
+            let strand: arkret_models_collaboration::objects::strand::Strand =
+                serde_json::from_value(paired.2.clone()).map_err(malformed)?;
+            match (&strand.encrypted_metadata, &source.metadata_context) {
+                (Some(envelope), Some(context))
+                    if envelope.payload_digest().map_err(malformed)? == context.payload_digest => {}
+                (None, None) => {}
+                _ => {
+                    return Err(malformed(
+                        "Calendar metadata context differs from current ciphertext",
+                    ));
+                }
+            }
+            let changed = diesel::sql_query("UPDATE strand_current_results SET calendar_schedule_source_value=$3 WHERE realm_id=$1 AND strand_id=$2 AND current_commit_id=$4 AND current_stream_position=$5")
+                .bind::<Text,_>(realm_id.as_str()).bind::<Text,_>(strand_id.as_str()).bind::<Jsonb,_>(value)
+                .bind::<Text,_>(revision.commit_id.as_str()).bind::<BigInt,_>(i64::try_from(revision.stream_position).map_err(malformed)?)
+                .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+            require_one_current_write(changed)?;
         }
     }
     Ok(())
@@ -1385,6 +1430,13 @@ pub(crate) async fn advance_in_connection(
                 Some(("strand_id", strand_id.as_str())),
                 &row,
                 &value,
+            )
+            .await?;
+            crate::strand_current_results::refresh_calendar_source_in_connection(
+                conn,
+                event,
+                commit,
+                strand_id.as_str(),
             )
             .await?;
         }

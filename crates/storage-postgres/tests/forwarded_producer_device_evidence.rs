@@ -1,116 +1,10 @@
-//! The governance Station retains a cross-Station producer's complete
-//! `producer_device_evidence` in the transaction that writes the Event's first
-//! RealmCommit (device-lifecycle §8.2.2), and nowhere else.
-
-#[path = "support/ordinary_realm.rs"]
-mod ordinary_realm;
-
-use arkret_models_crypto::{
-    DeviceAuthorizationWindow, DeviceProjectionAttestationCore, DeviceStatus,
-};
-use arkret_models_identity::AccountDeviceSignerEvidence;
-use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
-use arkret_signatures::webvh::{
-    ServiceRegistrationInceptionInput, prepare_service_registration_inception,
-};
-use arkret_wire::{AccountId, DeviceId, Did, DidKey, DidUrl, EventId, NonEmptyString, ServiceKind};
-use chrono::{Duration, Utc};
+//! Real forwarded Human device evidence freezes with the first governance Commit.
+#[path = "support/historical_human.rs"]
+mod historical_human;
 use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
-use ed25519_dalek::SigningKey;
-use rand_chacha::ChaCha20Rng;
-use rand_core::SeedableRng;
-use soland_storage::{EventCommitRequest, EventCommitUnitOfWork, ForwardedProducerDeviceEvidence};
-use soland_storage_postgres::test_database::TestDatabase;
+use soland_storage::{EventCommitUnitOfWork, ForwardedProducerDeviceEvidence};
 use soland_storage_postgres::{PgEventCommitUnitOfWork, PgPool};
-
-const DEVICE: &str = "ak:device:0196419b-0000-7000-8000-00000000e0a1";
-const OTHER_DEVICE: &str = "ak:device:0196419b-0000-7000-8000-00000000e0a2";
-
-/// Complete evidence attesting `device` of `account`, signed by a registered
-/// Station. The storage boundary re-binds it; the governance Station verified
-/// the signatures before admission.
-fn evidence(account: &AccountId, device: &str) -> AccountDeviceSignerEvidence {
-    let registered_at = Utc::now() - Duration::hours(1);
-    let mut rng = ChaCha20Rng::from_seed([0x71; 32]);
-    let registration = ServiceRegistrationKey::new(
-        ServiceKind::Station,
-        CanonicalServiceUrl::new("https://forwarder.example/").unwrap(),
-    )
-    .unwrap();
-    let inception = prepare_service_registration_inception(
-        &mut rng,
-        &ServiceRegistrationInceptionInput {
-            provider_endpoint: &"https://identity.example/".parse().unwrap(),
-            registration_key: &registration,
-            also_known_as: &[],
-            version_time: registered_at,
-            did_key_fragment: None,
-        },
-    )
-    .unwrap();
-    let station =
-        arkret_wire::project_did_to_core_id(&Did::new(inception.did.clone()).unwrap()).unwrap();
-    let attested_at =
-        chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap();
-    let public = SigningKey::from_bytes(&[0x72; 32])
-        .verifying_key()
-        .to_bytes();
-    let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
-        DeviceProjectionAttestationCore {
-            account_id: account.clone(),
-            device_id: DeviceId::new(device).unwrap(),
-            device_signing_key_did: DidKey::new(format!(
-                "did:key:{}",
-                arkret_canonical::ed25519_pubkey_to_did_key_multibase(&public)
-            ))
-            .unwrap(),
-            hpke_key: NonEmptyString::new("hpke-forwarded").unwrap(),
-            device_authorize_event_id: EventId::new(
-                "ak:event:AfAnsJqSlM9bHVI7P1QBMOEW3p5P1PNQu7BBMpiSnD_e",
-            )
-            .unwrap(),
-            authorized_generation_ref: 1,
-            device_status: DeviceStatus::Active,
-            authorization_window: DeviceAuthorizationWindow {
-                not_before: registered_at,
-                expires_at: None,
-            },
-            attested_at,
-            expires_at: attested_at + Duration::minutes(5),
-        },
-        DidUrl::new(inception.did_key_id.clone()).unwrap(),
-        &SigningKey::from_bytes(&inception.did_key_seed),
-    )
-    .unwrap();
-    AccountDeviceSignerEvidence {
-        device_projection_attestation: attestation,
-        service_resolution: arkret_identity::build_authenticated_webvh_service_resolution(
-            station,
-            "station".into(),
-            serde_json::from_value(inception.log_entry["state"].clone()).unwrap(),
-            vec![inception.log_entry.clone()],
-            vec![],
-            attested_at,
-        )
-        .unwrap(),
-    }
-}
-
-/// Rebind the fixture Event's producer proof to a human device method.
-/// The proof method is outside the Event identity preimage.
-fn signed_by_device(request: &mut EventCommitRequest, device: &str) {
-    let event = &mut request.authority_commit.event;
-    let proof = event.producer_proof.as_mut().unwrap();
-    proof.verification_method = DidUrl::new(format!(
-        "did:{}#{device}",
-        ordinary_realm::FOUNDER
-            .strip_prefix("ak:did_core:")
-            .unwrap()
-    ))
-    .unwrap();
-    request.event.envelope = serde_json::to_value(&*event).unwrap();
-}
 
 async fn evidence_rows(pool: &PgPool) -> Vec<(String, String)> {
     #[derive(diesel::QueryableByName)]
@@ -149,57 +43,88 @@ async fn commit_count(pool: &PgPool, commit_id: &str) -> i64 {
 
 #[tokio::test]
 async fn forwarded_evidence_is_retained_with_the_first_commit_or_not_at_all() {
-    let database = TestDatabase::lease().await;
-    let pool = database.pool();
-    let discussion = ordinary_realm::open_discussion(&pool, "forwarded-producer-evidence").await;
-    let producer = AccountId::new(ordinary_realm::founder(), ordinary_realm::station());
-    let mut request = discussion.message_after(
-        &discussion.head.authority_commit,
-        "forwarded message",
-        discussion.committed_at(),
+    let mut source_config = soland_test_support::app_config();
+    source_config.public_base_url = "https://forward-evidence-governance.example".into();
+    let (source_state, pool) = soland_test_support::app_state_with_pool(source_config);
+    let mut origin_config = soland_test_support::app_config();
+    origin_config.public_base_url = "https://forward-evidence-origin.example".into();
+    let (origin_state, origin_pool) = soland_test_support::app_state_with_pool(origin_config);
+    let governing = historical_human::HumanFixture::new(&pool, source_state.service_did()).await;
+    governing.admit(&pool).await;
+    let origin =
+        historical_human::HumanFixture::new(&origin_pool, origin_state.service_did()).await;
+    let previous = governing.unit.transactions.last().unwrap();
+    let actor = arkret_wire::ActorId::account(origin.pcr.history.account.clone());
+    let event = historical_human::signed_ordinary_event(
+        &origin,
+        previous,
+        arkret_wire::EventKind::MemberState,
+        serde_json::json!({"realm_id":previous.event.realm_id,"member_id":actor,"membership":"join"}),
+        previous.commit.committed_at + chrono::TimeDelta::seconds(1),
     );
-    signed_by_device(&mut request, DEVICE);
+    let mut request =
+        historical_human::request_for_event(&origin, previous, event, previous.commit.committed_at);
+    let evidence = soland_http::test_fresh_producer_device_evidence(
+        &origin_state,
+        &request.authority_commit.event,
+        &governing.pcr.history.account.station_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let core = &evidence.device_projection_attestation.attestation;
+    let fact = arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
+        &evidence,
+        &request.authority_commit.event,
+        &origin.pcr.history.account.station_id,
+        &governing.pcr.history.account.station_id,
+        &core.event_authorization.forward_body_digest,
+        arkret_canonical::DigestSuite::Sha256,
+        core.attested_at,
+    )
+    .unwrap()
+    .into_fact();
+    request.authority_commit.producer_signer_fact = Some(fact.clone().into());
+    request.authority_commit.commit.producer_signer_fact_digest = Some(fact.digest().unwrap());
+    request.authority_commit.commit.committed_at = core.attested_at;
+    request.self_producer_guard = None;
+    let retained = ForwardedProducerDeviceEvidence::new(evidence, fact).unwrap();
+    request.forwarded_producer_evidence = Some(retained.clone());
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        request.authority_commit.event.clone(),
+    ));
+    historical_human::seal_commit(
+        &mut request.authority_commit.commit,
+        &governing.pcr.history.station_did,
+    );
     let commit_id = request.authority_commit.commit.commit_id.to_string();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-
-    // Evidence for another device of the producer cannot ride along: the
-    // whole Event, Commit and audit row roll back together.
     let mut mismatched = request.clone();
-    mismatched.forwarded_producer_evidence =
-        Some(ForwardedProducerDeviceEvidence::new(evidence(&producer, OTHER_DEVICE)).unwrap());
+    mismatched
+        .forwarded_producer_evidence
+        .as_mut()
+        .unwrap()
+        .evidence
+        .device_projection_attestation
+        .attestation
+        .device_id =
+        arkret_wire::DeviceId::new("ak:device:0196419b-0000-7000-8000-00000000e0a2").unwrap();
     assert!(uow.commit_event(mismatched).await.is_err());
     assert_eq!(commit_count(&pool, &commit_id).await, 0);
     assert!(evidence_rows(&pool).await.is_empty());
-
-    // A local producer guard and forwarded evidence never describe one Event.
     let mut both = request.clone();
-    both.forwarded_producer_evidence =
-        Some(ForwardedProducerDeviceEvidence::new(evidence(&producer, DEVICE)).unwrap());
     both.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::HumanDevice(
-        soland_storage::DeviceRevocationGateSelector {
-            principal_id: producer.principal_id.clone(),
-            station_id: producer.station_id.clone(),
-            device_id: DEVICE.to_owned(),
-            authorization_ref: arkret_wire::CommittedEventRef {
-                event_id: discussion.head.authority_commit.event.event_id.clone(),
-                commit_id: discussion.head.authority_commit.commit.commit_id.clone(),
-                stream_ref: discussion.head.authority_commit.commit.stream_ref.clone(),
-                stream_position: discussion.head.authority_commit.commit.stream_position,
-            },
-        },
+        origin.guard.clone(),
     ));
     assert!(uow.commit_event(both).await.is_err());
     assert_eq!(commit_count(&pool, &commit_id).await, 0);
     assert!(evidence_rows(&pool).await.is_empty());
-
-    let retained = ForwardedProducerDeviceEvidence::new(evidence(&producer, DEVICE)).unwrap();
-    request.forwarded_producer_evidence = Some(retained.clone());
     uow.commit_event(request.clone()).await.unwrap();
     let rows = evidence_rows(&pool).await;
     assert_eq!(
         rows,
         vec![(
-            commit_id.clone(),
+            commit_id,
             serde_json::to_value(&retained.evidence_ref)
                 .unwrap()
                 .as_str()
@@ -207,8 +132,6 @@ async fn forwarded_evidence_is_retained_with_the_first_commit_or_not_at_all() {
                 .to_owned()
         )]
     );
-
-    // The exact replay of the admitted unit writes no second audit row.
-    let _ = uow.commit_event(request).await;
+    uow.commit_event(request).await.unwrap();
     assert_eq!(evidence_rows(&pool).await, rows);
 }

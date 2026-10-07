@@ -4,12 +4,13 @@ mod mls_roster;
 use arkret_models_collaboration::authority_commit::{
     AuthorityForwardBranch, AuthorityHandoffRequest, DirectConversationFoundingAcceptanceOutcome,
     DirectConversationFoundingFederationSubmission, DirectConversationFoundingUnitSubmission,
-    HumanHistoricalSignerFact, MembershipCompensationAcceptanceOutcome,
-    MembershipCompensationFederationSubmission, MembershipCompensationUnitSubmission,
-    OrdinaryRealmBootstrapAcceptanceOutcome, OrdinaryRealmBootstrapUnitSubmission,
-    PeerAuthorityForwardEventRequest, PeerAuthorityForwardMlsRequest, PeerAuthorityForwardOutcome,
-    PeerAuthoritySubmitOutcome, PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome,
-    PeerCommittedReplicationRequest, PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
+    HistoricalProducerSignerFact, HumanHistoricalSignerFact,
+    MembershipCompensationAcceptanceOutcome, MembershipCompensationFederationSubmission,
+    MembershipCompensationUnitSubmission, OrdinaryRealmBootstrapAcceptanceOutcome,
+    OrdinaryRealmBootstrapUnitSubmission, PeerAuthorityForwardEventRequest,
+    PeerAuthorityForwardMlsRequest, PeerAuthorityForwardOutcome, PeerAuthoritySubmitOutcome,
+    PeerAuthoritySubmitRequest, PeerCommittedReplicationOutcome, PeerCommittedReplicationRequest,
+    PeerRegisteredAtomicUnit, PeerRegisteredAtomicUnitOutcome,
     PeerRegisteredAtomicUnitOutcomeValue, SelfAuthoritySubmitOutcome, SelfAuthoritySubmitRequest,
 };
 use arkret_models_collaboration::exact_current_results::{
@@ -309,7 +310,7 @@ fn build_signed_event_commit(
     verification_method: DidUrl,
     signing_key: &SigningKey,
     committed_at: DateTime<Utc>,
-    producer_signer_fact: Option<&HumanHistoricalSignerFact>,
+    producer_signer_fact: Option<&HistoricalProducerSignerFact>,
 ) -> ServiceResult<RealmCommit> {
     let stream_ref = CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
@@ -415,7 +416,7 @@ impl AuthorityCommitApplication {
         verification_method: DidUrl,
         signing_key: &SigningKey,
         committed_at: DateTime<Utc>,
-        producer_signer_fact: Option<&HumanHistoricalSignerFact>,
+        producer_signer_fact: Option<&HistoricalProducerSignerFact>,
     ) -> ServiceResult<RealmCommit> {
         build_signed_event_commit(
             event,
@@ -443,19 +444,6 @@ impl AuthorityCommitApplication {
         Ok(self.store().human_signer_fact(event, commit).await?)
     }
 
-    pub async fn historical_producer_signer_fact(
-        &self,
-        event: &Event,
-        commit: &RealmCommit,
-    ) -> ServiceResult<
-        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
-    > {
-        Ok(self
-            .store()
-            .historical_producer_signer_fact(event, commit)
-            .await?)
-    }
-
     pub async fn prepare_human_signer_fact(
         &self,
         event: &Event,
@@ -464,6 +452,26 @@ impl AuthorityCommitApplication {
         Ok(self
             .store()
             .prepare_human_signer_fact(event, admitted_at)
+            .await?)
+    }
+
+    pub async fn producer_signer_fact(
+        &self,
+        event: &Event,
+        commit: &RealmCommit,
+    ) -> ServiceResult<Option<HistoricalProducerSignerFact>> {
+        Ok(self.store().producer_signer_fact(event, commit).await?)
+    }
+    pub async fn prepare_service_signer_fact(
+        &self,
+        event: &Event,
+        guard: &soland_storage::AppletEventProducerGuard,
+        at: DateTime<Utc>,
+    ) -> ServiceResult<arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact>
+    {
+        Ok(self
+            .store()
+            .prepare_service_signer_fact(event, guard, at)
             .await?)
     }
 
@@ -609,6 +617,18 @@ impl AuthorityCommitApplication {
         Ok(())
     }
 
+    pub async fn finalize_mls_rejection(
+        &self,
+        event: &Event,
+        authority: &CurrentRealmAuthority,
+        reason_code: &str,
+    ) -> ServiceResult<AuthoritySubmitOutcome> {
+        Ok(self
+            .store()
+            .finalize_mls_rejection(event, authority, reason_code)
+            .await?)
+    }
+
     pub async fn queued_event(
         &self,
         event_id: &arkret_wire::EventId,
@@ -687,7 +707,8 @@ impl AuthorityCommitApplication {
             let producer_signer_fact = self
                 .store()
                 .prepare_human_signer_fact(&submitted.event, committed_at)
-                .await?;
+                .await?
+                .map(Into::into);
             let commit = build_signed_event_commit(
                 &submitted.event,
                 authority,
@@ -925,7 +946,8 @@ impl AuthorityCommitApplication {
             let producer_signer_fact = self
                 .store()
                 .prepare_human_signer_fact(event, committed_at)
-                .await?;
+                .await?
+                .map(Into::into);
             let commit = build_signed_event_commit(
                 event,
                 authority,
@@ -1111,7 +1133,7 @@ impl AuthorityCommitApplication {
         verification_method: DidUrl,
         signing_key: &SigningKey,
         committed_at: DateTime<Utc>,
-        candidate: Option<&HumanHistoricalSignerFact>,
+        candidate: Option<&HistoricalProducerSignerFact>,
     ) -> ServiceResult<AuthorityCommitTransaction> {
         event.validate_for_submit_structural().map_err(|error| {
             ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
@@ -1132,11 +1154,11 @@ impl AuthorityCommitApplication {
         let head = self.store().stream_head(&stream_ref).await?;
         let producer_signer_fact = match candidate {
             Some(fact) => Some(fact.clone()),
-            None => {
-                self.store()
-                    .prepare_human_signer_fact(event, committed_at)
-                    .await?
-            }
+            None => self
+                .store()
+                .prepare_human_signer_fact(event, committed_at)
+                .await?
+                .map(Into::into),
         };
         let commit = build_signed_event_commit(
             event,
@@ -1250,7 +1272,7 @@ impl AuthorityCommitApplication {
         verification_method: DidUrl,
         signing_key: &SigningKey,
         committed_at: DateTime<Utc>,
-        candidate: Option<&HumanHistoricalSignerFact>,
+        candidate: Option<&HistoricalProducerSignerFact>,
     ) -> ServiceResult<AuthorityCommitTransaction> {
         event.validate_for_submit_structural().map_err(|error| {
             ServiceError::SchemaViolation(format!("invalid producer Event: {error}"))
@@ -1271,11 +1293,11 @@ impl AuthorityCommitApplication {
         let head = self.store().stream_head(&stream_ref).await?;
         let producer_signer_fact = match candidate {
             Some(fact) => Some(fact.clone()),
-            None => {
-                self.store()
-                    .prepare_human_signer_fact(event, committed_at)
-                    .await?
-            }
+            None => self
+                .store()
+                .prepare_human_signer_fact(event, committed_at)
+                .await?
+                .map(Into::into),
         };
         let commit = build_signed_event_commit(
             event,

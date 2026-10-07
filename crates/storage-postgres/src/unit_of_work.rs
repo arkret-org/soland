@@ -2458,7 +2458,29 @@ pub(crate) async fn commit_applet_record(
 }
 
 /// Install every write one accepted Event produces.
-async fn commit_one_in_connection(
+fn commit_one_in_connection<'a>(
+    conn: &'a mut AsyncPgConnection,
+    request: EventCommitRequest,
+    applet_record: Option<&'a soland_storage::AppletRecordCommit>,
+    realm_organization_proof: Option<&'a soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&'a soland_storage::InviteClaimProofCommit>,
+    event_approvals: Option<&'a soland_storage::EventApprovalCommit>,
+    outcome: &'a mut EventCommitOutcome,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), PgTransactionError>> + Send + 'a>>
+{
+    // Construct this state machine outside the batch caller's poll frame.
+    Box::pin(commit_one_inner(
+        conn,
+        request,
+        applet_record,
+        realm_organization_proof,
+        invite_claim_proof,
+        event_approvals,
+        outcome,
+    ))
+}
+
+async fn commit_one_inner(
     conn: &mut AsyncPgConnection,
     request: EventCommitRequest,
     applet_record: Option<&soland_storage::AppletRecordCommit>,
@@ -2524,10 +2546,13 @@ async fn commit_one_in_connection(
     {
         return Ok(());
     }
+
     let prepared_human = if request.forwarded_producer_evidence.is_none() {
-        crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(
-            conn,
-            &request.authority_commit,
+        Box::pin(
+            crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(
+                conn,
+                &request.authority_commit,
+            ),
         )
         .await?
     } else {
@@ -2563,7 +2588,12 @@ async fn commit_one_in_connection(
                 event.realm_id.digest_suite_code().digest_suite(), request.authority_commit.commit.committed_at,
             ).map_err(|e| PersistenceError::Conflict(format!("forward original source failed acceptance: {e}")))?;
             let fact = verified.into_fact();
-            if request.authority_commit.producer_signer_fact.as_ref() != Some(&fact)
+            if request
+                .authority_commit
+                .producer_signer_fact
+                .as_ref()
+                .and_then(|fact| fact.as_human())
+                != Some(&fact)
                 || retained.producer_signer_fact != fact
             {
                 return Err(PersistenceError::Conflict(
@@ -2579,12 +2609,15 @@ async fn commit_one_in_connection(
             Some(fact)
         }
     };
+
     if let Some(guard) = request.self_producer_guard.as_ref() {
-        crate::authority_commit::check_self_producer_guard_in_connection(
-            conn,
-            event,
-            guard,
-            request.authority_commit.commit.committed_at,
+        Box::pin(
+            crate::authority_commit::check_self_producer_guard_in_connection(
+                conn,
+                event,
+                guard,
+                request.authority_commit.commit.committed_at,
+            ),
         )
         .await?;
     }
@@ -2607,6 +2640,7 @@ async fn commit_one_in_connection(
         })?;
     }
 
+    let mut prepared_service = None;
     if let Some(guard) = request.applet_producer_guard.as_ref() {
         if request.self_producer_guard.is_some() || request.forwarded_producer_evidence.is_some() {
             return Err(PersistenceError::SchemaViolation(
@@ -2614,13 +2648,25 @@ async fn commit_one_in_connection(
             )
             .into());
         }
-        crate::managed_message_actor::require_applet_producer_in_connection(
+        let fact = crate::managed_message_actor::require_applet_producer_in_connection(
             conn,
             event,
             guard,
             request.authority_commit.commit.committed_at,
         )
         .await?;
+        if request.authority_commit.producer_signer_fact.as_ref() != Some(&fact.clone().into()) {
+            return Err(PersistenceError::Conflict(
+                "Service signer source changed before acceptance".into(),
+            )
+            .into());
+        }
+        crate::agent_producer_signer_keys::validate_producer_fact_binding(
+            event,
+            &request.authority_commit.commit,
+            request.authority_commit.producer_signer_fact.as_ref(),
+        )?;
+        prepared_service = Some(fact);
     } else if event.applet_id.is_some() {
         return Err(PersistenceError::Conflict(
             "failed_precondition: Applet Event requires its exact Service producer guard"
@@ -2649,6 +2695,66 @@ async fn commit_one_in_connection(
         .await?;
     }
 
+    Box::pin(commit_prepared_event(
+        conn,
+        request,
+        applet_record,
+        realm_organization_proof,
+        invite_claim_proof,
+        event_approvals,
+        outcome,
+        prepared_human,
+        prepared_service,
+    ))
+    .await
+}
+
+fn commit_prepared_event<'a>(
+    conn: &'a mut AsyncPgConnection,
+    request: EventCommitRequest,
+    applet_record: Option<&'a soland_storage::AppletRecordCommit>,
+    realm_organization_proof: Option<&'a soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&'a soland_storage::InviteClaimProofCommit>,
+    event_approvals: Option<&'a soland_storage::EventApprovalCommit>,
+    outcome: &'a mut EventCommitOutcome,
+    prepared_human: Option<
+        arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact,
+    >,
+    prepared_service: Option<
+        arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact,
+    >,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), PgTransactionError>> + Send + 'a>>
+{
+    Box::pin(commit_prepared_event_inner(
+        conn,
+        request,
+        applet_record,
+        realm_organization_proof,
+        invite_claim_proof,
+        event_approvals,
+        outcome,
+        prepared_human,
+        prepared_service,
+    ))
+}
+
+async fn commit_prepared_event_inner(
+    conn: &mut AsyncPgConnection,
+    request: EventCommitRequest,
+    applet_record: Option<&soland_storage::AppletRecordCommit>,
+    realm_organization_proof: Option<&soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&soland_storage::InviteClaimProofCommit>,
+    event_approvals: Option<&soland_storage::EventApprovalCommit>,
+    outcome: &mut EventCommitOutcome,
+    prepared_human: Option<
+        arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact,
+    >,
+    prepared_service: Option<
+        arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact,
+    >,
+) -> Result<(), PgTransactionError> {
+    let event = &request.authority_commit.event;
+
     if event.kind == arkret_wire::EventKind::AgentInteractionSet {
         if !matches!(
             request.self_producer_guard,
@@ -2668,6 +2774,7 @@ async fn commit_one_in_connection(
         )
         .await?;
     }
+
     crate::agent_participation_admission::require_current(
         conn,
         event,
@@ -2676,6 +2783,7 @@ async fn commit_one_in_connection(
         request.agent_deployment_ceiling,
     )
     .await?;
+
     crate::agent_interaction_current_results::require_shared_producer_in_connection(
         conn,
         event,
@@ -2695,6 +2803,7 @@ async fn commit_one_in_connection(
         &request.authority_commit.commit,
     )
     .await?;
+
     prepare_parent_membership_transaction(conn, &request).await?;
     crate::member_state_admission::admit_member_state_in_connection(
         conn,
@@ -2762,6 +2871,7 @@ async fn commit_one_in_connection(
         )
         .await?;
     queue_event_in_connection(conn, event, request.event.received_at).await?;
+
     let authority_write = commit_transaction_in_connection(conn, &request.authority_commit).await?;
     match authority_write {
         AuthorityCommitWriteOutcome::Committed => outcome.event_inserted = true,
@@ -2784,7 +2894,12 @@ async fn commit_one_in_connection(
             )
             .await?;
         }
-        if let Some(fact) = prepared_human.as_ref() {
+        if let Some(fact) = prepared_service.as_ref() {
+            crate::agent_producer_signer_keys::retain_prepared_service_in_connection(
+                conn, event, commit, fact,
+            )
+            .await?;
+        } else if let Some(fact) = prepared_human.as_ref() {
             crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
                 conn, event, commit, fact,
             )
@@ -2798,6 +2913,7 @@ async fn commit_one_in_connection(
             )
             .await?;
         }
+
         crate::policy_current_results::commit_in_connection(conn, event, commit).await?;
         crate::agent_confirmation_admission::commit_confirmation(conn, event, commit).await?;
         crate::approval_admission::consume_and_audit(
@@ -2829,6 +2945,7 @@ async fn commit_one_in_connection(
             )
             .await?;
         }
+
         Box::pin(commit_event_current_results_in_connection(
             conn,
             &request,
@@ -2837,6 +2954,7 @@ async fn commit_one_in_connection(
             event_approvals,
         ))
         .await?;
+
         outcome.outbox_inserted += crate::realm_fanout::plan_realm_fanout_in_connection(
             conn,
             event,
@@ -2854,6 +2972,7 @@ async fn commit_one_in_connection(
         )
         .await?;
     }
+
     let committed_ref = arkret_wire::CommittedEventRef {
         event_id: event.event_id.clone(),
         commit_id: commit.commit_id.clone(),
@@ -2904,24 +3023,86 @@ async fn commit_one_in_connection(
 }
 
 // This phase stays inside the caller's transaction and preserves writer order.
-async fn commit_event_current_results_in_connection(
+fn commit_event_current_results_in_connection<'a>(
+    conn: &'a mut AsyncPgConnection,
+    request: &'a EventCommitRequest,
+    realm_organization_proof: Option<&'a soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&'a soland_storage::InviteClaimProofCommit>,
+    event_approvals: Option<&'a soland_storage::EventApprovalCommit>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), PgTransactionError>> + Send + 'a>>
+{
+    Box::pin(commit_event_current_results_inner(
+        conn,
+        request,
+        realm_organization_proof,
+        invite_claim_proof,
+        event_approvals,
+    ))
+}
+
+async fn commit_event_current_results_inner(
     conn: &mut AsyncPgConnection,
     request: &EventCommitRequest,
     realm_organization_proof: Option<&soland_storage::RealmOrganizationProofCommit>,
     invite_claim_proof: Option<&soland_storage::InviteClaimProofCommit>,
     event_approvals: Option<&soland_storage::EventApprovalCommit>,
 ) -> Result<(), PgTransactionError> {
+    Box::pin(commit_scope_current_results(
+        conn,
+        request,
+        realm_organization_proof,
+        invite_claim_proof,
+    ))
+    .await?;
+
+    Box::pin(commit_object_current_results(
+        conn,
+        request,
+        event_approvals,
+    ))
+    .await?;
+
+    Box::pin(commit_content_current_results(conn, request)).await?;
+    Ok(())
+}
+
+fn commit_scope_current_results<'a>(
+    conn: &'a mut AsyncPgConnection,
+    request: &'a EventCommitRequest,
+    realm_organization_proof: Option<&'a soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&'a soland_storage::InviteClaimProofCommit>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), PgTransactionError>> + Send + 'a>>
+{
+    Box::pin(commit_scope_current_results_inner(
+        conn,
+        request,
+        realm_organization_proof,
+        invite_claim_proof,
+    ))
+}
+
+async fn commit_scope_current_results_inner(
+    conn: &mut AsyncPgConnection,
+    request: &EventCommitRequest,
+    realm_organization_proof: Option<&soland_storage::RealmOrganizationProofCommit>,
+    invite_claim_proof: Option<&soland_storage::InviteClaimProofCommit>,
+) -> Result<(), PgTransactionError> {
     let event = &request.authority_commit.event;
     let commit = &request.authority_commit.commit;
+
     Box::pin(commit_realm_authority_root_current_result_in_connection(
         conn, event, commit,
     ))
     .await?;
+
     Box::pin(crate::realm_bootstrap_current_results::commit_realm_history_access_authority_current_result_in_connection(conn, event, commit)).await?;
+
     Box::pin(crate::realm_bootstrap_current_results::commit_realm_profile_authority_current_result_in_connection(
         conn, event, commit,
     )).await?;
+
     Box::pin(crate::realm_bootstrap_current_results::commit_read_receipt_policy_authority_current_result_in_connection(conn, event, commit)).await?;
+
     Box::pin(
         crate::organization_moderation_gate::commit_realm_organization_current_result_in_connection(
             conn,
@@ -2931,38 +3112,47 @@ async fn commit_event_current_results_in_connection(
         ),
     )
     .await?;
+
     Box::pin(crate::call_state_current_results::commit_in_connection(
         conn, event, commit,
     ))
     .await?;
+
     Box::pin(crate::circle_current_results::commit_in_connection(
         conn, event, commit,
     ))
     .await?;
+
     Box::pin(crate::strand_watch_current_results::commit_in_connection(
         conn, event, commit,
     ))
     .await?;
+
     Box::pin(crate::agent_interaction_current_results::project_in_connection(conn, event, commit))
         .await?;
+
     Box::pin(crate::sidecar_current_results::commit_in_connection(
         conn, event, commit,
     ))
     .await?;
+
     Box::pin(crate::sidecar_exchange_controls::commit_in_connection(
         conn, event, commit, true,
     ))
     .await?;
+
     Box::pin(commit_relation_current_result_in_connection(
         conn, event, commit, true,
     ))
     .await?;
+
     Box::pin(commit_capability_grant_current_result_in_connection(
         conn, event, commit,
     ))
     .await?;
     // An accepted Invite decides its accepting actor's `leave -> join`
     // edge against the member row before that row is written.
+
     Box::pin(
         crate::invite_current_results::commit_invite_current_results_in_connection(
             conn,
@@ -2982,6 +3172,29 @@ async fn commit_event_current_results_in_connection(
         )
         .await?;
     }
+    Ok(())
+}
+
+fn commit_object_current_results<'a>(
+    conn: &'a mut AsyncPgConnection,
+    request: &'a EventCommitRequest,
+    event_approvals: Option<&'a soland_storage::EventApprovalCommit>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), PgTransactionError>> + Send + 'a>>
+{
+    Box::pin(commit_object_current_results_inner(
+        conn,
+        request,
+        event_approvals,
+    ))
+}
+
+async fn commit_object_current_results_inner(
+    conn: &mut AsyncPgConnection,
+    request: &EventCommitRequest,
+    event_approvals: Option<&soland_storage::EventApprovalCommit>,
+) -> Result<(), PgTransactionError> {
+    let event = &request.authority_commit.event;
+    let commit = &request.authority_commit.commit;
     Box::pin(commit_parent_membership_current_results(
         conn, event, commit,
     ))
@@ -3068,6 +3281,23 @@ async fn commit_event_current_results_in_connection(
     Box::pin(crate::realm_default_strand_current_results::commit_realm_default_strand_current_result_in_connection(
         conn, event, commit,
     )).await?;
+    Ok(())
+}
+
+fn commit_content_current_results<'a>(
+    conn: &'a mut AsyncPgConnection,
+    request: &'a EventCommitRequest,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), PgTransactionError>> + Send + 'a>>
+{
+    Box::pin(commit_content_current_results_inner(conn, request))
+}
+
+async fn commit_content_current_results_inner(
+    conn: &mut AsyncPgConnection,
+    request: &EventCommitRequest,
+) -> Result<(), PgTransactionError> {
+    let event = &request.authority_commit.event;
+    let commit = &request.authority_commit.commit;
     Box::pin(crate::mls_group_current_results::require_mls_send_gate_in_connection(conn, event))
         .await?;
     Box::pin(crate::member_identity_current_results::commit_in_connection(conn, event, commit))

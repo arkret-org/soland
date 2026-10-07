@@ -1150,7 +1150,10 @@ pub(crate) fn disclose_to_account(
             CurrentSelector::Strand { .. }
             | CurrentSelector::Space { .. }
             | CurrentSelector::Relation { .. } => Some(object_scope(value)?),
-            CurrentSelector::Rsvp { event_ref, .. } => {
+            CurrentSelector::Rsvp { event_ref, .. }
+            | CurrentSelector::CalendarScheduleSource {
+                strand_id: event_ref,
+            } => {
                 let strand = strands
                     .get(event_ref)
                     .ok_or_else(|| rejected("RSVP target has no disclosed Strand current"))?;
@@ -1260,6 +1263,11 @@ pub(crate) fn disclose_to_account(
                 }
         }
     });
+    arkret_models_collaboration::exact_current_results::validate_calendar_current_pairs(
+        &material.realm_id,
+        &material.current_state_entries,
+    )
+    .map_err(PersistenceError::database)?;
     let mut genesis = false;
     let mut root = false;
     let mut history_access = None;
@@ -1499,6 +1507,7 @@ pub(crate) fn disclose_to_account(
                 let _: arkret_models_collaboration::strand_watch_operations::StrandWatchCurrentValue = serde_json::from_value(value.clone()).map_err(PersistenceError::database)?;
             }
             CurrentSelector::Strand { .. } => {}
+            CurrentSelector::CalendarScheduleSource { .. } => {}
             CurrentSelector::Relation {
                 primary_conflict_domain,
             } => {

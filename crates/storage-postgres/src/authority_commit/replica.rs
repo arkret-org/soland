@@ -273,14 +273,14 @@ pub(crate) async fn materialize_founding_in_connection(
     for transaction in &unit.transactions {
         let event = &transaction.event;
         let commit = &transaction.commit;
-        crate::agent_producer_signer_keys::validate_human_fact_binding(
+        crate::agent_producer_signer_keys::validate_producer_fact_binding(
             event,
             commit,
             transaction.producer_signer_fact.as_ref(),
         )?;
         store_replica_rows(conn, event, commit, &key, received_at).await?;
         if let Some(fact) = transaction.producer_signer_fact.as_ref() {
-            crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
+            crate::agent_producer_signer_keys::retain_prepared_producer_in_connection(
                 conn, event, commit, fact,
             )
             .await?;
@@ -663,7 +663,7 @@ async fn store_replica_rows(
         .await?
         .pk;
     insert_commit_row(conn, commit, key, Some(event_pk)).await?;
-    sql_query(
+    let settled = sql_query(
         "UPDATE canonical_events SET state = 'committed', committed_at = $2, \
          rejection_reason = NULL WHERE pk = $1 AND state = 'queued'",
     )
@@ -671,6 +671,12 @@ async fn store_replica_rows(
     .bind::<Timestamptz, _>(commit.committed_at)
     .execute(&mut *conn)
     .await?;
+    if settled != 1 {
+        return Err(PersistenceError::Conflict(
+            "replica acceptance conflicts with the Event terminal state".into(),
+        )
+        .into());
+    }
     Ok(())
 }
 

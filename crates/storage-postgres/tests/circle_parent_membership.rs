@@ -205,7 +205,7 @@ async fn root_digest(pool: &PgPool, realm: &arkret_wire::RealmId) -> arkret_wire
         value: Value,
     }
     let mut conn = pool.get().await.unwrap();
-    let root=diesel::sql_query("SELECT jsonb_build_object('controller_actor_id',controller_actor_id,'controller_epoch',controller_epoch,'authority_generation',authority_generation) AS value FROM realm_authority_root_current_results WHERE realm_id=$1")
+    let root=diesel::sql_query("SELECT jsonb_build_object('controller_actor_id',controller_actor_id,'controller_epoch',controller_epoch,'authority_generation',authority_generation,'authority_event_ref',authority_event_ref) AS value FROM realm_authority_root_current_results WHERE realm_id=$1")
         .bind::<Text,_>(realm.as_str()).get_result::<Root>(&mut conn).await.unwrap();
     arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&root.value).unwrap()).unwrap()
 }

@@ -121,7 +121,7 @@ async fn foreign_request(
     )
     .unwrap()
     .into_fact();
-    request.authority_commit.producer_signer_fact = Some(fact.clone());
+    request.authority_commit.producer_signer_fact = Some(fact.clone().into());
     request.authority_commit.commit.producer_signer_fact_digest = Some(fact.digest().unwrap());
     request.authority_commit.commit.committed_at = core.attested_at;
     request.self_producer_guard = None;
@@ -440,7 +440,8 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
         transaction.producer_signer_fact = source
             .prepare_human_signer_fact(&transaction.event, transaction.commit.committed_at)
             .await
-            .unwrap();
+            .unwrap()
+            .map(Into::into);
         assert!(transaction.producer_signer_fact.is_some());
         transaction.commit.producer_signer_fact_digest = transaction
             .producer_signer_fact
@@ -549,7 +550,7 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
     .unwrap()
     .unwrap();
     grant.authority_commit.commit.producer_signer_fact_digest = Some(grant_fact.digest().unwrap());
-    grant.authority_commit.producer_signer_fact = Some(grant_fact);
+    grant.authority_commit.producer_signer_fact = Some(grant_fact.into());
     historical_human::seal_commit(
         &mut grant.authority_commit.commit,
         &governor.pcr.history.station_did,
@@ -744,7 +745,7 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
     };
     assert_eq!(&original_target.event, event);
     assert_eq!(&original_target.commit, commit);
-    let archived_fact = source.human_signer_fact(event, commit).await.unwrap();
+    let archived_fact = source.producer_signer_fact(event, commit).await.unwrap();
     assert!(archived_fact.is_some());
     assert_eq!(archived_fact, target.authority_commit.producer_signer_fact);
     assert_eq!(
@@ -829,6 +830,8 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
         .find(|entry| entry.target.commit_id == commit.commit_id)
         .unwrap()
         .producer_signer_fact
+        .as_human_mut()
+        .unwrap()
         .key
         .governance_generation += 1;
     let fault_server = tokio::spawn(tcp_scan(
@@ -893,7 +896,7 @@ async fn accepted_forward_witness_reopens_then_executes_registered_prefix_withou
     assert_eq!(installed.event, *event);
     assert_eq!(installed.commit, *commit);
     assert_eq!(
-        reopened.human_signer_fact(event, commit).await.unwrap(),
+        reopened.producer_signer_fact(event, commit).await.unwrap(),
         target.authority_commit.producer_signer_fact
     );
     let held = reopened
@@ -1078,7 +1081,8 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
         transaction.producer_signer_fact = source
             .prepare_human_signer_fact(&transaction.event, transaction.commit.committed_at)
             .await
-            .unwrap();
+            .unwrap()
+            .map(Into::into);
         assert!(transaction.producer_signer_fact.is_some());
         transaction.commit.producer_signer_fact_digest = transaction
             .producer_signer_fact
@@ -1188,7 +1192,7 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
     .unwrap()
     .unwrap();
     grant.authority_commit.commit.producer_signer_fact_digest = Some(grant_fact.digest().unwrap());
-    grant.authority_commit.producer_signer_fact = Some(grant_fact);
+    grant.authority_commit.producer_signer_fact = Some(grant_fact.into());
     seal_service_commit(&mut grant.authority_commit.commit, &governor_state);
     uow.commit_event(grant.clone()).await.unwrap();
     let previous = &grant.authority_commit;
@@ -1351,7 +1355,7 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
         matches!(full, arkret_wire::CommittedEventView::Full(view) if view.event == *event && view.commit == *commit)
     );
     let archived = source
-        .human_signer_fact(event, commit)
+        .producer_signer_fact(event, commit)
         .await
         .unwrap()
         .unwrap();
@@ -1471,7 +1475,7 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
     assert_eq!(held.event, *event);
     assert_eq!(held.commit, *commit);
     assert_eq!(
-        store.human_signer_fact(event, commit).await.unwrap(),
+        store.producer_signer_fact(event, commit).await.unwrap(),
         Some(archived)
     );
     let anchor = store
@@ -1564,7 +1568,8 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
         transaction.producer_signer_fact = source
             .prepare_human_signer_fact(&transaction.event, transaction.commit.committed_at)
             .await
-            .unwrap();
+            .unwrap()
+            .map(Into::into);
         assert!(transaction.producer_signer_fact.is_some());
         transaction.commit.producer_signer_fact_digest = transaction
             .producer_signer_fact
@@ -1674,7 +1679,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     .unwrap()
     .unwrap();
     grant.authority_commit.commit.producer_signer_fact_digest = Some(grant_fact.digest().unwrap());
-    grant.authority_commit.producer_signer_fact = Some(grant_fact);
+    grant.authority_commit.producer_signer_fact = Some(grant_fact.into());
     seal_service_commit(&mut grant.authority_commit.commit, &governor_state);
     uow.commit_event(grant.clone()).await.unwrap();
     let previous = &grant.authority_commit;
@@ -1837,7 +1842,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
         matches!(full, arkret_wire::CommittedEventView::Full(view) if view.event == *event && view.commit == *commit)
     );
     let archived = source
-        .human_signer_fact(event, commit)
+        .producer_signer_fact(event, commit)
         .await
         .unwrap()
         .unwrap();
@@ -1957,7 +1962,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     assert_eq!(held.event, *event);
     assert_eq!(held.commit, *commit);
     assert_eq!(
-        store.human_signer_fact(event, commit).await.unwrap(),
+        store.producer_signer_fact(event, commit).await.unwrap(),
         Some(archived)
     );
     let anchor = store
@@ -1990,7 +1995,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     uow.commit_event(leave.clone()).await.unwrap();
     let le = &leave.authority_commit.event;
     let lc = &leave.authority_commit.commit;
-    let original_fact = source.human_signer_fact(le, lc).await.unwrap().unwrap();
+    let original_fact = source.producer_signer_fact(le, lc).await.unwrap().unwrap();
     assert_eq!(
         Some(original_fact.clone()),
         leave.authority_commit.producer_signer_fact
@@ -2070,7 +2075,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
         *lc
     );
     assert_eq!(
-        store.human_signer_fact(le, lc).await.unwrap(),
+        store.producer_signer_fact(le, lc).await.unwrap(),
         Some(original_fact.clone())
     );
     assert!(
@@ -2129,7 +2134,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
         .unwrap();
     future.authority_commit.commit.producer_signer_fact_digest =
         Some(future_fact.digest().unwrap());
-    future.authority_commit.producer_signer_fact = Some(future_fact);
+    future.authority_commit.producer_signer_fact = Some(future_fact.into());
     seal_service_commit(&mut future.authority_commit.commit, &governor_state);
     uow.commit_event(future.clone()).await.unwrap();
     let future_read = StreamScanRequest {
@@ -2230,7 +2235,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     {
         let mut conn = origin_pool.get().await.unwrap();
         diesel::sql_query(
-            "UPDATE agent_producer_signer_keys SET human_source_fact=NULL WHERE commit_id=$1",
+            "UPDATE agent_producer_signer_keys SET producer_source_fact=NULL WHERE commit_id=$1",
         )
         .bind::<diesel::sql_types::Text, _>(lc.commit_id.as_str())
         .execute(&mut *conn)
@@ -2263,7 +2268,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     {
         let mut conn = origin_pool.get().await.unwrap();
         diesel::sql_query(
-            "UPDATE agent_producer_signer_keys SET human_source_fact=$2 WHERE commit_id=$1",
+            "UPDATE agent_producer_signer_keys SET producer_source_fact=$2 WHERE commit_id=$1",
         )
         .bind::<diesel::sql_types::Text, _>(lc.commit_id.as_str())
         .bind::<diesel::sql_types::Jsonb, _>(serde_json::to_value(&original_fact).unwrap())
@@ -2521,7 +2526,7 @@ async fn opening_footprint(pool: &PgPool, realm: &arkret_wire::RealmId) -> (i64,
          (SELECT count(*) FROM realm_commits WHERE realm_id=$1) AS commits, \
          (SELECT count(*) FROM replica_stream_anchors WHERE realm_id=$1) AS anchors, \
          (SELECT count(*) FROM agent_producer_signer_keys f JOIN realm_commits c ON c.commit_id=f.commit_id \
-          WHERE c.realm_id=$1 AND f.human_source_fact IS NOT NULL) AS facts"
+          WHERE c.realm_id=$1 AND f.producer_source_fact IS NOT NULL) AS facts"
     ).bind::<diesel::sql_types::Text,_>(realm.as_str())
      .get_result::<Counts>(&mut *conn).await.unwrap();
     (c.events, c.commits, c.anchors, c.facts)

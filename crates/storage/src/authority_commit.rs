@@ -343,7 +343,7 @@ pub struct AuthorityCommitTransaction {
     pub event: Event,
     pub commit: RealmCommit,
     pub producer_signer_fact:
-        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
     pub mls_state: Option<MlsStateInstallation>,
     pub welcomes: Vec<VerifiedMlsWelcome>,
     /// Service-configured maximum outstanding deliveries for each exact
@@ -1401,15 +1401,6 @@ pub trait AuthorityCommitStore: Send + Sync {
     ) -> PersistenceResult<
         Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
     >;
-    async fn historical_producer_signer_fact(
-        &self,
-        event: &Event,
-        commit: &RealmCommit,
-    ) -> PersistenceResult<
-        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
-    > {
-        Ok(self.human_signer_fact(event, commit).await?.map(Into::into))
-    }
     /// Read an immutable source-only candidate. Admission repeats this at the locked cut.
     async fn prepare_human_signer_fact(
         &self,
@@ -1418,6 +1409,28 @@ pub trait AuthorityCommitStore: Send + Sync {
     ) -> PersistenceResult<
         Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
     >;
+
+    async fn producer_signer_fact(
+        &self,
+        event: &Event,
+        commit: &RealmCommit,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+    > {
+        Ok(self.human_signer_fact(event, commit).await?.map(Into::into))
+    }
+    async fn prepare_service_signer_fact(
+        &self,
+        event: &Event,
+        guard: &crate::AppletEventProducerGuard,
+        at: DateTime<Utc>,
+    ) -> PersistenceResult<arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact>
+    {
+        let _ = (event, guard, at);
+        Err(crate::PersistenceError::Conflict(
+            "dependency_missing: Service historical source preparation is unavailable".into(),
+        ))
+    }
 
     /// Bind the member's accepted target to immutable Genesis provenance at
     /// one current/target authorized cut, without disclosing a prejoin Event.
@@ -1889,6 +1902,21 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         event_id: &arkret_wire::EventId,
     ) -> PersistenceResult<Option<QueuedEventRecord>>;
+
+    /// Freeze an ordinary MLS Event-level refusal under the same authority
+    /// lock as acceptance. Existing acceptance always wins; request failures
+    /// must never call this method.
+    async fn finalize_mls_rejection(
+        &self,
+        event: &Event,
+        authority: &CurrentRealmAuthority,
+        reason_code: &str,
+    ) -> PersistenceResult<arkret_wire::AuthoritySubmitOutcome> {
+        let _ = (event, authority, reason_code);
+        Err(crate::PersistenceError::Conflict(
+            "temporarily_unavailable: durable MLS refusal is unavailable".into(),
+        ))
+    }
 
     /// Test fixture: atomically queue a producer Event and install its
     /// authority Commit with no domain admission. Production admits every

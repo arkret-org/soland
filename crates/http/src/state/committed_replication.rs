@@ -272,7 +272,7 @@ async fn replicate_one(
         if existing.commit == *commit && existing.event == *event {
             let original_fact = state
                 .authority_commits()
-                .historical_producer_signer_fact(event, commit)
+                .producer_signer_fact(event, commit)
                 .await?;
             if original_fact != item.producer_signer_fact {
                 return Err(ServiceError::Conflict(

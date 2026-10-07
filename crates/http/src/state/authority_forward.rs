@@ -750,7 +750,8 @@ pub(crate) async fn recover_forwarded_original(
         return Ok(None);
     };
     let Some(attempt) = queued.forward_attempt else {
-        return Ok(None);
+        validate_recovery_caller(state, session, event).await?;
+        return super::authority_self_event_unit::exact_replay(state, event).await;
     };
     let Some(original) = attempt.original_submission else {
         return Ok(None);
