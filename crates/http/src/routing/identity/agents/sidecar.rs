@@ -1186,9 +1186,11 @@ mod tests {
         use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork};
         let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
         let pool = database.pool();
-        let discussion =
-            source_context_test_realm::open_human_discussion(&pool, "sidecar-repeat-context-cas")
-                .await;
+        let discussion = Box::pin(source_context_test_realm::open_human_discussion(
+            &pool,
+            "sidecar-repeat-context-cas",
+        ))
+        .await;
         let realm = discussion.realm_id();
         let actor = discussion.head.authority_commit.event.actor_id.clone();
         let controller = actor.as_account_id().unwrap().clone();
@@ -1213,7 +1215,7 @@ mod tests {
             json!({}),
             at,
         );
-        uow.commit_event(create.clone()).await.unwrap();
+        Box::pin(uow.commit_event(create.clone())).await.unwrap();
         let genesis = create.authority_commit.event.event_id.clone();
         let sidecar = SidecarId::from_event_id(&genesis);
         let scope = arkret_wire::ScopeRef::Sidecar {
@@ -1246,8 +1248,8 @@ mod tests {
         };
         first.authority_commit.commit.stream_position = 0;
         first.authority_commit.commit.previous_commit_ref = None;
-        let first = source_context_test_realm::source_request(&pool, first).await;
-        uow.commit_event(first.clone()).await.unwrap();
+        let first = Box::pin(source_context_test_realm::source_request(&pool, first)).await;
+        Box::pin(uow.commit_event(first.clone())).await.unwrap();
         let (accepted_genesis, current) = store
             .sidecar_context_prepare_current(&realm, &controller, &context)
             .await
@@ -1323,7 +1325,7 @@ mod tests {
         second.authority_commit.commit.stream_position = 1;
         second.authority_commit.commit.previous_commit_ref =
             Some(first.authority_commit.commit.commit_id.clone());
-        let second = source_context_test_realm::source_request(&pool, second).await;
+        let second = Box::pin(source_context_test_realm::source_request(&pool, second)).await;
         let mut stale = second.clone();
         stale.authority_commit.event.created_at += chrono::Duration::seconds(1);
         source_context_test_realm::reseal(&mut stale.authority_commit.event);
@@ -1336,8 +1338,8 @@ mod tests {
         stale.authority_commit.commit.stream_position = 2;
         stale.authority_commit.commit.previous_commit_ref =
             Some(second.authority_commit.commit.commit_id.clone());
-        let stale = source_context_test_realm::source_request(&pool, stale).await;
-        uow.commit_event(second.clone()).await.unwrap();
+        let stale = Box::pin(source_context_test_realm::source_request(&pool, stale)).await;
+        Box::pin(uow.commit_event(second.clone())).await.unwrap();
         #[derive(diesel::QueryableByName)]
         struct Count {
             #[diesel(sql_type=diesel::sql_types::BigInt)]
@@ -1351,7 +1353,7 @@ mod tests {
             .await
             .unwrap()
             .count;
-        let stale_error = uow.commit_event(stale).await.unwrap_err();
+        let stale_error = Box::pin(uow.commit_event(stale)).await.unwrap_err();
         assert!(
             stale_error.to_string().contains("cas_conflict"),
             "{stale_error}"
@@ -1378,8 +1380,14 @@ mod tests {
         wrong_previous.authority_commit.commit.stream_position = 2;
         wrong_previous.authority_commit.commit.previous_commit_ref =
             Some(second.authority_commit.commit.commit_id.clone());
-        let wrong_previous = source_context_test_realm::source_request(&pool, wrong_previous).await;
-        let predecessor_error = uow.commit_event(wrong_previous).await.unwrap_err();
+        let wrong_previous = Box::pin(source_context_test_realm::source_request(
+            &pool,
+            wrong_previous,
+        ))
+        .await;
+        let predecessor_error = Box::pin(uow.commit_event(wrong_previous))
+            .await
+            .unwrap_err();
         assert!(
             predecessor_error.to_string().contains("cas_conflict"),
             "{predecessor_error}"
@@ -1395,7 +1403,9 @@ mod tests {
         assert_eq!(next_sidecar_context_version(None).unwrap(), (1, None));
         let mut different_commit = second.clone();
         different_commit.authority_commit.commit.committed_at += chrono::Duration::seconds(1);
-        let replay_conflict = uow.commit_event(different_commit).await.unwrap_err();
+        let replay_conflict = Box::pin(uow.commit_event(different_commit))
+            .await
+            .unwrap_err();
         assert!(
             replay_conflict.to_string().contains("duplicate_conflict"),
             "{replay_conflict}"
@@ -1404,7 +1414,11 @@ mod tests {
         // Preserve the accepted ID while changing its content: this must never
         // become an exact retry merely because its version matches current.
         different_envelope.authority_commit.event.created_at += chrono::Duration::seconds(1);
-        assert!(uow.commit_event(different_envelope).await.is_err());
+        assert!(
+            Box::pin(uow.commit_event(different_envelope))
+                .await
+                .is_err()
+        );
         assert_eq!(
             diesel::sql_query(counts)
                 .get_result::<Count>(&mut conn)
@@ -1413,7 +1427,7 @@ mod tests {
                 .count,
             before
         );
-        uow.commit_event(second).await.unwrap();
+        Box::pin(uow.commit_event(second)).await.unwrap();
         assert_eq!(
             diesel::sql_query(counts)
                 .get_result::<Count>(&mut conn)

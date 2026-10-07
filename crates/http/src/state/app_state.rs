@@ -2024,7 +2024,20 @@ mod committed_event_hydration_tests {
     async fn committed_realm_policy_is_rebuilt_by_the_restart_hydration_wrapper() {
         let database = TestDatabase::lease().await;
         let store = PgPersistenceStore::new(database.pool());
-        let unit = hydration_ordinary_realm::bootstrap_unit("policy-hydration-restart");
+        let pool = database.pool();
+        let station = hydration_ordinary_realm::station();
+        let account = Box::pin(hydration_ordinary_realm::human_profile::admit(
+            &pool,
+            &station,
+            "policy-hydration-founder",
+        ))
+        .await;
+        let unit = hydration_ordinary_realm::bootstrap_unit_for_account(
+            "policy-hydration-restart",
+            &account,
+            &hydration_ordinary_realm::human_profile::station_did(&station),
+        );
+        let unit = Box::pin(hydration_ordinary_realm::source_bootstrap(&pool, unit)).await;
         store
             .authority_commits()
             .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)

@@ -137,6 +137,195 @@ fn claim_batch(
 }
 
 #[tokio::test]
+async fn native_subject_claim_binds_prepared_history_to_the_exact_commit_time() {
+    use arkret_identity::principal_control::{
+        DirectIdentityControlPurpose, native_identity_control_key_from_verified_selection,
+    };
+    use arkret_signatures::webvh::{
+        PrincipalInceptionInput, PrincipalRotationInput, prepare_principal_inception,
+        prepare_principal_rotation,
+    };
+    use soland_storage::DeliveryPolicyStoreRegistry as _;
+
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
+    let unit = unit(&pool).await;
+    let at = unit.transactions[0].commit.committed_at;
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let creator = creator_account(&unit);
+    let subject_key = SigningKey::from_bytes(&[0x25; 32]);
+    let successor_key = SigningKey::from_bytes(&[0x26; 32]);
+    let successor_public = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        successor_key.verifying_key().as_bytes(),
+    );
+    let endpoint = "https://native-claim-subject.example/".parse().unwrap();
+    let inception = prepare_principal_inception(&PrincipalInceptionInput {
+        provider_endpoint: &endpoint,
+        principal_endpoint: &endpoint,
+        local_id: "native-claim-subject",
+        also_known_as: &[],
+        version_time: at - chrono::TimeDelta::hours(1),
+        root_seed: &subject_key.to_bytes(),
+        next_root_public_key_multibase: &successor_public,
+        witness_policy: None,
+    })
+    .unwrap();
+    let did = arkret_wire::Did::new(&inception.did).unwrap();
+    let subject = arkret_wire::AccountId::new(
+        arkret_wire::project_did_to_core_id(&did).unwrap(),
+        creator.station_id.clone(),
+    );
+    let verifier_key = SigningKey::from_bytes(&[0x64; 32]);
+    let verifier = arkret_wire::project_did_to_core_id(&did_key(&verifier_key).0).unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let policy = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &creator,
+        arkret_wire::EventKind::RealmPolicyBundle,
+        serde_json::json!({"policy_revision":2,"federation_policy":"closed","allowed_third_party_invite_verification_ids":[verifier]}),
+    );
+    uow.commit_event(policy.clone()).await.unwrap();
+    let create = realm_event_request_as(
+        &policy,
+        &creator,
+        arkret_wire::EventKind::InviteThirdParty,
+        serde_json::json!({"third_party_invite":{"oob_code_kind":"offline_token","token_commitment":format!("sha256:{}","d".repeat(64)),"token_salt_id":"native-claim-cut-salt","token_entropy_bits":128,"max_claims":1,"verification_id":verifier,"verification_public_key":arkret_canonical::ed25519_pubkey_to_did_key_multibase(verifier_key.verifying_key().as_bytes())},"expires_at":arkret_canonical::format_timestamp_canonical(at+chrono::TimeDelta::hours(12))}),
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let (request, mut proof) = claim_request(
+        &create,
+        &create,
+        &subject,
+        &subject_key,
+        &verifier_key,
+        |_| {},
+    );
+    let history = arkret_identity::verify_did_webvh_v1_chain(
+        &did,
+        std::slice::from_ref(&inception.log_entry),
+    )
+    .unwrap();
+    let selected =
+        soland_services::identity::select_did_webvh_state_at(&did, &history, proof.committed_at)
+            .unwrap();
+    proof.subject_native_control = Some(
+        native_identity_control_key_from_verified_selection(
+            &selected.did,
+            &subject.principal_id,
+            &selected.update_keys,
+            &did_key(&subject_key).1,
+            DirectIdentityControlPurpose::InviteClaimSubject,
+        )
+        .unwrap(),
+    );
+    proof.subject_control_history = Some(serde_json::json!({
+        "did": selected.did, "version_id": selected.version_id,
+        "log_head_digest": selected.log_head_digest, "update_keys": selected.update_keys,
+        "verified_at": arkret_canonical::format_timestamp_canonical(proof.committed_at),
+    }));
+    let realm = &create.authority_commit.event.realm_id;
+    let before = invite_families(&pool, realm).await;
+    let members = member_snapshot(&pool, realm).await;
+    for case in [
+        "missing_native_control",
+        "missing_history",
+        "wrong_history_time",
+    ] {
+        let mut invalid_proof = proof.clone();
+        match case {
+            "missing_native_control" => invalid_proof.subject_native_control = None,
+            "missing_history" => invalid_proof.subject_control_history = None,
+            "wrong_history_time" => {
+                invalid_proof.subject_control_history.as_mut().unwrap()["verified_at"] =
+                    serde_json::json!(arkret_canonical::format_timestamp_canonical(
+                        at + chrono::TimeDelta::seconds(1)
+                    ))
+            }
+            _ => unreachable!(),
+        }
+        let error = uow
+            .commit_event_batch(claim_batch(request.clone(), Some(invalid_proof)))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("claim_invalid"),
+            "{case}: {error}"
+        );
+        assert_eq!(
+            event_row_count(&pool, request.authority_commit.event.event_id.as_str()).await,
+            0,
+            "{case}"
+        );
+        assert_eq!(invite_families(&pool, realm).await, before, "{case}");
+        assert_eq!(member_snapshot(&pool, realm).await, members, "{case}");
+    }
+    // A genuine successor effective after the pinned cut must not replace
+    // the historical root prepared for this candidate.
+    let next_public = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+        SigningKey::from_bytes(&[0x27; 32])
+            .verifying_key()
+            .as_bytes(),
+    );
+    let rotation = prepare_principal_rotation(&PrincipalRotationInput {
+        did: did.as_str(),
+        local_id: &inception.local_id,
+        previous_entries: std::slice::from_ref(&inception.log_entry),
+        version_time: proof.committed_at + chrono::TimeDelta::seconds(1),
+        current_root_seed: &successor_key.to_bytes(),
+        next_root_public_key_multibase: &next_public,
+        state: &inception.log_entry["state"],
+    })
+    .unwrap();
+    let persistence = soland_storage_postgres::PgPersistenceStore::new(pool.clone());
+    for (index, entry) in [inception.log_entry, rotation.log_entry]
+        .into_iter()
+        .enumerate()
+    {
+        persistence
+            .webvh()
+            .append_log_event(soland_storage::WebvhLogRecord {
+                event_digest: arkret_canonical::canonical_sha256(&entry).unwrap(),
+                did: did.to_string(),
+                seq: index as u64 + 1,
+                created_at: entry["versionTime"].as_str().unwrap().parse().unwrap(),
+                operation: entry,
+            })
+            .await
+            .unwrap();
+    }
+    uow.commit_event_batch(claim_batch(request.clone(), Some(proof)))
+        .await
+        .unwrap();
+    assert_eq!(
+        event_row_count(&pool, request.authority_commit.event.event_id.as_str()).await,
+        1
+    );
+    assert_eq!(member_snapshot(&pool, realm).await, members);
+    let invites = PgInviteCurrentResultStore { pool: pool.clone() }
+        .invites_in_realm(Some(realm))
+        .await
+        .unwrap();
+    assert_eq!(invites[0].state, arkret_wire::InviteState::Claimed);
+    assert_eq!(
+        invites[0]
+            .accepted_claim
+            .as_ref()
+            .unwrap()
+            .subject_account_id,
+        subject
+    );
+}
+
+#[tokio::test]
 async fn prepared_claim_racing_verifier_withdrawal_preserves_the_accepting_cut() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();

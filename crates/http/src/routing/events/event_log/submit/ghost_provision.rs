@@ -62,7 +62,7 @@ pub(in crate::routing) async fn submit_applet_authoring_unit(
                     (StatusCode::UNPROCESSABLE_ENTITY, "schema_violation")
                 }
                 soland_services::ServiceErrorKind::UnsupportedEventKind => {
-                    (StatusCode::UNPROCESSABLE_ENTITY, "unsupported_event_kind")
+                    (StatusCode::NOT_IMPLEMENTED, "unsupported_event_kind")
                 }
                 soland_services::ServiceErrorKind::Conflict => (
                     StatusCode::CONFLICT,
