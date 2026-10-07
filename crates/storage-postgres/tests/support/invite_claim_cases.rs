@@ -137,6 +137,123 @@ fn claim_batch(
 }
 
 #[tokio::test]
+async fn prepared_claim_racing_verifier_withdrawal_preserves_the_accepting_cut() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    human_profile::admit(
+        &pool,
+        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+        "bootstrap-actor",
+    )
+    .await;
+    let unit = unit(&pool).await;
+    let at = unit.transactions[0].commit.committed_at;
+    PgAuthorityCommitStore { pool: pool.clone() }
+        .admit_ordinary_realm_bootstrap_unit(&unit, at)
+        .await
+        .unwrap();
+    let creator = creator_account(&unit);
+    let subject_key = SigningKey::from_bytes(&[0x24; 32]);
+    let verifier_key = SigningKey::from_bytes(&[0x63; 32]);
+    let subject = arkret_wire::AccountId::new(
+        arkret_wire::project_did_to_core_id(&did_key(&subject_key).0).unwrap(),
+        creator.station_id.clone(),
+    );
+    let verifier = arkret_wire::project_did_to_core_id(&did_key(&verifier_key).0).unwrap();
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let policy = realm_event_request_as(
+        &bootstrap_tail(&unit),
+        &creator,
+        arkret_wire::EventKind::RealmPolicyBundle,
+        serde_json::json!({"policy_revision":2,"federation_policy":"closed","allowed_third_party_invite_verification_ids":[verifier]}),
+    );
+    uow.commit_event(policy.clone()).await.unwrap();
+    let create = realm_event_request_as(
+        &policy,
+        &creator,
+        arkret_wire::EventKind::InviteThirdParty,
+        serde_json::json!({"third_party_invite":{"oob_code_kind":"offline_token","token_commitment":format!("sha256:{}","c".repeat(64)),"token_salt_id":"salt-claim-policy-race","token_entropy_bits":128,"max_claims":1,"verification_id":verifier,"verification_public_key":arkret_canonical::ed25519_pubkey_to_did_key_multibase(verifier_key.verifying_key().as_bytes())},"expires_at":arkret_canonical::format_timestamp_canonical(at+chrono::TimeDelta::hours(12))}),
+    );
+    uow.commit_event(create.clone()).await.unwrap();
+    let realm = &create.authority_commit.event.realm_id;
+    let members_before = member_snapshot(&pool, realm).await;
+    let (claim, proof) = claim_request(
+        &create,
+        &create,
+        &subject,
+        &subject_key,
+        &verifier_key,
+        |_| {},
+    );
+    let withdraw = realm_event_request_as(
+        &create,
+        &creator,
+        arkret_wire::EventKind::RealmPolicyBundle,
+        serde_json::json!({"policy_revision":3,"federation_policy":"closed","allowed_third_party_invite_verification_ids":[]}),
+    );
+    let (claimed, withdrawn) = tokio::join!(
+        uow.commit_event_batch(claim_batch(claim.clone(), Some(proof))),
+        uow.commit_event(withdraw.clone()),
+    );
+    let loser = match (&claimed, &withdrawn) {
+        (Ok(_), Err(error)) | (Err(error), Ok(_)) => error,
+        _ => panic!("exactly one cut must win: {claimed:?} {withdrawn:?}"),
+    };
+    assert_eq!(
+        loser.conflict_code(),
+        Some(soland_storage::ConflictCode::TemporarilyUnavailable)
+    );
+    if claimed.is_ok() {
+        assert_eq!(
+            event_row_count(&pool, withdraw.authority_commit.event.event_id.as_str()).await,
+            0
+        );
+        let committed_withdraw = realm_event_request_as(
+            &claim,
+            &creator,
+            arkret_wire::EventKind::RealmPolicyBundle,
+            serde_json::to_value(&withdraw.authority_commit.event.payload).unwrap(),
+        );
+        let committed_withdraw = source_if_human(&pool, committed_withdraw).await;
+        uow.commit_event(committed_withdraw).await.unwrap();
+        let before_retry = invite_families(&pool, realm).await;
+        uow.commit_event_batch(claim_batch(claim.clone(), None))
+            .await
+            .unwrap();
+        assert_eq!(invite_families(&pool, realm).await, before_retry);
+        assert_eq!(
+            event_row_count(&pool, claim.authority_commit.event.event_id.as_str()).await,
+            1
+        );
+    } else {
+        assert_eq!(
+            event_row_count(&pool, claim.authority_commit.event.event_id.as_str()).await,
+            0
+        );
+        let (after, proof) = claim_request(
+            &withdraw,
+            &create,
+            &subject,
+            &subject_key,
+            &verifier_key,
+            |_| {},
+        );
+        let before_reject = invite_families(&pool, realm).await;
+        let error = uow
+            .commit_event_batch(claim_batch(after.clone(), Some(proof)))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("claim_invalid"), "{error}");
+        assert_eq!(
+            event_row_count(&pool, after.authority_commit.event.event_id.as_str()).await,
+            0
+        );
+        assert_eq!(invite_families(&pool, realm).await, before_reject);
+    }
+    assert_eq!(member_snapshot(&pool, realm).await, members_before);
+}
+
+#[tokio::test]
 async fn third_party_claim_verifies_signatures_at_cut_and_accepts_exact_claimant() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
