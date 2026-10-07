@@ -5071,7 +5071,7 @@ async fn inject_joined_member(
 fn source_if_human(
     pool: &soland_storage_postgres::PgPool,
     mut request: EventCommitRequest,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + '_>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + Send + '_>> {
     Box::pin(async move {
         // Structural fixture placeholders are signed with the key material of
         // the actual accepted Human fixture. Explicit device-proof negatives
@@ -5126,7 +5126,7 @@ fn source_if_human(
 fn source_request(
     pool: &soland_storage_postgres::PgPool,
     mut request: EventCommitRequest,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + '_>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + Send + '_>> {
     Box::pin(async move {
         request.authority_commit.producer_signer_fact =
             PgAuthorityCommitStore { pool: pool.clone() }
