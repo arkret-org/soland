@@ -186,6 +186,17 @@ async fn keys_upload(
     })
 }
 
+fn directory_evidence_service_error(error: soland_services::ServiceError) -> AppError {
+    if error.conflict_code() == Some(soland_storage::ConflictCode::TemporarilyUnavailable) {
+        AppError::new(
+            arkret_wire::ErrorCode::TemporarilyUnavailable,
+            "current account-device evidence is temporarily unavailable",
+        )
+    } else {
+        AppError::internal(error.to_string())
+    }
+}
+
 /// Build one complete, origin-Station-attested device row when its current
 /// signer-evidence provider is available.
 ///
@@ -213,7 +224,7 @@ pub(crate) async fn attested_device_record(
     let Some((evidence, signer_evidence_ref)) =
         issue_current_account_device_signer_evidence(state, account_id, device_id, &facet)
             .await
-            .map_err(|error| AppError::internal(error.to_string()))?
+            .map_err(directory_evidence_service_error)?
     else {
         return Ok(None);
     };
@@ -1298,6 +1309,22 @@ async fn device_signing_keys_query(
 mod tests {
     use super::{device_signature_kid_points_to_device_key, keys_query_actor_visible_to_requester};
 
+    #[test]
+    fn directory_evidence_cut_race_preserves_registered_retryable_error() {
+        let error =
+            super::directory_evidence_service_error(soland_services::ServiceError::Conflict(
+                "temporarily_unavailable: current evidence retention lost its cut".into(),
+            ));
+        assert_eq!(error.code, arkret_wire::ErrorCode::TemporarilyUnavailable);
+        assert_eq!(
+            error.http_status(),
+            salvo::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let database = super::directory_evidence_service_error(
+            soland_services::ServiceError::Database("connection failure".into()),
+        );
+        assert_eq!(database.code, arkret_wire::ErrorCode::InternalError);
+    }
     #[test]
     fn key_visibility_requires_exact_actor_membership_not_a_shared_principal() {
         use arkret_wire::{AccountId, ActorId, DidCoreId};

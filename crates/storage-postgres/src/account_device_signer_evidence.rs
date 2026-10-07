@@ -21,6 +21,56 @@ use crate::{
     AsyncPgConnection, PersistenceError, PersistenceResult, PgPool, PgTransactionError, pg_conn,
 };
 
+fn retention_transaction_error(error: PgTransactionError) -> PersistenceError {
+    match error {
+        PgTransactionError::Diesel(diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::SerializationFailure,
+            _,
+        )) => PersistenceError::Conflict(format!(
+            "{}: account-device evidence retention lost its concurrent transaction cut",
+            ConflictCode::TemporarilyUnavailable,
+        )),
+        other => other.into_persistence(),
+    }
+}
+
+#[cfg(test)]
+mod retention_error_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn aborted_postgres_retention_cut_is_retryable_without_reclassifying_denials() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let mut conn = pg_conn(&database.pool()).await.unwrap();
+        let result = conn
+            .transaction::<(), PgTransactionError, _>(async |conn| {
+                sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                    .execute(conn)
+                    .await?;
+                sql_query("DO $$ BEGIN RAISE EXCEPTION 'fixture concurrent cut' USING ERRCODE='40001'; END $$")
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+            .await;
+        let error = retention_transaction_error(result.err().expect("SQLSTATE 40001 abort"));
+        assert_eq!(
+            error.conflict_code(),
+            Some(ConflictCode::TemporarilyUnavailable)
+        );
+        // The failed transaction has rolled back; its connection remains usable.
+        sql_query("SELECT 1").execute(&mut *conn).await.unwrap();
+        let denial = retention_transaction_error(PgTransactionError::Storage(
+            PersistenceError::Conflict("device_revoked: current device is revoked".into()),
+        ));
+        assert_eq!(denial.conflict_code(), Some(ConflictCode::DeviceRevoked));
+        let other = retention_transaction_error(PgTransactionError::Diesel(
+            diesel::result::Error::NotFound,
+        ));
+        assert!(matches!(other, PersistenceError::Database(_)));
+    }
+}
+
 #[derive(Clone)]
 pub struct PgAccountDeviceSignerEvidenceArchive {
     pool: PgPool,
@@ -184,7 +234,7 @@ impl AccountDeviceSignerEvidenceStore for PgAccountDeviceSignerEvidenceArchive {
                 return Err(PersistenceError::Conflict("forward origin immutable root collision".into()).into());
             }
             Ok(())
-        }).await.map_err(PgTransactionError::into_persistence)?;
+        }).await.map_err(retention_transaction_error)?;
         soland_storage::forwarded_producer_device_evidence_ref(evidence)
     }
 
@@ -400,7 +450,7 @@ impl PgAccountDeviceSignerEvidenceArchive {
             Ok(())
         })
         .await
-        .map_err(PgTransactionError::into_persistence)?;
+        .map_err(retention_transaction_error)?;
         Ok(reference)
     }
 
