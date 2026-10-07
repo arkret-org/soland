@@ -1007,7 +1007,8 @@ async fn verify_bound_invite_claim(
     let fact = state
         .persistence()
         .forwarded_bound_human_signer_fact(event, commit, governance)
-        .await?
+        .await
+        .map_err(temporarily_unavailable)?
         .ok_or_else(|| {
             temporarily_unavailable("bound claim historical producer source is unavailable")
         })?;
@@ -1022,7 +1023,8 @@ async fn verify_bound_invite_claim(
         event.realm_id.digest_suite_code().digest_suite(),
         Some(&fact.into()),
     )
-    .await?;
+    .await
+    .map_err(temporarily_unavailable)?;
     validate_recovery_caller(state, session, event).await?;
     if commits.current_authority(&event.realm_id).await?.as_ref()
         != Some(&located.current_authority())
