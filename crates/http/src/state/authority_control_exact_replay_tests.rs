@@ -413,8 +413,9 @@ async fn native_control_exact_replay_uses_originals_after_runtime_revocation_and
         .submit_self_event(&f.session, EventAdmissionSubmission::new(changed))
         .await
         .unwrap_err();
-    assert!(
-        error.to_string().contains("duplicate_conflict") || error.to_string().contains("schema")
+    assert_eq!(
+        error.conflict_code(),
+        Some(soland_storage::ConflictCode::EventIdDigestMismatch)
     );
     // A genuinely different Event has no accepted witness, and must run the
     // original new-admission/current source path rather than inheriting a key.

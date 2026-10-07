@@ -180,6 +180,16 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
             return crate::error::render_error_code(code, res, detail);
         }
         match error.conflict_code() {
+            Some(soland_storage::ConflictCode::EventIdDigestMismatch) => {
+                return crate::error::render_error_with_reason_code(
+                    res,
+                    crate::error::error_http_status(ErrorCode::SchemaViolation),
+                    ErrorCode::SCHEMA_VIOLATION,
+                    "Event identity does not match its canonical content",
+                    arkret_wire::ReasonCode::EVENT_ID_DIGEST_MISMATCH,
+                    None,
+                );
+            }
             Some(soland_storage::ConflictCode::ApprovalRequired) => {
                 return crate::error::render_error_with_reason_code(
                     res,
@@ -863,6 +873,22 @@ mod tests {
             let descriptor = operation.descriptor();
             assert_eq!(descriptor.http_path, path);
             assert_eq!(descriptor.http_method, "POST");
+        }
+    }
+
+    #[tokio::test]
+    async fn event_identity_mismatch_renders_schema_violation_not_duplicate_conflict() {
+        for detail in [
+            "event_id_digest_mismatch",
+            "event_id_digest_mismatch: carried Event ID differs from its preimage",
+        ] {
+            let mut res = Response::new();
+            render_service_error(&mut res, ServiceError::Conflict(detail.to_owned()));
+            assert_eq!(res.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
+            let body: serde_json::Value = res.take_json().await.expect("problem body");
+            assert_eq!(body["status"], 422);
+            assert_eq!(body["type"], "https://arkret.org/problems/schema_violation");
+            assert_eq!(body["reason_code"], "event_id_digest_mismatch");
         }
     }
 

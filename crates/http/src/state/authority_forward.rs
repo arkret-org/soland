@@ -745,6 +745,7 @@ pub(crate) async fn recover_forwarded_original(
         SelfAuthoritySubmitRequest::MlsCommit(value) => &value.commit_event,
         _ => return Ok(None),
     };
+    super::authority_self_event_unit::validate_replay_event_identity(event)?;
     let commits = state.authority_commits();
     let Some(queued) = commits.queued_event(&event.event_id).await? else {
         return Ok(None);

@@ -179,12 +179,27 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     )
 }
 
+/// Content identity is checked before any Event-ID lookup, without refreshing
+/// the historical producer's current authority or device state.
+pub(super) fn validate_replay_event_identity(event: &Event) -> ServiceResult<()> {
+    let derived = event
+        .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+    if derived != event.event_id {
+        return Err(ServiceError::Conflict(
+            soland_storage::ConflictCode::EventIdDigestMismatch.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// The original outcome of an exact duplicate Event, before any producer,
 /// evidence freshness or admission check runs again.
 pub(super) async fn exact_replay(
     state: &AppState,
     event: &Event,
 ) -> ServiceResult<Option<AuthoritySubmitOutcome>> {
+    validate_replay_event_identity(event)?;
     let Some(existing) = state
         .authority_commits()
         .queued_event(&event.event_id)
@@ -712,6 +727,38 @@ pub(crate) async fn submit_mimi_binding_event(
 #[cfg(test)]
 mod claim_privacy_tests {
     use super::*;
+
+    #[test]
+    fn replay_identity_accepts_exact_content_and_rejects_drift_before_lookup() {
+        let mut event = arkret_wire::test_support::raw_event(
+            "ak.message.create",
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(
+                    "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5",
+                )
+                .unwrap(),
+            },
+            arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkfixture").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkfixtureps").unwrap(),
+            serde_json::json!({"body": "original"}),
+        )
+        .unwrap();
+        validate_replay_event_identity(&event).unwrap();
+        let original_id = event.event_id.clone();
+        event
+            .payload
+            .insert("body".into(), serde_json::json!("drift"));
+        let error = validate_replay_event_identity(&event).unwrap_err();
+        assert_eq!(
+            error.conflict_code(),
+            Some(soland_storage::ConflictCode::EventIdDigestMismatch)
+        );
+        assert_eq!(event.event_id, original_id);
+        event.event_id = event
+            .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        validate_replay_event_identity(&event).unwrap();
+    }
 
     #[test]
     fn claim_token_state_refusals_have_one_public_error() {
