@@ -5180,31 +5180,35 @@ async fn invite_grant_request(
 
 /// Assert `request` was refused with `code` and left zero writes: no Event
 /// row, no Commit and no Invite typed current change.
-async fn assert_refused_with_zero_writes(
-    uow: &PgEventCommitUnitOfWork,
-    store: &PgAuthorityCommitStore,
-    pool: &soland_storage_postgres::PgPool,
-    request: &EventCommitRequest,
+fn assert_refused_with_zero_writes<'a>(
+    uow: &'a PgEventCommitUnitOfWork,
+    store: &'a PgAuthorityCommitStore,
+    pool: &'a soland_storage_postgres::PgPool,
+    request: &'a EventCommitRequest,
     code: soland_storage::ConflictCode,
-) -> soland_storage::PersistenceError {
-    let request = source_if_human(pool, request.clone()).await;
-    let realm_id = &request.authority_commit.event.realm_id;
-    let before = invite_families(pool, realm_id).await;
-    let error = uow.commit_event(request.clone()).await.unwrap_err();
-    assert_eq!(error.conflict_code(), Some(code), "{error}");
-    assert!(
-        store
-            .committed_event(&request.authority_commit.event.event_id)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(
-        event_row_count(pool, request.authority_commit.event.event_id.as_str()).await,
-        0
-    );
-    assert_eq!(invite_families(pool, realm_id).await, before);
-    error
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = soland_storage::PersistenceError> + 'a>> {
+    // Long scenarios reuse this assertion without duplicating its large
+    // commit future in their default-stack poll frames.
+    Box::pin(async move {
+        let request = source_if_human(pool, request.clone()).await;
+        let realm_id = &request.authority_commit.event.realm_id;
+        let before = invite_families(pool, realm_id).await;
+        let error = uow.commit_event(request.clone()).await.unwrap_err();
+        assert_eq!(error.conflict_code(), Some(code), "{error}");
+        assert!(
+            store
+                .committed_event(&request.authority_commit.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            event_row_count(pool, request.authority_commit.event.event_id.as_str()).await,
+            0
+        );
+        assert_eq!(invite_families(pool, realm_id).await, before);
+        error
+    })
 }
 
 /// Real PostgreSQL: a directed `ak.invite.create` opens the three Invite
