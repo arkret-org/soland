@@ -4911,52 +4911,60 @@ fn creator_account(unit: &OrdinaryRealmBootstrapCommitUnit) -> arkret_wire::Acco
         .clone()
 }
 
-async fn admit_joined_human(
-    pool: &soland_storage_postgres::PgPool,
-    uow: &PgEventCommitUnitOfWork,
-    previous: &EventCommitRequest,
-    unit: &OrdinaryRealmBootstrapCommitUnit,
-    label: &str,
+fn admit_joined_human<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    uow: &'a PgEventCommitUnitOfWork,
+    previous: &'a EventCommitRequest,
+    unit: &'a OrdinaryRealmBootstrapCommitUnit,
+    label: &'a str,
     nonce: char,
-) -> (arkret_wire::AccountId, EventCommitRequest) {
-    let station = &unit.transactions[0].expected_authority.service_id;
-    let account = human_profile::admit(pool, station, label).await;
-    admit_joined_account(pool, uow, previous, unit, account, nonce).await
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = (arkret_wire::AccountId, EventCommitRequest)> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let station = &unit.transactions[0].expected_authority.service_id;
+        let account = human_profile::admit(pool, station, label).await;
+        admit_joined_account(pool, uow, previous, unit, account, nonce).await
+    })
 }
 
-async fn admit_joined_account(
-    pool: &soland_storage_postgres::PgPool,
-    uow: &PgEventCommitUnitOfWork,
-    previous: &EventCommitRequest,
-    unit: &OrdinaryRealmBootstrapCommitUnit,
+fn admit_joined_account<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    uow: &'a PgEventCommitUnitOfWork,
+    previous: &'a EventCommitRequest,
+    unit: &'a OrdinaryRealmBootstrapCommitUnit,
     account: arkret_wire::AccountId,
     nonce: char,
-) -> (arkret_wire::AccountId, EventCommitRequest) {
-    let invite = realm_event_request_as(
-        previous,
-        &creator_account(unit),
-        arkret_wire::EventKind::InviteCreate,
-        invite_create_payload(
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = (arkret_wire::AccountId, EventCommitRequest)> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let invite = realm_event_request_as(
+            previous,
+            &creator_account(unit),
+            arkret_wire::EventKind::InviteCreate,
+            invite_create_payload(
+                &account,
+                nonce,
+                previous.authority_commit.commit.committed_at,
+            ),
+        );
+        let invite = source_if_human(pool, invite).await;
+        uow.commit_event(invite.clone()).await.unwrap();
+        let joined = realm_event_request_as(
+            &invite,
             &account,
-            nonce,
-            previous.authority_commit.commit.committed_at,
-        ),
-    );
-    let invite = source_if_human(pool, invite).await;
-    uow.commit_event(invite.clone()).await.unwrap();
-    let joined = realm_event_request_as(
-        &invite,
-        &account,
-        arkret_wire::EventKind::InviteAccept,
-        serde_json::json!({
-            "invite_id": arkret_wire::InviteId::from_event_id(&invite.authority_commit.event.event_id),
-            "previous_state": "pending",
-            "invitee_account_id": account,
-        }),
-    );
-    let joined = source_if_human(pool, joined).await;
-    uow.commit_event(joined.clone()).await.unwrap();
-    (account, joined)
+            arkret_wire::EventKind::InviteAccept,
+            serde_json::json!({
+                "invite_id": arkret_wire::InviteId::from_event_id(&invite.authority_commit.event.event_id),
+                "previous_state": "pending",
+                "invitee_account_id": account,
+            }),
+        );
+        let joined = source_if_human(pool, joined).await;
+        uow.commit_event(joined.clone()).await.unwrap();
+        (account, joined)
+    })
 }
 
 fn bootstrap_tail(unit: &OrdinaryRealmBootstrapCommitUnit) -> EventCommitRequest {
@@ -5148,40 +5156,42 @@ fn source_request(
     })
 }
 
-async fn invite_grant_request(
-    pool: &soland_storage_postgres::PgPool,
-    previous: &EventCommitRequest,
-    unit: &OrdinaryRealmBootstrapCommitUnit,
-    root_event_ref: &str,
-    subject: &arkret_wire::AccountId,
-    actions: &[&str],
-) -> EventCommitRequest {
-    let realm_id = unit.transactions[0].event.realm_id.clone();
-    let request = realm_event_request_as(
-        previous,
-        &creator_account(unit),
-        arkret_wire::EventKind::CapabilityGrant,
-        serde_json::json!({
-            "grant": {
-                "schema": "ak.schema.capability.v1",
-                "realm_id": realm_id,
-                "issuer_id": unit.transactions[0].event.actor_id,
-                "subject": arkret_wire::ActorId::account(subject.clone()),
-                "actions": actions,
-                "resources": [{"kind": "realm", "realm_id": realm_id}],
-                "issuer_authority_refs": [{
-                    "kind": "realm_root",
+fn invite_grant_request<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    previous: &'a EventCommitRequest,
+    unit: &'a OrdinaryRealmBootstrapCommitUnit,
+    root_event_ref: &'a str,
+    subject: &'a arkret_wire::AccountId,
+    actions: &'a [&'a str],
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + Send + 'a>> {
+    Box::pin(async move {
+        let realm_id = unit.transactions[0].event.realm_id.clone();
+        let request = realm_event_request_as(
+            previous,
+            &creator_account(unit),
+            arkret_wire::EventKind::CapabilityGrant,
+            serde_json::json!({
+                "grant": {
+                    "schema": "ak.schema.capability.v1",
                     "realm_id": realm_id,
-                    "authority_event_ref": root_event_ref,
-                    "authority_generation": 0
-                }],
-                "issued_at": arkret_canonical::format_timestamp_canonical(
-                    previous.authority_commit.commit.committed_at
-                ),
-            }
-        }),
-    );
-    source_request(pool, request).await
+                    "issuer_id": unit.transactions[0].event.actor_id,
+                    "subject": arkret_wire::ActorId::account(subject.clone()),
+                    "actions": actions,
+                    "resources": [{"kind": "realm", "realm_id": realm_id}],
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": realm_id,
+                        "authority_event_ref": root_event_ref,
+                        "authority_generation": 0
+                    }],
+                    "issued_at": arkret_canonical::format_timestamp_canonical(
+                        previous.authority_commit.commit.committed_at
+                    ),
+                }
+            }),
+        );
+        source_request(pool, request).await
+    })
 }
 
 /// Assert `request` was refused with `code` and left zero writes: no Event
