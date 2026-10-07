@@ -1029,6 +1029,9 @@ fn relayed_refusal(status: u16, body: &[u8]) -> ServiceError {
     if status >= 500 {
         return temporarily_unavailable(format!("governance Station answered HTTP {status}"));
     }
+    if code == ErrorCode::NotFound {
+        return ServiceError::NotFound(problem.detail);
+    }
     let reason = problem
         .extensions
         .get("reason_code")

@@ -256,6 +256,10 @@ fn relayed_governance_refusals_keep_their_registered_codes() {
         relay_governance_response(&request, answer(422, problem("schema_violation", None))),
         Err(ServiceError::SchemaViolation(_))
     ));
+    assert!(matches!(
+        relay_governance_response(&request, answer(404, problem("not_found", None))),
+        Err(ServiceError::NotFound(detail)) if detail == "refused by governance"
+    ));
     for (status, body) in [
         (500, problem("internal_error", None)),
         (409, serde_json::json!({"code": "device_revoked"})),
