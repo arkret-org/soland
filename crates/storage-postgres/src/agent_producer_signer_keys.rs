@@ -346,7 +346,26 @@ pub(crate) async fn native_control_target_in_connection(
     )
 }
 
-pub(crate) async fn prepare_local_human_source_in_connection(
+pub(crate) fn prepare_local_human_source_in_connection<'a>(
+    conn: &'a mut AsyncPgConnection,
+    event: &'a arkret_wire::Event,
+    admitted_at: chrono::DateTime<chrono::Utc>,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = PersistenceResult<
+                    Option<
+                        arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact,
+                    >,
+                >,
+            > + Send
+            + 'a,
+    >,
+> {
+    Box::pin(prepare_local_human_source_inner(conn, event, admitted_at))
+}
+
+async fn prepare_local_human_source_inner(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     admitted_at: chrono::DateTime<chrono::Utc>,
@@ -620,10 +639,18 @@ pub(crate) async fn validate_prepared_local_human_in_connection(
         transaction.commit.committed_at,
     )
     .await?;
-    if prepared != transaction.producer_signer_fact {
+    if prepared.as_ref()
+        != transaction
+            .producer_signer_fact
+            .as_ref()
+            .and_then(|fact| fact.as_human())
+    {
         return Err(PersistenceError::Conflict(
             "Human signer source changed before acceptance".into(),
         ));
+    }
+    if transaction.producer_signer_fact.as_ref().is_some_and(|fact| matches!(fact, arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Service(_))) {
+        return Ok(None);
     }
     validate_human_fact_binding(&transaction.event, &transaction.commit, prepared.as_ref())?;
     Ok(prepared)
@@ -667,7 +694,7 @@ pub(crate) async fn retain_prepared_human_in_connection(
 ) -> PersistenceResult<()> {
     validate_human_fact_binding(event, commit, Some(fact))?;
     retain_outcome_in_connection(conn, event, commit, human_fact_outcome(fact, commit)).await?;
-    let written = sql_query("UPDATE agent_producer_signer_keys SET human_source_fact=$2 WHERE commit_id=$1 AND human_source_fact IS NULL")
+    let written = sql_query("UPDATE agent_producer_signer_keys SET producer_source_fact=$2 WHERE commit_id=$1 AND producer_source_fact IS NULL")
         .bind::<Text,_>(commit.commit_id.as_str())
         .bind::<Jsonb,_>(serde_json::to_value(fact).map_err(PersistenceError::database)?)
         .execute(&mut *conn).await.map_err(PersistenceError::database)?;
@@ -679,6 +706,86 @@ pub(crate) async fn retain_prepared_human_in_connection(
     Ok(())
 }
 
+fn service_fact_outcome(
+    fact: &arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact,
+    commit: &arkret_wire::RealmCommit,
+) -> SignerKeyQueryResult {
+    SignerKeyQueryResult::HistoricalServiceResolved {
+        selector: SignerKeyQuerySelector::HistoricalEvent {
+            sender: HistoricalSignerKeyQuerySender::Service {
+                actor: fact.actor.clone(),
+                verification_method: fact.verification_method.clone(),
+                committed_event_ref: arkret_wire::CommittedEventRef {
+                    event_id: fact.event_id.clone(),
+                    commit_id: commit.commit_id.clone(),
+                    stream_ref: commit.stream_ref.clone(),
+                    stream_position: commit.stream_position,
+                },
+            },
+        },
+        key: fact.key.clone(),
+        accepted_at: fact.accepted_at,
+    }
+}
+pub(crate) fn validate_producer_fact_binding(
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    fact: Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+) -> PersistenceResult<()> {
+    match (commit.producer_signer_fact_digest.as_ref(), fact) {
+        (Some(_), Some(fact)) => {
+            let suite = event.realm_id.digest_suite_code().digest_suite();
+            fact.validate_commit_binding(
+                &arkret_wire::CommittedEventFullView {
+                    event: event.clone(),
+                    commit: commit.clone(),
+                },
+                suite,
+            )
+            .map_err(PersistenceError::database)?;
+            arkret_identity::account_device_signer_evidence::verify_historical_producer_event_signature(event, fact, suite).map_err(PersistenceError::database)?;
+            Ok(())
+        }
+        (None, None) => Ok(()),
+        _ => Err(PersistenceError::Conflict(
+            "original producer source and Commit digest differ".into(),
+        )),
+    }
+}
+pub(crate) async fn retain_prepared_service_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    fact: &arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact,
+) -> PersistenceResult<()> {
+    validate_producer_fact_binding(event, commit, Some(&fact.clone().into()))?;
+    retain_outcome_in_connection(conn, event, commit, service_fact_outcome(fact, commit)).await?;
+    let written = sql_query("UPDATE agent_producer_signer_keys SET producer_source_fact=$2 WHERE commit_id=$1 AND producer_source_fact IS NULL")
+        .bind::<Text,_>(commit.commit_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(fact).map_err(PersistenceError::database)?)
+        .execute(&mut *conn).await.map_err(PersistenceError::database)?;
+    if written != 1 {
+        return Err(PersistenceError::Conflict(
+            "Service original source was already frozen".into(),
+        ));
+    }
+    Ok(())
+}
+pub(crate) async fn producer_source_for_commit_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+) -> PersistenceResult<
+    Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+> {
+    let row = sql_query("SELECT producer_source_fact AS payload FROM agent_producer_signer_keys WHERE commit_id=$1 AND producer_source_fact IS NOT NULL")
+        .bind::<Text,_>(commit.commit_id.as_str()).get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
+    let fact = row
+        .map(|row| serde_json::from_value(row.payload).map_err(PersistenceError::database))
+        .transpose()?;
+    validate_producer_fact_binding(event, commit, fact.as_ref())?;
+    Ok(fact)
+}
+
 pub(crate) async fn human_source_for_commit_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -686,13 +793,11 @@ pub(crate) async fn human_source_for_commit_in_connection(
 ) -> PersistenceResult<
     Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
 > {
-    let row = sql_query("SELECT human_source_fact AS payload FROM agent_producer_signer_keys WHERE commit_id=$1 AND human_source_fact IS NOT NULL")
-        .bind::<Text,_>(commit.commit_id.as_str()).get_result::<JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
-    let fact = row
-        .map(|row| serde_json::from_value(row.payload).map_err(PersistenceError::database))
-        .transpose()?;
-    validate_human_fact_binding(event, commit, fact.as_ref())?;
-    Ok(fact)
+    Ok(
+        producer_source_for_commit_in_connection(conn, event, commit)
+            .await?
+            .and_then(|fact| fact.as_human().cloned()),
+    )
 }
 
 pub(crate) async fn read(
@@ -717,10 +822,10 @@ pub(crate) async fn read(
         #[diesel(sql_type=Jsonb)]
         commit_json: Value,
         #[diesel(sql_type=Nullable<Jsonb>)]
-        human_source_fact: Option<Value>,
+        producer_source_fact: Option<Value>,
     }
     let row =
-        sql_query("SELECT k.outcome AS payload,e.envelope,c.commit_json,k.human_source_fact FROM agent_producer_signer_keys k JOIN realm_commits c ON c.commit_id=k.commit_id JOIN canonical_events e ON e.pk=c.event_pk WHERE k.commit_id=$1 AND c.realm_id=$2 AND e.state='committed' AND e.envelope->>'event_id'=$3 AND c.stream_ref=$4 AND c.stream_position=$5")
+        sql_query("SELECT k.outcome AS payload,e.envelope,c.commit_json,k.producer_source_fact FROM agent_producer_signer_keys k JOIN realm_commits c ON c.commit_id=k.commit_id JOIN canonical_events e ON e.pk=c.event_pk WHERE k.commit_id=$1 AND c.realm_id=$2 AND e.state='committed' AND e.envelope->>'event_id'=$3 AND c.stream_ref=$4 AND c.stream_position=$5")
             .bind::<Text, _>(target.commit_id.as_str())
             .bind::<Text, _>(realm_id.as_str())
             .bind::<Text, _>(target.event_id.as_str())
@@ -755,7 +860,7 @@ pub(crate) async fn read(
         .is_some()
         && !native_control_target_in_connection(&mut conn, &event.realm_id).await?
     {
-        let Some(raw) = row.human_source_fact else {
+        let Some(raw) = row.producer_source_fact else {
             historical_fact_diagnostic("ordinary_read", "immutable_fact_not_found");
             return Ok(None);
         };
@@ -766,8 +871,29 @@ pub(crate) async fn read(
             return Ok(None);
         }
     }
+    if matches!(
+        &outcome,
+        SignerKeyQueryResult::HistoricalServiceResolved { .. }
+    ) {
+        let fact = producer_source_for_commit_in_connection(&mut conn, &event, &commit).await?;
+        let Some(
+            arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Service(
+                fact,
+            ),
+        ) = fact
+        else {
+            return Ok(None);
+        };
+        if outcome != service_fact_outcome(&fact, &commit) {
+            return Ok(None);
+        }
+    }
     let matches = outcome.selector() == selector
-        && matches!(outcome, SignerKeyQueryResult::HistoricalResolved { .. });
+        && matches!(
+            outcome,
+            SignerKeyQueryResult::HistoricalResolved { .. }
+                | SignerKeyQueryResult::HistoricalServiceResolved { .. }
+        );
     historical_fact_diagnostic(
         "ordinary_read",
         if matches {
@@ -1195,4 +1321,20 @@ pub(crate) async fn prepare_agent_controller_outcome_in_connection(
         kind: "agent_pcr_controller",
         provenance: serde_json::json!({"accepted_pcr_realm_id":pcr,"provision_ref":provision_ref,"controller_account":controller,"controller_delegation_ref":provision.controller_authorization_ref}),
     })
+}
+
+pub(crate) async fn retain_prepared_producer_in_connection(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    fact: &arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact,
+) -> PersistenceResult<()> {
+    match fact {
+        arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Human(
+            fact,
+        ) => retain_prepared_human_in_connection(conn, event, commit, fact).await,
+        arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Service(
+            fact,
+        ) => retain_prepared_service_in_connection(conn, event, commit, fact).await,
+    }
 }

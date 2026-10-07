@@ -540,9 +540,11 @@ pub(crate) async fn admit_authoring_unit(
     let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
     (&mut *conn)
         .transaction::<_, PgTransactionError, _>(async move |conn| {
-            admit_in_connection(conn, &input, &author, &attester, &finalize)
-                .await
-                .map_err(Into::into)
+            Box::pin(admit_in_connection(
+                conn, &input, &author, &attester, &finalize,
+            ))
+            .await
+            .map_err(Into::into)
         })
         .await
         .map_err(PgTransactionError::into_persistence)
@@ -791,19 +793,21 @@ async fn admit_in_connection(
         // Native installation does not exempt its ordinary Human members from
         // the original signer-fact contract. Freeze under this same locked cut,
         // bind it before Commit ID/signature, and archive only with acceptance.
-        let producer_signer_fact =
+        let producer_signer_fact = Box::pin(
             crate::agent_producer_signer_keys::prepare_local_human_source_in_connection(
                 conn,
                 event,
                 input.accepted_at,
-            )
-            .await?;
+            ),
+        )
+        .await?;
+        let candidate = producer_signer_fact.clone().map(Into::into);
         let commit = author(
             event,
             &authority,
             head.as_ref(),
             input.accepted_at,
-            producer_signer_fact.as_ref(),
+            candidate.as_ref(),
         )?;
         crate::agent_producer_signer_keys::validate_human_fact_binding(
             event,
@@ -832,7 +836,7 @@ async fn admit_in_connection(
             expected_authority: authority,
             event: event.clone(),
             commit: commit.clone(),
-            producer_signer_fact: producer_signer_fact.clone(),
+            producer_signer_fact: candidate,
             mls_state: None,
             welcomes: vec![],
             recipient_queue_capacity: 0,
@@ -932,14 +936,16 @@ async fn admit_in_connection(
     };
     let (managed_vm, managed_key) =
         managed_signing_key(provision, &managed_document, input.accepted_at)?;
-    let context = crate::applet_authoring_context::materialize_context_in_connection(
-        conn,
-        input,
-        &portal_head,
-        provision,
-        &managed_vm,
-        &managed_key,
-        attester,
+    let context = Box::pin(
+        crate::applet_authoring_context::materialize_context_in_connection(
+            conn,
+            input,
+            &portal_head,
+            provision,
+            &managed_vm,
+            &managed_key,
+            attester,
+        ),
     )
     .await?;
     sql_query("UPDATE applet_authoring_previews SET status='committed',committed_at=$3 WHERE subject_key=$1 AND request_digest=$2 AND status='current'")

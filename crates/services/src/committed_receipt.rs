@@ -117,7 +117,7 @@ pub async fn verify_committed_event_receipt_with_fact(
     keys: &(dyn RealmAuthorityKeyDirectory + Sync),
     receiver: &DidCoreId,
     digest_suite: DigestSuite,
-    fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    fact: Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
 ) -> ServiceResult<ReceivedProducer> {
     let received = verify_non_governance_committed_event(
         event,
@@ -130,7 +130,7 @@ pub async fn verify_committed_event_receipt_with_fact(
     )?;
     match (commit.producer_signer_fact_digest.as_ref(), fact) {
         (Some(_), Some(fact)) => {
-            arkret_identity::account_device_signer_evidence::verify_historical_human_committed_event(
+            arkret_identity::account_device_signer_evidence::verify_historical_producer_committed_event(
                 &arkret_wire::CommittedEventFullView { event: event.clone(), commit: commit.clone() },
                 fact, authority, keys, digest_suite,
             ).map_err(|e| ServiceError::protocol(ErrorCode::SignatureInvalid, e))?;

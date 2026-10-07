@@ -593,6 +593,19 @@ impl AuthorityProtocolPort for AppState {
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.commit_event;
+        if self
+            .authority_commits()
+            .queued_event(&event.event_id)
+            .await?
+            .is_some()
+        {
+            super::authority_forward::validate_recovery_caller(self, session, event).await?;
+            if let Some(original) =
+                super::authority_self_event_unit::exact_replay(self, event).await?
+            {
+                return Ok(original);
+            }
+        }
         if let Some(original) = super::authority_forward::recover_forwarded_original(
             self,
             session,

@@ -62,18 +62,20 @@ fn principal_genesis_resolution_value(
 fn genesis_authority_root_value(
     payload_object: Option<&serde_json::Map<String, Value>>,
     created_by: &arkret_wire::ActorId,
+    event_id: &arkret_wire::EventId,
 ) -> Result<Value, &'static str> {
     let object = payload_object.ok_or("realm_authority_root_missing")?;
-    let governance_station_id = object
+    let _governance_station_id = object
         .get("governance_station_id")
         .and_then(Value::as_str)
         .ok_or("realm_authority_root_missing")?;
-    Ok(serde_json::json!({
-        "controller_actor_id": created_by,
-        "controller_epoch": 0,
-        "governance_station_id": governance_station_id,
-        "authority_generation": 0,
-    }))
+    serde_json::to_value(arkret_wire::RealmAuthorityRootValue {
+        controller_actor_id: created_by.clone(),
+        controller_epoch: 0,
+        authority_generation: 0,
+        authority_event_ref: event_id.clone(),
+    })
+    .map_err(|_| "realm_authority_root_missing")
 }
 
 impl ProjectionState {
@@ -203,12 +205,12 @@ impl ProjectionState {
             arkret_wire::EventKind::RealmAuthorityReset => {
                 // `event-kind-registry.json` registers exactly one write for
                 // `ak.realm.authority.reset`: `allowed_paths` is empty, the
-                // payload carries no patch, and the only change is the derived
-                // `authority_generation` successor. `controller_actor_id` and
-                // `controller_epoch` are preserved verbatim from the pre-state
-                // the digest above froze. Advancing this generation is what
-                // invalidates every `realm_root`-rooted delegation at once
-                // (`authz/capabilities.md` section 10).
+                // payload carries no patch. Its exact accepted Event replaces
+                // the anchor with the derived `authority_generation` successor.
+                // `controller_actor_id` and `controller_epoch` are preserved
+                // verbatim from the pre-state the digest above froze. Advancing
+                // this generation is what invalidates every `realm_root`-rooted
+                // delegation at once (`authz/capabilities.md` section 10).
                 if serde_json::from_value::<
                     arkret_models_collaboration::events_payloads::realm::RealmAuthorityResetPayload,
                 >(operation.payload.clone())
@@ -233,6 +235,10 @@ impl ProjectionState {
                 root.insert(
                     "authority_generation".to_owned(),
                     successor_generation.into(),
+                );
+                root.insert(
+                    "authority_event_ref".to_owned(),
+                    Value::String(operation.context.accepted_event_id.to_string()),
                 );
             }
             _ => {
@@ -871,7 +877,11 @@ impl ProjectionState {
         // rejects the whole atomic bootstrap unit instead of materializing a
         // Realm nobody can govern.
         let authority_root = match creator.as_ref() {
-            Some(creator) => match genesis_authority_root_value(payload_object, creator) {
+            Some(creator) => match genesis_authority_root_value(
+                payload_object,
+                creator,
+                &operation.context.accepted_event_id,
+            ) {
                 Ok(value) => Some(value),
                 Err(reason) => {
                     return ProjectionEffect::Rejected {

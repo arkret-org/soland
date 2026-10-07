@@ -512,6 +512,7 @@ impl ProjectionState {
 fn patch_touches_calendar_schedule(patch: &serde_json::Map<String, Value>) -> bool {
     patch.keys().any(|path| {
         path == "metadata"
+            || path == "encrypted_metadata"
             || path == "metadata.fields"
             || path == "metadata.fields.calendar"
             || path.starts_with("metadata.fields.calendar.")

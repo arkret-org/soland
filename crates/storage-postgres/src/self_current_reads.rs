@@ -427,6 +427,44 @@ pub(crate) async fn exact_current_result_for_account(
             } => (generation, head),
         };
         let selector = match &request.selector {
+            ExactCurrentResultSelector::CalendarScheduleSource(selector) => {
+                use arkret_models_collaboration::exact_current_results::CalendarScheduleSourceExactResult;
+                #[derive(QueryableByName)]
+                struct CalendarRow {
+                    #[diesel(sql_type = Text)]
+                    current_commit_id: String,
+                    #[diesel(sql_type = BigInt)]
+                    current_stream_position: i64,
+                    #[diesel(sql_type = Jsonb)]
+                    value: serde_json::Value,
+                    #[diesel(sql_type = Jsonb)]
+                    stream_ref: serde_json::Value,
+                }
+                let row = sql_query("SELECT s.current_commit_id,s.current_stream_position,s.calendar_schedule_source_value AS value,c.commit_json->'stream_ref' AS stream_ref FROM strand_current_results s JOIN realm_commits c ON c.realm_id=s.realm_id AND c.commit_id=s.current_commit_id AND c.stream_position=s.current_stream_position WHERE s.realm_id=$1 AND s.strand_id=$2 AND s.calendar_schedule_source_value IS NOT NULL")
+                    .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(selector.strand_id.as_str())
+                    .get_result::<CalendarRow>(&mut *conn).await.optional()?;
+                let Some(row) = row else { return Ok(SelfExactCurrentRead::Unresolved("Calendar current source is not available at this cut")); };
+                let value: arkret_wire::CalendarScheduleSourceValue = serde_json::from_value(row.value).map_err(PersistenceError::database)?;
+                match crate::moderation_report_current_results::ensure_scope_member(conn, &request.realm_id, &value.effective_scope, &caller).await {
+                    Ok(()) => {},
+                    Err(PersistenceError::NotFound(_)) => return Ok(SelfExactCurrentRead::NotFound),
+                    Err(error) => return Err(error.into()),
+                }
+                let stream: CommitStreamRef = serde_json::from_value(row.stream_ref).map_err(PersistenceError::database)?;
+                let stream_key = crate::authority_commit::stream_key(&stream)?;
+                let Some(stream_head) = sql_query("SELECT commit_id,stream_position FROM realm_commits WHERE realm_id=$1 AND stream_key=$2 ORDER BY stream_position DESC LIMIT 1")
+                    .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(stream_key).get_result::<HeadRow>(&mut *conn).await.optional()? else {
+                    return Ok(SelfExactCurrentRead::Unresolved("Calendar scope head is unavailable"));
+                };
+                let revision = CurrentRevision { commit_id: row.current_commit_id.parse().map_err(PersistenceError::database)?,
+                    stream_position: to_u64(row.current_stream_position, "Calendar current position")? };
+                value.validate_for_current(&request.realm_id, &stream, &revision).map_err(PersistenceError::database)?;
+                return Ok(SelfExactCurrentRead::Answer(ExactCurrentResultsReadOutcome::Present {
+                    realm_id: request.realm_id.clone(), governance_generation: generation,
+                    effective_stream_head: CommitStreamHead { stream_ref: stream.clone(), commit_id: stream_head.commit_id.parse().map_err(PersistenceError::database)?, stream_position: to_u64(stream_head.stream_position,"Calendar scope head")? },
+                    entry: ExactCurrentResultEntry::CalendarScheduleSource(CalendarScheduleSourceExactResult { selector: selector.clone(), source_stream_ref: stream, revision, value }),
+                }));
+            }
             ExactCurrentResultSelector::CapabilityGrant(_) => unreachable!("handled before membership gate"),
             ExactCurrentResultSelector::AgentInteraction(selector) => {
                 use arkret_models_collaboration::agent_interaction::AgentInteractionExactCurrentResult;

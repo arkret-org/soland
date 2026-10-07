@@ -436,6 +436,7 @@ pub fn next_request_for_actor(
     let event = if let Some(fact) = previous
         .producer_signer_fact
         .as_ref()
+        .and_then(|fact| fact.as_human())
         .filter(|fact| fact.actor == event.actor_id)
     {
         human_profile::sign_original_device(event, fact.verification_method.clone())
@@ -491,11 +492,12 @@ pub fn request_for_event(
     let fact = previous
         .producer_signer_fact
         .as_ref()
+        .and_then(|fact| fact.as_human())
         .filter(|fact| fact.actor == event.actor_id)
         .cloned()
         .map(|mut fact| {
             fact.event_id = event.event_id.clone();
-            fact
+            arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact::Human(fact)
         });
     commit.producer_signer_fact_digest = fact.as_ref().map(|f| f.digest().unwrap());
     if fact.is_some() {
@@ -657,7 +659,8 @@ pub async fn source_request(pool: &PgPool, mut request: EventCommitRequest) -> E
     tx.producer_signer_fact = PgAuthorityCommitStore { pool: pool.clone() }
         .prepare_human_signer_fact(&tx.event, tx.commit.committed_at)
         .await
-        .unwrap();
+        .unwrap()
+        .map(Into::into);
     if tx.event.human_device_producer().unwrap().is_some() {
         assert!(tx.producer_signer_fact.is_some());
     } else {
@@ -701,7 +704,8 @@ pub async fn source_bootstrap(
         tx.producer_signer_fact = store
             .prepare_human_signer_fact(&tx.event, tx.commit.committed_at)
             .await
-            .unwrap();
+            .unwrap()
+            .map(Into::into);
         assert!(tx.producer_signer_fact.is_some());
         tx.commit.producer_signer_fact_digest = tx
             .producer_signer_fact
@@ -720,7 +724,7 @@ pub async fn source_bootstrap(
 /// Admit an ordinary Realm, create its discussion Strand and make it the
 /// default -- the confirmed cut a local Message or self report needs.
 pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
-    open_human_discussion(pool, seed).await
+    Box::pin(open_human_discussion(pool, seed)).await
 }
 
 pub async fn open_discussion_with_history(pool: &PgPool, seed: &str, history: &str) -> Discussion {
@@ -741,20 +745,29 @@ pub async fn open_discussion_for_station(
     station: &arkret_wire::DidCoreId,
     did: &arkret_wire::Did,
 ) -> Discussion {
-    let account = human_profile::admit_for_station_did(pool, did.clone(), "ordinary-founder").await;
+    let account = Box::pin(human_profile::admit_for_station_did(
+        pool,
+        did.clone(),
+        "ordinary-founder",
+    ))
+    .await;
     assert_eq!(&account.station_id, station);
-    open_discussion_unit(pool, bootstrap_unit_for_account(seed, &account, did)).await
+    Box::pin(open_discussion_unit(
+        pool,
+        bootstrap_unit_for_account(seed, &account, did),
+    ))
+    .await
 }
 
 /// Admit the founder's real PCR and Human Profile before opening discussion.
 pub async fn open_human_discussion(pool: &PgPool, seed: &str) -> Discussion {
-    let account = human_profile::admit(pool, &station(), "ordinary-founder").await;
+    let account = Box::pin(human_profile::admit(pool, &station(), "ordinary-founder")).await;
     let unit = bootstrap_unit_for_account(seed, &account, &human_profile::station_did(&station()));
-    open_discussion_unit(pool, unit).await
+    Box::pin(open_discussion_unit(pool, unit)).await
 }
 
 async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitUnit) -> Discussion {
-    let unit = source_bootstrap(pool, unit).await;
+    let unit = Box::pin(source_bootstrap(pool, unit)).await;
     unit.validate().unwrap();
     PgAuthorityCommitStore { pool: pool.clone() }
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)

@@ -4669,6 +4669,7 @@ CREATE TABLE strand_current_results (
  current_commit_id TEXT NOT NULL,
  current_stream_position BIGINT NOT NULL CHECK(current_stream_position BETWEEN 0 AND 9007199254740991),
  value JSONB NOT NULL,
+ calendar_schedule_source_value JSONB,
  updated_at TIMESTAMPTZ NOT NULL,
  CHECK(jsonb_typeof(value)='object'),
  CHECK(value->>'id'=strand_id),
@@ -5229,7 +5230,7 @@ CREATE INDEX agent_status_current_result_agent
 -- One immutable result captured under the original producer admission locks.
 -- Missing historical results are unavailable, never reconstructed from current keys.
 CREATE TABLE agent_producer_signer_keys (
- human_source_fact JSONB CHECK(human_source_fact IS NULL OR jsonb_typeof(human_source_fact)='object'),
+ producer_source_fact JSONB CHECK(producer_source_fact IS NULL OR jsonb_typeof(producer_source_fact)='object'),
  commit_id TEXT PRIMARY KEY REFERENCES realm_commits(commit_id),
  outcome JSONB NOT NULL CHECK(jsonb_typeof(outcome)='object'),
  self_admission_account JSONB CHECK(self_admission_account IS NULL OR jsonb_typeof(self_admission_account)='object'),

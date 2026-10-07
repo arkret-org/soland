@@ -2376,7 +2376,11 @@ async fn verify_invite_commit(
         &located.keys,
         &state.service_core_id(),
         state.projections().realm_digest_suite(realm_id.as_str()),
-        delivery.producer_signer_fact.as_ref(),
+        delivery
+            .producer_signer_fact
+            .clone()
+            .map(Into::into)
+            .as_ref(),
     )
     .await
     .map_err(receipt_refusal)?;
@@ -2894,7 +2898,7 @@ mod invite_locator_security_tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            Some(fact.clone()),
+            Some(fact.clone().into()),
             request.authority_commit.producer_signer_fact
         );
         arkret_signatures::detached_object::verify_detached_object_signature(

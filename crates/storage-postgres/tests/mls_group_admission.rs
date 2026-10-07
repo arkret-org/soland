@@ -340,7 +340,13 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
     let discussion = ordinary_realm::open_discussion(&pool, "mls-group-admission").await;
     let realm_id = discussion.realm_id();
     let scope = realm_scope(&realm_id);
-    let founder = ordinary_realm::founder();
+    let founder = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let at = discussion.committed_at();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let groups = PgMlsGroupCurrentStore { pool: pool.clone() };
@@ -436,7 +442,13 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
     );
     assert_zero_write_refusal(&pool, &uncovered, ConflictCode::GovernanceBindingMismatch).await;
 
-    let outsider = arkret_wire::DidCoreId::new("ak:did_core:web:mls-outsider.example").unwrap();
+    let outsider = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &genesis.authority_commit.expected_authority.service_id,
+        "mls-outsider",
+    ))
+    .await
+    .principal_id;
     let foreign = with_installation(
         ordinary_realm::next_request(
             &genesis.authority_commit,
@@ -448,6 +460,7 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
         Some((&genesis_ref, 0)),
         1,
     );
+    let foreign = Box::pin(ordinary_realm::source_request(&pool, foreign)).await;
     assert_zero_write_refusal(&pool, &foreign, ConflictCode::CapabilityDenied).await;
 
     let commit = with_installation(
@@ -514,6 +527,53 @@ async fn mls_genesis_and_commit_install_the_group_at_their_commits() {
     );
     assert_zero_write_refusal(&pool, &stale, ConflictCode::GovernanceBindingMismatch).await;
     assert_eq!(groups.current(&scope).await.unwrap().unwrap(), advanced);
+    let authority_store = PgAuthorityCommitStore { pool: pool.clone() };
+    let authority = authority_store
+        .current_authority(&realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let refusal = authority_store
+        .finalize_mls_rejection(
+            &stale.authority_commit.event,
+            &authority,
+            "governance_binding_mismatch",
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        refusal,
+        arkret_wire::AuthoritySubmitOutcome::Rejected {
+            status: arkret_wire::AuthorityRejectionStatus::Rejected,
+            ..
+        }
+    ));
+    assert_eq!(
+        authority_store
+            .finalize_mls_rejection(
+                &stale.authority_commit.event,
+                &authority,
+                "different_late_reason"
+            )
+            .await
+            .unwrap(),
+        refusal
+    );
+    assert!(uow.commit_event(stale.clone()).await.is_err());
+    assert_eq!(groups.current(&scope).await.unwrap().unwrap(), advanced);
+    let mut stale_authority = authority;
+    stale_authority.generation += 1;
+    let original = authority_store
+        .finalize_mls_rejection(
+            &commit.authority_commit.event,
+            &stale_authority,
+            "governance_binding_mismatch",
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(original, arkret_wire::AuthoritySubmitOutcome::Accepted { status: arkret_wire::AuthorityCommitStatus::Duplicate, commit: original } if original == commit.authority_commit.commit)
+    );
 }
 
 /// The PG unit consumes facts already verified by the serving layer. It does
@@ -543,7 +603,13 @@ async fn consumed_proposals_freeze_with_winning_commit_and_same_tuple_replacemen
     let pool = database.pool();
     let discussion = ordinary_realm::open_discussion(&pool, "mls-proposal-provenance").await;
     let realm_id = discussion.realm_id();
-    let founder = ordinary_realm::founder();
+    let founder = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let at = discussion.committed_at();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let genesis = with_installation(
@@ -721,7 +787,13 @@ async fn realm_mls_material_read_authorizes_exact_member_and_target_cut() {
     let discussion = ordinary_realm::open_discussion(&pool, "mls-material-member-cut").await;
     let realm_id = discussion.realm_id();
     let station = ordinary_realm::station();
-    let founder = ordinary_realm::founder();
+    let founder = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let at = discussion.committed_at();
     let genesis = with_installation(
         ordinary_realm::next_request(
@@ -808,7 +880,20 @@ async fn realm_mls_material_peer_uses_joined_target_cut_not_prejoin_genesis_cut(
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let station = ordinary_realm::station();
-    let unit = ordinary_realm::bootstrap_unit_with_join_rule("mls-material-since-join", "public");
+    let account = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &station,
+        "ordinary-founder",
+    ))
+    .await;
+    let unit = ordinary_realm::bootstrap_unit_with_history_for_account(
+        "mls-material-since-join",
+        "public",
+        "since_join",
+        &account,
+        &device_authorization_history::did_web_station(&station),
+    );
+    let unit = Box::pin(ordinary_realm::source_bootstrap(&pool, unit)).await;
     let at = unit.transactions[0].commit.committed_at;
     PgAuthorityCommitStore { pool: pool.clone() }
         .admit_ordinary_realm_bootstrap_unit(&unit, at)
@@ -816,7 +901,7 @@ async fn realm_mls_material_peer_uses_joined_target_cut_not_prejoin_genesis_cut(
         .unwrap();
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let founder = ordinary_realm::founder();
+    let founder = account.principal_id.clone();
     let genesis = with_installation(
         ordinary_realm::next_request(
             unit.transactions.last().unwrap(),
@@ -863,6 +948,7 @@ async fn realm_mls_material_peer_uses_joined_target_cut_not_prejoin_genesis_cut(
         Some((&genesis_ref, 0)),
         1,
     );
+    let target = Box::pin(ordinary_realm::source_request(&pool, target)).await;
     uow.commit_event(target.clone()).await.unwrap();
     let genesis_payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
         serde_json::from_value(
@@ -1064,7 +1150,13 @@ async fn realm_mls_material_read_rejects_wrong_genesis_ref() {
         ordinary_realm::next_request(
             &discussion.head.authority_commit,
             arkret_wire::EventKind::MlsGenesis,
-            &ordinary_realm::founder(),
+            &discussion
+                .head
+                .authority_commit
+                .event
+                .actor_id
+                .signing_principal_id()
+                .clone(),
             genesis_payload(&realm_id, at),
             at,
         ),
@@ -1080,7 +1172,13 @@ async fn realm_mls_material_read_rejects_wrong_genesis_ref() {
         ordinary_realm::next_request(
             &genesis.authority_commit,
             arkret_wire::EventKind::MlsCommit,
-            &ordinary_realm::founder(),
+            &discussion
+                .head
+                .authority_commit
+                .event
+                .actor_id
+                .signing_principal_id()
+                .clone(),
             commit_payload(&realm_id, &event.event_id, 0, 0, b"genesis-selector-target"),
             at,
         ),
@@ -1140,7 +1238,13 @@ async fn realm_mls_material_read_rejects_target_retention_and_redaction() {
         ordinary_realm::next_request(
             &discussion.head.authority_commit,
             arkret_wire::EventKind::MlsGenesis,
-            &ordinary_realm::founder(),
+            &discussion
+                .head
+                .authority_commit
+                .event
+                .actor_id
+                .signing_principal_id()
+                .clone(),
             genesis_payload(&realm_id, at),
             at,
         ),
@@ -1245,9 +1349,21 @@ async fn mls_commit_welcome_queue_is_atomic_exact_endpoint_and_revocation_gated(
         .await
         .expect("accepted second recipient device");
 
-    let discussion = ordinary_realm::open_discussion(&pool, "mls-welcome-queue").await;
+    let discussion = ordinary_realm::open_discussion_for_station(
+        &pool,
+        "mls-welcome-queue",
+        &station,
+        &device_authorization_history::did_web_station(&station),
+    )
+    .await;
     let realm_id = discussion.realm_id();
-    let founder = ordinary_realm::founder();
+    let founder = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let at = discussion.committed_at();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let genesis = with_installation(
@@ -1455,26 +1571,23 @@ fn device_message(
     previous: &soland_storage::AuthorityCommitTransaction,
     device: &DeviceRevocationGateSelector,
     payload: serde_json::Value,
+    did: &arkret_wire::Did,
+    signing_seed: [u8; 32],
 ) -> EventCommitRequest {
-    let mut request = ordinary_realm::next_request_for_actor(
-        previous,
+    let event = ordinary_realm::event_for_actor(
         arkret_wire::EventKind::MessageCreate,
+        previous.event.scope_ref.clone(),
         recipient_actor(device),
         payload,
         previous.commit.committed_at,
     );
-    let event = &mut request.authority_commit.event;
-    event.producer_proof.as_mut().unwrap().verification_method = arkret_wire::DidUrl::new(format!(
-        "did:{}#{}",
-        device
-            .principal_id
-            .as_str()
-            .strip_prefix("ak:did_core:")
-            .unwrap(),
-        device.device_id
-    ))
-    .unwrap();
-    request.event.envelope = serde_json::to_value(&*event).unwrap();
+    let signed = device_authorization_history::sign_event(
+        event,
+        arkret_wire::DidUrl::new(format!("{did}#{}", device.device_id)).unwrap(),
+        signing_seed,
+    );
+    let mut request =
+        ordinary_realm::request_for_event(previous, signed, previous.commit.committed_at);
     request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::HumanDevice(
         device.clone(),
     ));
@@ -1507,15 +1620,12 @@ async fn grant_message_create(
         .unwrap()
         .authority_event_ref
     };
-    let founder = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        ordinary_realm::founder(),
-        ordinary_realm::station(),
-    ));
+    let founder = previous.event.actor_id.clone();
     let at = previous.commit.committed_at;
     let grant = ordinary_realm::next_request(
         previous,
         arkret_wire::EventKind::CapabilityGrant,
-        &ordinary_realm::founder(),
+        founder.signing_principal_id(),
         serde_json::json!({
             "grant": {
                 "schema": "ak.schema.capability.v1",
@@ -1559,31 +1669,38 @@ async fn the_send_gate_refuses_a_revoked_device_at_the_mls_group_cut() {
     let mut source = pcr_genesis::PcrGenesisFixture::new(
         device_authorization_history::did_web_station(&station),
     );
-    let revoked = source
-        .admit_founding_device(&persistence)
+    let revoked = Box::pin(source.admit_founding_device(&persistence))
         .await
         .expect("accepted founding device");
-    let active = source
-        .admit_accepted_device(&persistence, [43; 32])
+    let active = Box::pin(source.admit_accepted_device(&persistence, [43; 32]))
         .await
         .expect("accepted second device")
         .authorization;
 
-    let discussion = ordinary_realm::open_discussion(&pool, "mls-send-gate").await;
+    let discussion =
+        Box::new(Box::pin(ordinary_realm::open_discussion(&pool, "mls-send-gate")).await);
     let realm_id = discussion.realm_id();
     let scope = realm_scope(&realm_id);
-    let founder = ordinary_realm::founder();
+    let founder = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let at = discussion.committed_at();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let groups = PgMlsGroupCurrentStore { pool: pool.clone() };
-    join(&pool, &discussion.head, &recipient_actor(&revoked)).await;
-    let grant = grant_message_create(
-        &pool,
-        &discussion.head.authority_commit,
-        &recipient_actor(&revoked),
-    )
-    .await;
-    let genesis = with_installation(
+    Box::pin(join(&pool, &discussion.head, &recipient_actor(&revoked))).await;
+    let grant = Box::new(
+        Box::pin(grant_message_create(
+            &pool,
+            &discussion.head.authority_commit,
+            &recipient_actor(&revoked),
+        ))
+        .await,
+    );
+    let genesis = Box::new(with_installation(
         ordinary_realm::next_request(
             &grant.authority_commit,
             arkret_wire::EventKind::MlsGenesis,
@@ -1593,10 +1710,12 @@ async fn the_send_gate_refuses_a_revoked_device_at_the_mls_group_cut() {
         ),
         None,
         0,
-    );
-    uow.commit_event(genesis.clone()).await.unwrap();
+    ));
+    Box::pin(uow.commit_event((*genesis).clone()))
+        .await
+        .unwrap();
     let genesis_ref = genesis.authority_commit.event.event_id.clone();
-    let commit = with_installation(
+    let commit = Box::new(with_installation(
         ordinary_realm::next_request(
             &genesis.authority_commit,
             arkret_wire::EventKind::MlsCommit,
@@ -1606,12 +1725,29 @@ async fn the_send_gate_refuses_a_revoked_device_at_the_mls_group_cut() {
         ),
         Some((&genesis_ref, 0)),
         1,
-    );
-    uow.commit_event(commit.clone()).await.unwrap();
+    ));
+    Box::pin(uow.commit_event((*commit).clone())).await.unwrap();
     let commit_ref = commit.authority_commit.event.event_id.clone();
     let before = groups.current(&scope).await.unwrap().unwrap();
     assert_eq!(before.value.epoch, 1);
 
+    let strand = &discussion.strand_id;
+    let mut revoked_messages = Vec::new();
+    for payload in [
+        ciphertext_message(strand, 0, &genesis_ref),
+        ciphertext_message(strand, 1, &commit_ref),
+    ] {
+        let request = device_message(
+            &commit.authority_commit,
+            &revoked,
+            payload,
+            &source.history.did,
+            source.history.founding_device_signing_seed,
+        );
+        revoked_messages.push(Box::new(
+            Box::pin(ordinary_realm::source_request(&pool, request)).await,
+        ));
+    }
     persistence
         .device_revocations()
         .commit_revocation(&soland_storage::DeviceRevocationTransition {
@@ -1629,16 +1765,12 @@ async fn the_send_gate_refuses_a_revoked_device_at_the_mls_group_cut() {
         })
         .await
         .unwrap();
-    let strand = &discussion.strand_id;
-    for payload in [
-        ciphertext_message(strand, 0, &genesis_ref),
-        ciphertext_message(strand, 1, &commit_ref),
-    ] {
-        assert_zero_write_refusal(
+    for request in revoked_messages {
+        Box::pin(assert_zero_write_refusal(
             &pool,
-            &device_message(&commit.authority_commit, &revoked, payload),
+            &request,
             ConflictCode::DeviceRevoked,
-        )
+        ))
         .await;
     }
     assert_eq!(groups.current(&scope).await.unwrap().unwrap(), before);
@@ -1650,7 +1782,12 @@ async fn the_send_gate_refuses_a_revoked_device_at_the_mls_group_cut() {
         ordinary_realm::message_payload(strand, "plaintext after activation"),
         at,
     );
-    assert_zero_write_refusal(&pool, &plaintext, ConflictCode::MlsActivationRequired).await;
+    Box::pin(assert_zero_write_refusal(
+        &pool,
+        &plaintext,
+        ConflictCode::MlsActivationRequired,
+    ))
+    .await;
     let stale = ordinary_realm::next_request(
         &commit.authority_commit,
         arkret_wire::EventKind::MessageCreate,
@@ -1658,14 +1795,22 @@ async fn the_send_gate_refuses_a_revoked_device_at_the_mls_group_cut() {
         ciphertext_message(strand, 0, &genesis_ref),
         at,
     );
-    assert_zero_write_refusal(&pool, &stale, ConflictCode::EpochMismatch).await;
+    Box::pin(assert_zero_write_refusal(
+        &pool,
+        &stale,
+        ConflictCode::EpochMismatch,
+    ))
+    .await;
 
     let sibling = device_message(
         &commit.authority_commit,
         &active,
         ciphertext_message(strand, 1, &commit_ref),
+        &source.history.did,
+        [43; 32],
     );
-    uow.commit_event(sibling.clone()).await.unwrap();
+    let sibling = Box::pin(ordinary_realm::source_request(&pool, sibling)).await;
+    Box::pin(uow.commit_event(sibling.clone())).await.unwrap();
     let member = ordinary_realm::next_request(
         &sibling.authority_commit,
         arkret_wire::EventKind::MessageCreate,
@@ -1673,7 +1818,8 @@ async fn the_send_gate_refuses_a_revoked_device_at_the_mls_group_cut() {
         ciphertext_message(strand, 1, &commit_ref),
         at,
     );
-    uow.commit_event(member).await.unwrap();
+    let member = Box::pin(ordinary_realm::source_request(&pool, member)).await;
+    Box::pin(uow.commit_event(member)).await.unwrap();
     let after = groups.current(&scope).await.unwrap().unwrap();
     assert_eq!(
         after.value, before.value,
@@ -1990,7 +2136,13 @@ async fn same_station_add_installs_signed_history_atomically() {
     )
     .await;
     let realm_id = discussion.realm_id();
-    let founder = ordinary_realm::founder();
+    let founder = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let at = discussion.committed_at();
     join(&pool, &discussion.head, &recipient_actor(&recipient)).await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
@@ -2187,7 +2339,13 @@ async fn a_remote_recipient_welcome_rides_the_commit_replication_intent() {
     let station = governing_station(&pool).await;
     let discussion = ordinary_realm::open_discussion(&pool, "mls-remote-welcome").await;
     let realm_id = discussion.realm_id();
-    let founder = ordinary_realm::founder();
+    let founder = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id()
+        .clone();
     let at = discussion.committed_at();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let attestor = historical_roster_attestor_resolution();

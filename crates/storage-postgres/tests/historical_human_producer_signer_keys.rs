@@ -31,7 +31,7 @@ struct Footprint {
 }
 async fn footprint(pool: &soland_storage_postgres::PgPool) -> Footprint {
     let mut conn = pool.get().await.unwrap();
-    diesel::sql_query("SELECT (SELECT count(*) FROM canonical_events) AS events,(SELECT count(*) FROM realm_commits) AS commits,(SELECT count(*) FROM agent_producer_signer_keys) AS keys,(SELECT count(*) FROM agent_producer_signer_keys WHERE human_source_fact IS NOT NULL) AS full_source_facts,(SELECT count(*) FROM federation_outbox) AS federation_outbox,(SELECT count(*) FROM event_federation_outbox) AS event_outbox")
+    diesel::sql_query("SELECT (SELECT count(*) FROM canonical_events) AS events,(SELECT count(*) FROM realm_commits) AS commits,(SELECT count(*) FROM agent_producer_signer_keys) AS keys,(SELECT count(*) FROM agent_producer_signer_keys WHERE producer_source_fact IS NOT NULL) AS full_source_facts,(SELECT count(*) FROM federation_outbox) AS federation_outbox,(SELECT count(*) FROM event_federation_outbox) AS event_outbox")
         .get_result(&mut *conn).await.unwrap()
 }
 
@@ -53,7 +53,8 @@ async fn historical_human_true_signature_atomic_bootstrap_and_exact_coordinate()
             .await
             .unwrap();
         assert_eq!(
-            original, transaction.producer_signer_fact,
+            original.clone().map(Into::into),
+            transaction.producer_signer_fact,
             "cold original-source getter retains every complete immutable field"
         );
         let full = arkret_wire::CommittedEventFullView {
@@ -321,6 +322,7 @@ async fn historical_human_locked_full_source_equality_rejects_resigned_substitut
             .authority_commit
             .producer_signer_fact
             .as_mut()
+            .and_then(|fact| fact.as_human_mut())
             .unwrap();
         match variant {
             0 => {
@@ -410,7 +412,7 @@ async fn peer_full_scan_carries_each_original_fact_and_never_repairs_missing_arc
         assert_eq!(entry.target.stream_ref, row.commit.stream_ref);
         assert_eq!(entry.target.stream_position, row.commit.stream_position);
         assert_eq!(
-            Some(entry.producer_signer_fact.clone()),
+            entry.producer_signer_fact.as_human().cloned(),
             store
                 .human_signer_fact(&row.event, &row.commit)
                 .await
@@ -418,7 +420,7 @@ async fn peer_full_scan_carries_each_original_fact_and_never_repairs_missing_arc
         );
         arkret_identity::account_device_signer_evidence::verify_historical_human_event_signature(
             &row.event,
-            &entry.producer_signer_fact,
+            entry.producer_signer_fact.as_human().unwrap(),
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();
@@ -428,7 +430,7 @@ async fn peer_full_scan_carries_each_original_fact_and_never_repairs_missing_arc
     // Deliberately damaged test database: current PCR and the signed Commit
     // remain intact. The read must fail instead of reconstructing provenance.
     diesel::sql_query(
-        "UPDATE agent_producer_signer_keys SET human_source_fact=NULL WHERE commit_id=$1",
+        "UPDATE agent_producer_signer_keys SET producer_source_fact=NULL WHERE commit_id=$1",
     )
     .bind::<diesel::sql_types::Text, _>(missing_commit.as_str())
     .execute(&mut *conn)
@@ -449,7 +451,7 @@ async fn peer_full_scan_carries_each_original_fact_and_never_repairs_missing_arc
         #[diesel(sql_type=diesel::sql_types::Bool)]
         absent: bool,
     }
-    let row = diesel::sql_query("SELECT human_source_fact IS NULL AS absent FROM agent_producer_signer_keys WHERE commit_id=$1")
+    let row = diesel::sql_query("SELECT producer_source_fact IS NULL AS absent FROM agent_producer_signer_keys WHERE commit_id=$1")
         .bind::<diesel::sql_types::Text,_>(missing_commit.as_str()).get_result::<Missing>(&mut *conn).await.unwrap();
     assert!(
         store
@@ -599,7 +601,7 @@ async fn withheld_full_upgrade_atomically_retains_original_human_fact_without_he
     )
     .unwrap()
     .into_fact();
-    join.authority_commit.producer_signer_fact = Some(fact.clone());
+    join.authority_commit.producer_signer_fact = Some(fact.clone().into());
     join.authority_commit.commit.producer_signer_fact_digest = Some(fact.digest().unwrap());
     join.authority_commit.commit.committed_at = core.attested_at;
     join.self_producer_guard = None;
@@ -779,7 +781,12 @@ async fn withheld_full_upgrade_atomically_retains_original_human_fact_without_he
         CommittedReplicaOutcome::Duplicate
     );
     let mut changed = full;
-    changed.producer_signer_fact.as_mut().unwrap().accepted_at += chrono::TimeDelta::seconds(1);
+    changed
+        .producer_signer_fact
+        .as_mut()
+        .and_then(|fact| fact.as_human_mut())
+        .unwrap()
+        .accepted_at += chrono::TimeDelta::seconds(1);
     assert!(member.install_committed_replica(&changed).await.is_err());
     assert_eq!(footprint(&member_pool).await, before);
 }

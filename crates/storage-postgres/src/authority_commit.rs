@@ -762,7 +762,8 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
          SELECT 'realm_authority_root'::text AS selector_kind, NULL::jsonb AS selector_subject, \
                 current_commit_id, current_stream_position, \
                 jsonb_build_object('controller_actor_id',controller_actor_id, \
-                    'controller_epoch',controller_epoch,'authority_generation',authority_generation) AS value \
+                    'controller_epoch',controller_epoch,'authority_generation',authority_generation, \
+                    'authority_event_ref',authority_event_ref) AS value \
            FROM realm_authority_root_current_results WHERE realm_id = $1 \
          UNION ALL \
          SELECT 'realm_policy_bundle'::text AS selector_kind, NULL::jsonb AS selector_subject, \
@@ -833,6 +834,10 @@ pub(crate) const SNAPSHOT_CURRENT_SQL: &str = "SELECT result.*, covering.stream_
          SELECT 'strand'::text AS selector_kind, to_jsonb(strand_id) AS selector_subject, \
                 current_commit_id, current_stream_position, value \
            FROM strand_current_results WHERE realm_id = $1 \
+         UNION ALL \
+         SELECT 'calendar_schedule_source'::text AS selector_kind, to_jsonb(strand_id) AS selector_subject, \
+                current_commit_id,current_stream_position,calendar_schedule_source_value AS value \
+           FROM strand_current_results WHERE realm_id=$1 AND calendar_schedule_source_value IS NOT NULL \
          UNION ALL \
          SELECT 'rsvp'::text AS selector_kind, \
                 jsonb_build_object('kind','rsvp','event_ref',event_ref, \
@@ -1057,6 +1062,9 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                             "stored Strand selector identity is invalid: {error}"
                         ))
                     })?,
+                },
+                ("calendar_schedule_source", Some(strand_id)) => arkret_wire::CurrentSelector::CalendarScheduleSource {
+                    strand_id: serde_json::from_value(strand_id).map_err(PersistenceError::database)?,
                 },
                 ("rsvp", Some(selector)) => {
                     serde_json::from_value::<arkret_wire::CurrentSelector>(selector)
@@ -1615,7 +1623,25 @@ fn is_recovery_policy_set(event: &arkret_wire::Event) -> bool {
             == Some(arkret_wire::SchemaId::RECOVERY_POLICY_V1)
 }
 
-async fn commit_transaction_in_connection_with_device_guard(
+fn commit_transaction_in_connection_with_device_guard<'a>(
+    conn: &'a mut AsyncPgConnection,
+    transaction: &'a AuthorityCommitTransaction,
+    verified_unit: VerifiedPcrUnit,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<AuthorityCommitWriteOutcome, PgTransactionError>>
+            + Send
+            + 'a,
+    >,
+> {
+    Box::pin(commit_transaction_with_device_guard_inner(
+        conn,
+        transaction,
+        verified_unit,
+    ))
+}
+
+async fn commit_transaction_with_device_guard_inner(
     conn: &mut AsyncPgConnection,
     transaction: &AuthorityCommitTransaction,
     verified_unit: VerifiedPcrUnit,
@@ -1729,6 +1755,7 @@ async fn commit_transaction_in_connection_with_device_guard(
         )
         .into());
     }
+
     transaction.validate().map_err(invalid)?;
     if signature_service_id(&transaction.commit.signature)?
         != transaction.expected_authority.service_id
@@ -1866,18 +1893,21 @@ async fn commit_transaction_in_connection_with_device_guard(
     .bind::<Timestamptz, _>(transaction.commit.committed_at)
     .execute(&mut *conn)
     .await?;
+
     crate::agent_origin::accept_staged_control_source_in_connection(
         conn,
         &transaction.event,
         &transaction.commit,
     )
     .await?;
+
     crate::realm_lifecycle_current_results::commit_in_connection(
         conn,
         &transaction.event,
         &transaction.commit,
     )
     .await?;
+
     Ok(AuthorityCommitWriteOutcome::Committed)
 }
 
@@ -2521,6 +2551,38 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             &mut conn, event, commit,
         )
         .await
+    }
+
+    async fn producer_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+    > {
+        let mut conn = pg_conn(&self.pool).await?;
+        crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(
+            &mut conn, event, commit,
+        )
+        .await
+    }
+    async fn prepare_service_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        guard: &soland_storage::AppletEventProducerGuard,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact>
+    {
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::managed_message_actor::require_applet_producer_in_connection(
+                conn, event, guard, at,
+            )
+            .await
+            .map_err(Into::into)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn prepare_human_signer_fact(
@@ -3280,7 +3342,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *conn).await?;
             let row = sql_query(
                 "SELECT e.envelope,c.commit_json,f.original_submission_json AS submission_json, \
-                 f.accepted_commit_json AS accepted_json,k.human_source_fact AS fact_json, \
+                 f.accepted_commit_json AS accepted_json,k.producer_source_fact AS fact_json, \
                  m.value AS member_value,j.envelope AS join_envelope,jc.commit_json AS join_commit_json \
                  FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
                  JOIN authority_forward_attempts f ON f.event_pk=e.pk \
@@ -3297,7 +3359,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                    AND jc.realm_id=c.realm_id AND jc.stream_key=c.stream_key AND jc.stream_ref=c.stream_ref \
                    AND jc.stream_position<c.stream_position \
                    AND f.original_submission_json IS NOT NULL AND f.accepted_commit_json IS NOT NULL \
-                   AND k.human_source_fact IS NOT NULL \
+                   AND k.producer_source_fact IS NOT NULL \
                    AND NOT EXISTS (SELECT 1 FROM realm_commits later JOIN canonical_events le ON le.pk=later.event_pk \
                        WHERE later.stream_key=c.stream_key AND later.stream_position>jc.stream_position \
                          AND later.stream_position<c.stream_position AND le.state='committed' \
@@ -3809,6 +3871,51 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             ));
         }
         Ok(())
+    }
+
+    async fn finalize_mls_rejection(
+        &self,
+        event: &arkret_wire::Event,
+        authority: &CurrentRealmAuthority,
+        reason_code: &str,
+    ) -> PersistenceResult<arkret_wire::AuthoritySubmitOutcome> {
+        if event.kind != arkret_wire::EventKind::MlsCommit || event.realm_id != authority.realm_id {
+            return Err(invalid(
+                "only an exact ordinary MLS Commit can receive this refusal fence",
+            ));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let current = locked_authority(conn, &event.realm_id).await?
+                .ok_or_else(|| invalid("MLS refusal has no governance authority"))?;
+            queue_event_in_connection(conn, event, chrono::Utc::now()).await?;
+            let token = ids::parse_event_id(event.event_id.as_str()).ok_or_else(|| invalid("invalid MLS Event ID"))?;
+            let existing = sql_query("SELECT c.commit_json FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.id=$1")
+                .bind::<Binary,_>(token.to_vec()).get_result::<CommitRow>(&mut *conn).await.optional()?;
+            if let Some(existing) = existing {
+                return Ok(arkret_wire::AuthoritySubmitOutcome::Accepted {
+                    status: arkret_wire::AuthorityCommitStatus::Duplicate,
+                    commit: decode_json(existing.commit_json, "original MLS Commit")?,
+                });
+            }
+            if !same_authority(&current, authority) {
+                return Err(PersistenceError::Conflict("temporarily_unavailable: MLS refusal authority changed".into()).into());
+            }
+            #[derive(QueryableByName)]
+            struct RefusalRow {
+                #[diesel(sql_type = Text)]
+                rejection_reason: String,
+            }
+            sql_query("UPDATE canonical_events SET state='rejected',rejection_reason=$2 WHERE id=$1 AND state='queued'")
+                .bind::<Binary,_>(token.to_vec()).bind::<Text,_>(reason_code)
+                .execute(&mut *conn).await?;
+            let refused = sql_query("SELECT rejection_reason FROM canonical_events WHERE id=$1 AND state='rejected'")
+                .bind::<Binary,_>(token.to_vec()).get_result::<RefusalRow>(&mut *conn).await?;
+            Ok(arkret_wire::AuthoritySubmitOutcome::Rejected {
+                status: arkret_wire::AuthorityRejectionStatus::Rejected,
+                reason_code: refused.rejection_reason,
+            })
+        }).await.map_err(PgTransactionError::into_persistence)
     }
 
     async fn queued_event(

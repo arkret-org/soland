@@ -78,56 +78,62 @@ pub(in crate::routing) async fn submit_initial_event_submission(
 /// plan. The Applet endpoint has already bound each submission to the current
 /// plan; the ordinary self authority port still verifies its producer and
 /// commits the Event, covering RealmCommit, and current result together.
-pub(in crate::routing) async fn submit_applet_revoke_event_submission(
-    state: &AppState,
-    session: &SessionRecord,
+pub(in crate::routing) fn submit_applet_revoke_event_submission<'a>(
+    state: &'a AppState,
+    session: &'a SessionRecord,
     submission: arkret_wire::EventAdmissionSubmission,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    submission.validate().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "schema_violation",
-            format!("invalid Applet revoke Event submission: {error}"),
-        )
-    })?;
-    let event = &submission.event;
-    if !matches!(
-        event.kind,
-        arkret_wire::EventKind::CapabilityRevoke | arkret_wire::EventKind::MemberState
-    ) || !matches!(
-        &event.scope_ref,
-        arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id
-    ) {
-        return Err(SubmitOneError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "schema_violation",
-            "Applet revoke effects require an exact Realm-scope CapabilityRevoke or MemberState Event",
-        ));
-    }
-    let request = arkret_wire::AuthoritySubmitRequest::Event(submission.clone());
-    let event_id = event.event_id.to_string();
-    let outcome = state
-        .authority()
-        .submit_self_event(session, submission)
-        .await
-        .map_err(guarded_unit_error)?;
-    outcome.validate_for_request(&request).map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("Applet revoke authority outcome is invalid: {error}"),
-        )
-    })?;
-    let arkret_wire::AuthoritySubmitOutcome::Accepted { status, .. } = outcome else {
-        return Err(SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "guarded Applet revoke Event unit returned a non-accepted outcome",
-        ));
-    };
-    Ok(SubmittedEventOutcome {
-        event_id,
-        duplicate: status == arkret_wire::AuthorityCommitStatus::Duplicate,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<SubmittedEventOutcome, SubmitOneError>> + Send + 'a,
+    >,
+> {
+    Box::pin(async move {
+        submission.validate().map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
+                format!("invalid Applet revoke Event submission: {error}"),
+            )
+        })?;
+        let event = &submission.event;
+        if !matches!(
+            event.kind,
+            arkret_wire::EventKind::CapabilityRevoke | arkret_wire::EventKind::MemberState
+        ) || !matches!(
+            &event.scope_ref,
+            arkret_wire::ScopeRef::Realm { realm_id } if realm_id == &event.realm_id
+        ) {
+            return Err(SubmitOneError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "schema_violation",
+                "Applet revoke effects require an exact Realm-scope CapabilityRevoke or MemberState Event",
+            ));
+        }
+        let request = arkret_wire::AuthoritySubmitRequest::Event(submission.clone());
+        let event_id = event.event_id.to_string();
+        let outcome = state
+            .authority()
+            .submit_self_event(session, submission)
+            .await
+            .map_err(guarded_unit_error)?;
+        outcome.validate_for_request(&request).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Applet revoke authority outcome is invalid: {error}"),
+            )
+        })?;
+        let arkret_wire::AuthoritySubmitOutcome::Accepted { status, .. } = outcome else {
+            return Err(SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "guarded Applet revoke Event unit returned a non-accepted outcome",
+            ));
+        };
+        Ok(SubmittedEventOutcome {
+            event_id,
+            duplicate: status == arkret_wire::AuthorityCommitStatus::Duplicate,
+        })
     })
 }
 

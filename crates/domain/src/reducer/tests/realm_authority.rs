@@ -56,8 +56,8 @@ fn state_with_successor() -> ProjectionState {
         serde_json::json!({
             "controller_actor_id": account_actor(OWNER),
             "controller_epoch": 0,
-            "governance_station_id": FIXTURE_GOVERNANCE_STATION,
             "authority_generation": 0,
+            "authority_event_ref": REALM.replacen("ak:realm:", "ak:event:", 1),
         }),
     );
     let now = chrono::Utc::now();
@@ -84,6 +84,7 @@ fn transfer_changes_only_controller_and_epoch() {
     let mut state = state_with_successor();
     let before_epoch = controller_epoch(&state);
     let before_generation = authority_generation(&state);
+    let before_anchor = state.realm_authority_root(REALM).unwrap()["authority_event_ref"].clone();
     let effect = state.apply_realm_authority_transition(
         &operation(
             arkret_wire::EventKind::RealmOwnerTransfer,
@@ -106,6 +107,10 @@ fn transfer_changes_only_controller_and_epoch() {
     );
     assert_eq!(controller_epoch(&state), before_epoch + 1);
     assert_eq!(authority_generation(&state), before_generation);
+    assert_eq!(
+        state.realm_authority_root(REALM).unwrap()["authority_event_ref"],
+        before_anchor
+    );
 }
 
 #[test]
@@ -155,19 +160,21 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
 }
 
 #[test]
-fn reset_changes_only_generation() {
+fn reset_replaces_the_anchor_and_generation_preserving_controller() {
     let mut state = state_with_successor();
     let before_controller = controller(&state);
     let before_epoch = controller_epoch(&state);
+    let reset_event = operation(
+        arkret_wire::EventKind::RealmAuthorityReset,
+        serde_json::json!({
+            "realm_id": REALM,
+            "expected_state_digest": root_digest(&state),
+            "sender": OWNER
+        }),
+    );
+    let reset_anchor = reset_event.context.accepted_event_id.to_string();
     let reset = state.apply_realm_authority_transition(
-        &operation(
-            arkret_wire::EventKind::RealmAuthorityReset,
-            serde_json::json!({
-                "realm_id": REALM,
-                "expected_state_digest": root_digest(&state),
-                "sender": OWNER
-            }),
-        ),
+        &reset_event,
         arkret_wire::EventKind::RealmAuthorityReset,
     );
     assert!(
@@ -177,16 +184,19 @@ fn reset_changes_only_generation() {
     assert_eq!(controller(&state), before_controller);
     assert_eq!(controller_epoch(&state), before_epoch);
     assert_eq!(authority_generation(&state), 1);
-}
-
-fn governance_station(state: &ProjectionState) -> String {
-    state
-        .realm_authority_root(REALM)
-        .unwrap()
-        .get("governance_station_id")
-        .and_then(Value::as_str)
-        .unwrap()
-        .to_owned()
+    assert_eq!(
+        state.realm_authority_root(REALM).unwrap()["authority_event_ref"],
+        reset_anchor
+    );
+    assert_eq!(
+        state
+            .realm_authority_root(REALM)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .len(),
+        4
+    );
 }
 
 /// A governance handoff is an authority-commit effect, not a typed result.
@@ -201,7 +211,7 @@ fn governance_station_change_is_explicit_without_mutating_projection_state() {
     let mut state = state_with_successor();
     let before_controller = controller(&state);
     let before_epoch = controller_epoch(&state);
-    let before_station = governance_station(&state);
+    let before_root = state.realm_authority_root(REALM).unwrap().clone();
     let effect = state.apply_projected(
         &operation(
             arkret_wire::EventKind::RealmGovernanceStationChange,
@@ -221,7 +231,7 @@ fn governance_station_change_is_explicit_without_mutating_projection_state() {
         ),
         "governance station change must be an explicit authority effect: {effect:?}"
     );
-    assert_eq!(governance_station(&state), before_station);
+    assert_eq!(state.realm_authority_root(REALM), Some(&before_root));
     assert_eq!(authority_generation(&state), 0);
     assert_eq!(controller(&state), before_controller);
     assert_eq!(controller_epoch(&state), before_epoch);

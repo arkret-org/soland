@@ -127,6 +127,9 @@ pub(crate) async fn resolve_self_signer_keys(
             SignerKeyQuerySelector::HistoricalEvent {
                 sender: arkret_models_identity::HistoricalSignerKeyQuerySender::Agent { .. },
             } => "agent",
+            SignerKeyQuerySelector::HistoricalEvent {
+                sender: arkret_models_identity::HistoricalSignerKeyQuerySender::Service { .. },
+            } => "service",
             SignerKeyQuerySelector::CurrentAdmission { .. } => "current_selector",
         };
         signer_query_diagnostic("selector_classification", category);
@@ -153,7 +156,8 @@ pub(crate) async fn resolve_self_signer_keys(
                 SignerKeyQuerySelector::HistoricalEvent {
                     sender:
                         arkret_models_identity::HistoricalSignerKeyQuerySender::Agent { .. }
-                        | arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice { .. },
+                        | arkret_models_identity::HistoricalSignerKeyQuerySender::AccountDevice { .. }
+                        | arkret_models_identity::HistoricalSignerKeyQuerySender::Service { .. },
                 } => {
                     let found = observed_signer_lookup(
                         state

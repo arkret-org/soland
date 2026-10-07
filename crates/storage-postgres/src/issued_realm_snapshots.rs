@@ -602,6 +602,7 @@ async fn recheck_disclosure_in_connection(
             | CurrentSelector::RealmPlaintextVisibleServices
             | CurrentSelector::Circle { .. }
             | CurrentSelector::Strand { .. }
+            | CurrentSelector::CalendarScheduleSource { .. }
             | CurrentSelector::Space { .. }
             | CurrentSelector::SpaceParent { .. }
             | CurrentSelector::SpaceChildScopePolicy { .. }

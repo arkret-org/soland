@@ -731,7 +731,7 @@ async fn founding_unit(
             expected_authority: authority.clone(),
             event,
             commit,
-            producer_signer_fact: fact,
+            producer_signer_fact: fact.map(Into::into),
             mls_state: None,
             welcomes: Vec::new(),
             recipient_queue_capacity: 0,
@@ -2552,6 +2552,7 @@ fn cited(
             if let Some(fact) = previous
                 .producer_signer_fact
                 .as_ref()
+                .and_then(|fact| fact.as_human())
                 .filter(|fact| fact.actor == event.actor_id)
             {
                 event = device_authorization_history::sign_event(
@@ -2578,6 +2579,7 @@ fn cited(
     if let Some(fact) = previous
         .producer_signer_fact
         .as_ref()
+        .and_then(|fact| fact.as_human())
         .filter(|fact| fact.actor == event.actor_id)
     {
         event = device_authorization_history::sign_event(
@@ -2636,7 +2638,8 @@ async fn sourced_cited_at(
             request.authority_commit.commit.committed_at,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .map(Into::into);
     if request
         .authority_commit
         .event

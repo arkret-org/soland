@@ -65,7 +65,8 @@ impl HumanFixture {
             transaction.producer_signer_fact = store
                 .prepare_human_signer_fact(&transaction.event, transaction.commit.committed_at)
                 .await
-                .unwrap();
+                .unwrap()
+                .map(Into::into);
             transaction.commit.producer_signer_fact_digest = transaction
                 .producer_signer_fact
                 .as_ref()
@@ -123,11 +124,13 @@ impl HumanFixture {
             .last()
             .unwrap()
             .producer_signer_fact
-            .clone()
+            .as_ref()
+            .and_then(|fact| fact.as_human())
+            .cloned()
             .expect("real original PCR source");
         fact.event_id = request.authority_commit.event.event_id.clone();
         request.authority_commit.commit.producer_signer_fact_digest = Some(fact.digest().unwrap());
-        request.authority_commit.producer_signer_fact = Some(fact);
+        request.authority_commit.producer_signer_fact = Some(fact.into());
         seal_commit(
             &mut request.authority_commit.commit,
             &self.pcr.history.station_did,
@@ -193,11 +196,13 @@ pub fn request_for_event(
         .last()
         .unwrap()
         .producer_signer_fact
-        .clone()
+        .as_ref()
+        .and_then(|fact| fact.as_human())
+        .cloned()
         .expect("actual accepted PCR original");
     fact.event_id = request.authority_commit.event.event_id.clone();
     request.authority_commit.commit.producer_signer_fact_digest = Some(fact.digest().unwrap());
-    request.authority_commit.producer_signer_fact = Some(fact);
+    request.authority_commit.producer_signer_fact = Some(fact.into());
     request.self_producer_guard = Some(SelfProducerCommitGuard::HumanDevice(fixture.guard.clone()));
     seal_commit(
         &mut request.authority_commit.commit,

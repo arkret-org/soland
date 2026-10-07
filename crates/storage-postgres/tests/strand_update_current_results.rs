@@ -7,11 +7,11 @@ mod ordinary_realm;
 
 use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
-use ordinary_realm::{founder, next_request, open_discussion};
+use ordinary_realm::{next_request, open_discussion};
 use serde_json::{Value, json};
 use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
-use soland_storage_postgres::PgEventCommitUnitOfWork;
 use soland_storage_postgres::test_database::TestDatabase;
+use soland_storage_postgres::{PgEventCommitUnitOfWork, PgPool};
 
 #[derive(diesel::QueryableByName, Debug, PartialEq)]
 struct Current {
@@ -117,7 +117,13 @@ async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_
         next_request(
             head,
             arkret_wire::EventKind::StrandUpdate,
-            &founder(),
+            &discussion
+                .head
+                .authority_commit
+                .event
+                .actor_id
+                .signing_principal_id()
+                .clone(),
             json!({"target_ref": discussion.strand_id, "patch": {
                 "tracks.synthesis.content": {"$op":"set", "value": {
                     "kind":"ak.content.text", "body":body
@@ -140,7 +146,13 @@ async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_
     let enable = next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::StrandTracksUpdate,
-        &founder(),
+        &discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
         json!({"target_ref": discussion.strand_id, "patch": {
             "tracks.synthesis.enabled": {"$op":"set", "value":true},
             "tracks.synthesis.is_primary": {"$op":"set", "value":false}
@@ -159,7 +171,13 @@ async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_
     let disable = next_request(
         &write.authority_commit,
         arkret_wire::EventKind::StrandTracksUpdate,
-        &founder(),
+        &discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
         json!({"target_ref": discussion.strand_id, "patch": {
             "tracks.synthesis.enabled": {"$op":"set", "value":false}
         }}),
@@ -184,30 +202,42 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let discussion = open_discussion(&pool, "strand-update-current-cas").await;
+    let discussion = Box::new(Box::pin(open_discussion(&pool, "strand-update-current-cas")).await);
     let realm_id = discussion.head.authority_commit.event.realm_id.clone();
     let at = discussion.head.authority_commit.commit.committed_at;
     let before = current(&pool, &discussion.strand_id).await;
     let baseline = realm_counts(&pool, &realm_id).await;
 
-    let accepted = next_request(
+    let accepted = Box::new(next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::StrandUpdate,
-        &founder(),
+        &discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
         json!({
             "target_ref": discussion.strand_id,
             "expected_state_digest": digest(&before.value),
             "patch": {"metadata.title": {"$op":"set", "value":"Accepted title"}},
         }),
         at,
-    );
-    let outcome = uow.commit_event(accepted.clone()).await.unwrap();
+    ));
+    let outcome = uow.commit_event((*accepted).clone()).await.unwrap();
     assert!(outcome.event_inserted);
     let after = current(&pool, &discussion.strand_id).await;
     assert_eq!(after.value["metadata"]["title"], "Accepted title");
     let store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
     let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        founder(),
+        discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
         ordinary_realm::station(),
     ));
     let (_, list) = store
@@ -274,7 +304,16 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
 
     // Updating the already disclosed Strand family must keep member bootstrap
     // available, with the accepted value and its exact current revision.
-    let account = arkret_wire::AccountId::new(founder(), ordinary_realm::station());
+    let account = arkret_wire::AccountId::new(
+        discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
+        ordinary_realm::station(),
+    );
     let snapshot = soland_storage_postgres::account_snapshot_material(&pool, &realm_id, &account)
         .await
         .unwrap()
@@ -288,7 +327,7 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
                 && value == &after.value
     )));
 
-    let duplicate = uow.commit_event(accepted.clone()).await.unwrap();
+    let duplicate = uow.commit_event((*accepted).clone()).await.unwrap();
     assert!(!duplicate.event_inserted);
     assert_eq!(current(&pool, &discussion.strand_id).await, after);
     assert_eq!(
@@ -297,54 +336,79 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
     );
 
     let head = &accepted.authority_commit;
-    let stale = next_request(
+    let stale = Box::new(next_request(
         head,
         arkret_wire::EventKind::StrandUpdate,
-        &founder(),
+        &discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
         json!({
             "target_ref": discussion.strand_id,
             "expected_state_digest": digest(&before.value),
             "patch": {"metadata.title": {"$op":"set", "value":"Stale title"}},
         }),
         at,
-    );
-    let unknown = next_request(
+    ));
+    let unknown = Box::new(next_request(
         head,
         arkret_wire::EventKind::StrandUpdate,
-        &founder(),
+        &discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
         json!({
             "target_ref": arkret_wire::StrandId::from_event_id(&accepted.authority_commit.event.event_id),
             "patch": {"metadata.title": {"$op":"set", "value":"Unknown title"}},
         }),
         at,
-    );
-    let forbidden = next_request(
+    ));
+    let forbidden = Box::new(next_request(
         head,
         arkret_wire::EventKind::StrandUpdate,
-        &founder(),
+        &discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
         json!({
             "target_ref": discussion.strand_id,
             "patch": {"stage": {"$op":"set", "value":"done"}},
         }),
         at,
-    );
-    let not_joined = next_request(
+    ));
+    let outsider = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "strand-update-outsider",
+    ))
+    .await;
+    let not_joined = Box::new(next_request(
         head,
         arkret_wire::EventKind::StrandUpdate,
-        &arkret_wire::DidCoreId::new("ak:did_core:web:strand-update-outsider.example").unwrap(),
+        &outsider.principal_id,
         json!({
             "target_ref": discussion.strand_id,
             "patch": {"metadata.title": {"$op":"set", "value":"Unauthorized title"}},
         }),
         at,
-    );
+    ));
+    let not_joined = Box::new(Box::pin(ordinary_realm::source_request(&pool, *not_joined)).await);
     for (request, reason) in [
         (stale, "expected_state_digest"),
         (unknown, "target is absent"),
         (forbidden, "forbidden"),
         (not_joined, "capability_denied"),
     ] {
-        let error = uow.commit_event(request).await.unwrap_err().to_string();
+        let error = uow.commit_event(*request).await.unwrap_err().to_string();
         assert!(error.contains(reason), "{error}");
         assert_eq!(current(&pool, &discussion.strand_id).await, after);
         assert_eq!(
@@ -397,6 +461,59 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
         json!(["ak.schema.calendar_event.v1"])
     );
     assert_eq!(confirmed.value["metadata"]["fields"]["calendar"], schedule);
+    async fn source(
+        pool: &PgPool,
+        strand: &arkret_wire::StrandId,
+    ) -> arkret_wire::CalendarScheduleSourceValue {
+        #[derive(diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type=Jsonb)]
+            value: Value,
+        }
+        let mut conn = pool.get().await.unwrap();
+        let row = diesel::sql_query("SELECT calendar_schedule_source_value AS value FROM strand_current_results WHERE strand_id=$1")
+            .bind::<Text,_>(strand.as_str()).get_result::<Row>(&mut conn).await.unwrap();
+        serde_json::from_value(row.value).unwrap()
+    }
+    let initial = source(&pool, &discussion.strand_id).await;
+    assert_eq!(
+        initial.source.as_ref().unwrap().event_id,
+        accepted.authority_commit.event.event_id
+    );
+    assert_eq!(
+        initial.strand_revision.commit_id,
+        accepted.authority_commit.commit.commit_id
+    );
+    let title = next_request(
+        &accepted.authority_commit,
+        arkret_wire::EventKind::StrandUpdate,
+        &author,
+        json!({"target_ref":discussion.strand_id,"patch":{"metadata.title":{"$op":"set","value":"Renamed calendar"}}}),
+        at,
+    );
+    uow.commit_event(title.clone()).await.unwrap();
+    let renamed = source(&pool, &discussion.strand_id).await;
+    assert_eq!(renamed.source, initial.source);
+    assert_eq!(
+        renamed.strand_revision.commit_id,
+        title.authority_commit.commit.commit_id
+    );
+    let same_schedule = next_request(
+        &title.authority_commit,
+        arkret_wire::EventKind::StrandUpdate,
+        &author,
+        json!({"target_ref":discussion.strand_id,"patch":{"metadata.fields.calendar":{"$op":"set","value":schedule}}}),
+        at,
+    );
+    uow.commit_event(same_schedule.clone()).await.unwrap();
+    let repeated = source(&pool, &discussion.strand_id).await;
+    assert_eq!(
+        repeated.source.as_ref().unwrap().event_id,
+        same_schedule.authority_commit.event.event_id
+    );
+    assert_ne!(repeated.source, initial.source);
+    let accepted = same_schedule;
+    let confirmed = current(&pool, &discussion.strand_id).await;
     let counts = realm_counts(&pool, &realm_id).await;
 
     let unpaired = next_request(

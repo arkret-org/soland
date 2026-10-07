@@ -60,6 +60,7 @@ async fn receive(
     fact: Option<&arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
 ) -> Result<ReceivedProducer, ServiceError> {
     let store = receiver.test_persistence();
+    let fact = fact.cloned().map(Into::into);
     verify_committed_event_receipt_with_fact(
         store.device_revocations(),
         event,
@@ -69,7 +70,7 @@ async fn receive(
         &chain.keys,
         &receiver.service_core_id(),
         DigestSuite::Sha256,
-        fact,
+        fact.as_ref(),
     )
     .await
 }

@@ -5069,7 +5069,8 @@ async fn source_request(
             request.authority_commit.commit.committed_at,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .map(Into::into);
     assert!(request.authority_commit.producer_signer_fact.is_some());
     request.authority_commit.commit.producer_signer_fact_digest = request
         .authority_commit
@@ -7785,7 +7786,8 @@ async fn source_unit(
         tx.producer_signer_fact = store
             .prepare_human_signer_fact(&tx.event, tx.commit.committed_at)
             .await
-            .unwrap();
+            .unwrap()
+            .map(Into::into);
         tx.commit.producer_signer_fact_digest = tx
             .producer_signer_fact
             .as_ref()
@@ -7826,7 +7828,12 @@ fn seal_suite_commit(commit: &mut arkret_wire::RealmCommit) {
     .unwrap();
 }
 fn seal_request_fact(mut request: EventCommitRequest) -> EventCommitRequest {
-    if let Some(fact) = request.authority_commit.producer_signer_fact.as_mut() {
+    if let Some(fact) = request
+        .authority_commit
+        .producer_signer_fact
+        .as_mut()
+        .and_then(|fact| fact.as_human_mut())
+    {
         if fact.actor == request.authority_commit.event.actor_id {
             fact.event_id = request.authority_commit.event.event_id.clone();
             request.authority_commit.commit.producer_signer_fact_digest =
