@@ -16,10 +16,15 @@ fn map_issue_error(
         .with_wire_code("payload_too_large");
     }
     if error.conflict_code() == Some(soland_storage::ConflictCode::TemporarilyUnavailable) {
-        // A handoff committed while this cut held its share lock: nothing
-        // was signed or archived, and the caller may retry the exact read.
-        tracing::info!(%error, realm_id=%realm_id, "snapshot issuance lost a governing-cut race");
-        return snapshot_unavailable("the governing cut changed during snapshot issuance");
+        // The entire transaction rolled back. A signature may have been
+        // computed, but no issuance was committed or returned. Serialization
+        // alone cannot distinguish a handoff from an issuance-row race.
+        tracing::warn!(
+            operation_stage = "snapshot_issuance_transaction",
+            conflict_code = "temporarily_unavailable",
+            "snapshot issuance transaction unavailable",
+        );
+        return snapshot_unavailable("a concurrent write prevented snapshot issuance");
     }
     match error {
         soland_services::ServiceError::SchemaViolation(_) => {
@@ -138,11 +143,11 @@ mod issue_error_tests {
     }
 
     #[test]
-    fn concurrent_handoff_race_is_the_registered_snapshot_unavailability() {
+    fn snapshot_transaction_race_is_the_registered_snapshot_unavailability() {
         let raced = map_issue_error(
             &realm(),
             soland_services::ServiceError::Conflict(format!(
-                "{}: the governing cut changed concurrently: could not serialize access",
+                "{}: the snapshot transaction lost a concurrent write race: could not serialize access",
                 soland_storage::ConflictCode::TemporarilyUnavailable.as_str(),
             )),
         );
