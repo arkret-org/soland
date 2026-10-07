@@ -356,7 +356,7 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
         ("sidecar_current_results", "sidecar_id,controller_account_id,create_event_id,source_stream_ref", format!("'sidecar-' || {key},jsonb_build_object('principal_id','controller-' || {key},'station_id','station'),'sidecar-event-' || {key},jsonb_build_object('kind','realm','realm_id',{realm})"), format!("jsonb_build_object('id','sidecar-' || {key},'realm_id',{realm},'controller_account_id',jsonb_build_object('principal_id','controller-' || {key},'station_id','station'))")),
         ("sidecar_context_current_results", "sidecar_id,context_ref_digest,context_ref,version,predecessor_event_ref,attach_event_id,source_stream_ref", format!("'sidecar-' || {key},'context-' || {key},jsonb_build_object('kind','strand','strand_id','strand-' || {key}),1,NULL,'attach-event-' || {key},jsonb_build_object('kind','sidecar','realm_id',{realm},'sidecar_id','sidecar-' || {key})"), format!("jsonb_build_object('sidecar_id','sidecar-' || {key},'source_context_ref',jsonb_build_object('kind','strand','strand_id','strand-' || {key}),'version',1)")),
         ("policy_action_current_results", "subject_kind,subject_id,action_key,current_event_id", format!("'realm_action','action-' || {key},'','action-event-' || {key}"), "'{}'::jsonb".to_owned()),
-        ("strand_current_results", "strand_id", format!("'strand-' || {key}"), format!("jsonb_build_object('id','strand-' || {key},'realm_id',{realm})")),
+        ("strand_current_results", "strand_id,calendar_schedule_source_value", format!("'strand-' || {key},jsonb_build_object('effective_scope',jsonb_build_object('kind','realm','realm_id',{realm}),'source',NULL,'strand_revision',jsonb_build_object('commit_id',{commit},'stream_position',0),'metadata_context',NULL)"), format!("jsonb_build_object('id','strand-' || {key},'realm_id',{realm})")),
         ("rsvp_current_results", "event_ref,occurrence,responder_actor_id,source_stream_ref", format!("'strand-' || {key},'null'::jsonb,jsonb_build_object('actor',m),jsonb_build_object('kind','realm','realm_id',{realm})"), "jsonb_build_object('response','accepted')".to_owned()),
         ("strand_watch_current_results", "strand_id,watcher_actor_id", format!("'strand-' || {key},jsonb_build_object('watcher','actor-' || {key})::text"), "jsonb_build_object('level','all')".to_owned()),
         ("strand_position_current_results", "board_space_id,strand_id", format!("'board-' || {key},'strand-' || {key}"), "jsonb_build_object('list_space_id','list','rank','a')".to_owned()),
@@ -534,15 +534,16 @@ async fn typed_current_and_self_reads_stay_bounded_across_one_hundred_and_one_th
                 .map(str::to_owned)
                 .collect::<std::collections::BTreeSet<_>>();
             assert_eq!(observed, expected);
-            // The union has 36 width-sized families: member, message and
-            // moderation plus the 33 seed_snapshot_families loop entries.
+            // The union has 37 width-sized families: member, message and
+            // moderation plus the 33 seed_snapshot_families loop entries
+            // and the paired Calendar source stored with each Strand.
             // Relation is seeded for the exact self-read matrix only and is
             // absent from this union. StrandWatch contributes one family,
             // not another row for each accepted replacement in its history.
             // The other five tables emit eight bootstrap facets and four
             // singleton rows per Realm.
             assert_eq!(observed.len(), 41);
-            let output = 36.0 * width + 12.0;
+            let output = 37.0 * width + 12.0;
             assert_eq!(plan[0]["Plan"]["Actual Rows"].as_f64(), Some(output));
             // Up to four visited rows per output permits the planner's
             // low-selectivity current-table scan, but never a history scan
