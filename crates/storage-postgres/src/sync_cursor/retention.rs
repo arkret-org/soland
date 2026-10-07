@@ -2,7 +2,7 @@
 use super::*;
 use crate::{AsyncPgConnection, PgTransactionError};
 
-const LOCK_KEY: i64 = 0x414b_5359_4e43;
+pub(crate) const LOCK_KEY: i64 = 0x414b_5359_4e43;
 
 #[derive(QueryableByName)]
 struct Floors {

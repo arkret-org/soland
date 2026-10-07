@@ -563,7 +563,34 @@ async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() 
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(second.current_state_entries.len(), 12);
+    assert_eq!(second.current_state_entries.len(), 13);
+    let (source_stream, source_revision, source_value) = second
+        .current_state_entries
+        .iter()
+        .find_map(|entry| match entry {
+            arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id: id },
+                source_stream_ref,
+                revision,
+                value,
+            } if id == &strand_id => Some((source_stream_ref, revision, value)),
+            _ => None,
+        })
+        .expect("every Strand writer preserves its same-cut Calendar source sibling");
+    let source: arkret_wire::CalendarScheduleSourceValue =
+        serde_json::from_value(source_value.clone()).unwrap();
+    assert_eq!(source.strand_revision, *source_revision);
+    assert_eq!(
+        source.effective_scope,
+        strand.authority_commit.event.scope_ref
+    );
+    assert!(source.source.is_none());
+    assert!(source.metadata_context.is_none());
+    assert_eq!(source_stream, &strand.authority_commit.commit.stream_ref);
+    assert_eq!(
+        source_revision.commit_id,
+        strand.authority_commit.commit.commit_id
+    );
     assert_eq!(second.visible_stream_heads[0].stream_position, 10);
     assert_ne!(second.snapshot_id, first.snapshot_id);
     assert_eq!(issuance_count(&pool, &realm_id).await, 2);

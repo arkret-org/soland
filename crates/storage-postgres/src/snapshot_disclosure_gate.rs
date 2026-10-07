@@ -286,66 +286,69 @@ pub async fn issue_account_snapshot(
     issuer: &arkret_wire::DidCoreId,
     sign: soland_storage::RealmStateSnapshotSigner<'_>,
 ) -> PersistenceResult<Option<arkret_wire::RealmStateSnapshot>> {
-    let mut conn = pg_conn(pool).await?;
-    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-            .execute(&mut *conn)
-            .await?;
-        // Issuance and issued-snapshot GC exclude each other (0441).
-        crate::sync_cursor::retention::lock(conn, false).await?;
-        let Some(tenure) = sql_query(
-            "SELECT service_id, generation FROM realm_authorities \
+    let mut conn =
+        crate::issued_realm_snapshots::SnapshotIssuanceConnection::acquire(pool, realm_id).await?;
+    let result = conn
+        .transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                .execute(&mut *conn)
+                .await?;
+            // Issuance and issued-snapshot GC exclude each other (0441).
+            crate::sync_cursor::retention::lock(conn, false).await?;
+            let Some(tenure) = sql_query(
+                "SELECT service_id, generation FROM realm_authorities \
              WHERE realm_id=$1 FOR SHARE",
-        )
-        .bind::<Text, _>(realm_id.as_str())
-        .get_result::<TenureRow>(&mut *conn)
+            )
+            .bind::<Text, _>(realm_id.as_str())
+            .get_result::<TenureRow>(&mut *conn)
+            .await
+            .optional()?
+            else {
+                return Ok(None);
+            };
+            let Some(material) =
+                account_snapshot_material_in_connection(conn, realm_id, account).await?
+            else {
+                return Ok(None);
+            };
+            if i64::try_from(material.governance_generation).ok() != Some(tenure.generation) {
+                return Err(rejected("material generation differs from the locked tenure").into());
+            }
+            crate::issued_realm_snapshots::require_snapshot_serving_cut(
+                conn,
+                account,
+                issuer,
+                &tenure.service_id,
+                &material,
+            )
+            .await?;
+            if tenure.service_id != issuer.as_str() {
+                return crate::issued_realm_snapshots::served_current_snapshot(
+                    conn, account, issuer, &material,
+                )
+                .await?
+                .map(Some)
+                .ok_or_else(|| {
+                    rejected("the current governing Snapshot has not been installed").into()
+                });
+            }
+            let snapshot = sign(&material)?;
+            if !soland_storage::signed_snapshot_matches_material(&snapshot, &material) {
+                return Err(PersistenceError::Internal(
+                    "snapshot signer changed the proved disclosure material".to_owned(),
+                )
+                .into());
+            }
+            soland_storage::enforce_inline_realm_state_snapshot_capacity(&snapshot)?;
+            let issued = crate::issued_realm_snapshots::issue_head_in_connection(
+                conn, account, &material, snapshot,
+            )
+            .await?;
+            Ok(Some(issued))
+        })
         .await
-        .optional()?
-        else {
-            return Ok(None);
-        };
-        let Some(material) =
-            account_snapshot_material_in_connection(conn, realm_id, account).await?
-        else {
-            return Ok(None);
-        };
-        if i64::try_from(material.governance_generation).ok() != Some(tenure.generation) {
-            return Err(rejected("material generation differs from the locked tenure").into());
-        }
-        crate::issued_realm_snapshots::require_snapshot_serving_cut(
-            conn,
-            account,
-            issuer,
-            &tenure.service_id,
-            &material,
-        )
-        .await?;
-        if tenure.service_id != issuer.as_str() {
-            return crate::issued_realm_snapshots::served_current_snapshot(
-                conn, account, issuer, &material,
-            )
-            .await?
-            .map(Some)
-            .ok_or_else(|| {
-                rejected("the current governing Snapshot has not been installed").into()
-            });
-        }
-        let snapshot = sign(&material)?;
-        if !soland_storage::signed_snapshot_matches_material(&snapshot, &material) {
-            return Err(PersistenceError::Internal(
-                "snapshot signer changed the proved disclosure material".to_owned(),
-            )
-            .into());
-        }
-        soland_storage::enforce_inline_realm_state_snapshot_capacity(&snapshot)?;
-        let issued = crate::issued_realm_snapshots::issue_head_in_connection(
-            conn, account, &material, snapshot,
-        )
-        .await?;
-        Ok(Some(issued))
-    })
-    .await
-    .map_err(crate::issued_realm_snapshots::snapshot_transaction_error)
+        .map_err(crate::issued_realm_snapshots::snapshot_transaction_error);
+    conn.finish(result).await
 }
 
 #[derive(QueryableByName)]

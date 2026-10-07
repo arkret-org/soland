@@ -50,6 +50,7 @@ sha2.workspace = true
 soland-domain = { workspace = true }
 soland-storage = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
+tokio-postgres = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
@@ -63,7 +64,6 @@ arkret-bootstrap.workspace = true
 arkret-signatures = { workspace = true, features = ["signer"] }
 ed25519-dalek.workspace = true
 arkret-mls = { workspace = true, features = ["test-utils"] }
-tokio-postgres = { workspace = true }
 arkret-wire = { workspace = true, features = ["diesel", "test-support"] }
 soland-domain = { workspace = true }
 soland-services = { workspace = true }

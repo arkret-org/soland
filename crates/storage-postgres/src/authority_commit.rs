@@ -3489,12 +3489,18 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         &self,
         install: &soland_storage::ReplicaAnchorInstall,
     ) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool).await?;
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            replica::install_replica_anchor_in_connection(conn, install).await
-        })
-        .await
-        .map_err(PgTransactionError::into_persistence)
+        let mut conn = crate::issued_realm_snapshots::SnapshotIssuanceConnection::acquire(
+            &self.pool,
+            &install.realm_id,
+        )
+        .await?;
+        let result = conn
+            .transaction::<_, PgTransactionError, _>(async move |conn| {
+                replica::install_replica_anchor_in_connection(conn, install).await
+            })
+            .await
+            .map_err(PgTransactionError::into_persistence);
+        conn.finish(result).await
     }
 
     async fn held_stream_head_commit(
