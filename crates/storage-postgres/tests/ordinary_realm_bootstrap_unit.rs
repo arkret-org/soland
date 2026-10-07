@@ -7006,145 +7006,224 @@ fn plain_revision(message_id: &arkret_wire::MessageId, body: &str) -> serde_json
 async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    human_profile::admit(
-        &pool,
-        &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
-        "bootstrap-actor",
-    )
-    .await;
-    let store = PgAuthorityCommitStore { pool: pool.clone() };
-    let unit = unit_with_plaintext_service(&pool).await;
-    let at = unit.transactions[0].commit.committed_at;
-    store
-        .admit_ordinary_realm_bootstrap_unit(&unit, at)
-        .await
-        .unwrap();
-    let realm_id = unit.transactions[0].event.realm_id.clone();
-    let creator = creator_account(&unit);
-    let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let strand = strand_create_request(&unit);
-    uow.commit_event(strand.clone()).await.unwrap();
-    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
-    let default = set_default_strand_request(&strand, &strand_id, None);
-    let default = source_if_human(&pool, default).await;
-    uow.commit_event(default.clone()).await.unwrap();
-    let created = message_create_request(&default, &strand_id, "hello");
-    let created = source_if_human(&pool, created).await;
-    uow.commit_event(created.clone()).await.unwrap();
-    let message_id =
-        arkret_wire::MessageId::from_event_id(&created.authority_commit.event.event_id);
+    let fixture = message_revision_fixture(&pool).await;
+    let revised = assert_message_revision_carriers(&pool, &fixture).await;
+    let moderated = assert_message_revision_editor_grants(&pool, &fixture, &revised).await;
+    assert_message_revision_window_and_redaction(&pool, &fixture, &moderated).await;
+}
 
-    // The author's revise replaces the create carrier at its own Commit.
-    let revised = realm_event_request_as(
-        &created,
-        &creator,
-        arkret_wire::EventKind::MessageRevise,
-        plain_revision(&message_id, "hello, edited"),
-    );
-    let revised = source_if_human(&pool, revised).await;
-    uow.commit_event(revised.clone()).await.unwrap();
-    let families = message_families(&pool, &realm_id).await;
-    assert_eq!(
-        families.revisions,
-        vec![(
-            message_id.to_string(),
-            revised.authority_commit.commit.commit_id.to_string(),
+struct MessageRevisionFixture {
+    unit: OrdinaryRealmBootstrapCommitUnit,
+    strand_id: arkret_wire::StrandId,
+    created: EventCommitRequest,
+}
+
+fn message_revision_fixture(
+    pool: &soland_storage_postgres::PgPool,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = MessageRevisionFixture> + '_>> {
+    Box::pin(async move {
+        human_profile::admit(
+            &pool,
+            &arkret_wire::DidCoreId::new("ak:did_core:web:bootstrap-station.example").unwrap(),
+            "bootstrap-actor",
+        )
+        .await;
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let unit = unit_with_plaintext_service(&pool).await;
+        let at = unit.transactions[0].commit.committed_at;
+        store
+            .admit_ordinary_realm_bootstrap_unit(&unit, at)
+            .await
+            .unwrap();
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let strand = strand_create_request(&unit);
+        uow.commit_event(strand.clone()).await.unwrap();
+        let strand_id =
+            arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
+        let default = set_default_strand_request(&strand, &strand_id, None);
+        let default = source_if_human(&pool, default).await;
+        uow.commit_event(default.clone()).await.unwrap();
+        let created = message_create_request(&default, &strand_id, "hello");
+        let created = source_if_human(&pool, created).await;
+        uow.commit_event(created.clone()).await.unwrap();
+        MessageRevisionFixture {
+            unit,
+            strand_id,
+            created,
+        }
+    })
+}
+
+fn assert_message_revision_carriers<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    fixture: &'a MessageRevisionFixture,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + 'a>> {
+    Box::pin(async move {
+        let MessageRevisionFixture { unit, created, .. } = fixture;
+        let realm_id = &unit.transactions[0].event.realm_id;
+        let creator = creator_account(unit);
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let message_id =
+            arkret_wire::MessageId::from_event_id(&created.authority_commit.event.event_id);
+
+        // The author's revise replaces the create carrier at its own Commit.
+        let revised = realm_event_request_as(
+            &created,
+            &creator,
+            arkret_wire::EventKind::MessageRevise,
             plain_revision(&message_id, "hello, edited"),
-        )]
-    );
-    let snapshot = store
-        .realm_state_snapshot_material(&realm_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
-        entry,
-        arkret_wire::TypedCurrentResult::Value {
-            selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
-            revision,
-            value,
-            ..
-        } if found == &message_id
-            && revision.commit_id == revised.authority_commit.commit.commit_id
-            && value == &plain_revision(&message_id, "hello, edited")
-    )));
+        );
+        let revised = source_if_human(&pool, revised).await;
+        uow.commit_event(revised.clone()).await.unwrap();
+        let families = message_families(&pool, &realm_id).await;
+        assert_eq!(
+            families.revisions,
+            vec![(
+                message_id.to_string(),
+                revised.authority_commit.commit.commit_id.to_string(),
+                plain_revision(&message_id, "hello, edited"),
+            )]
+        );
+        let snapshot = store
+            .realm_state_snapshot_material(&realm_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
+            entry,
+            arkret_wire::TypedCurrentResult::Value {
+                selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
+                revision,
+                value,
+                ..
+            } if found == &message_id
+                && revision.commit_id == revised.authority_commit.commit.commit_id
+                && value == &plain_revision(&message_id, "hello, edited")
+        )));
 
-    // A revise built on the create's head cannot commit on it once the
-    // author's revise took that position.
-    let stale = realm_event_request_as(
-        &created,
-        &creator,
-        arkret_wire::EventKind::MessageRevise,
-        plain_revision(&message_id, "stale edit"),
-    );
-    let stale = source_if_human(&pool, stale).await;
-    assert_message_write_refused(
-        &uow,
-        &store,
-        &pool,
-        &stale,
-        Some(soland_storage::ConflictCode::TemporarilyUnavailable),
-    )
-    .await;
+        // A revise built on the create's head cannot commit on it once the
+        // author's revise took that position.
+        let stale = realm_event_request_as(
+            &created,
+            &creator,
+            arkret_wire::EventKind::MessageRevise,
+            plain_revision(&message_id, "stale edit"),
+        );
+        let stale = source_if_human(&pool, stale).await;
+        assert_message_write_refused(
+            &uow,
+            &store,
+            &pool,
+            &stale,
+            Some(soland_storage::ConflictCode::TemporarilyUnavailable),
+        )
+        .await;
 
-    // Unsupported mentions and metadata remain outside the revision carrier.
-    let mut mentioned = plain_revision(&message_id, "@bob");
-    mentioned["content"]["mentions"] =
-        serde_json::json!([{"target_id": "ak:did_core:web:bob.example"}]);
-    for payload in [
-        mentioned,
-        serde_json::json!({
+        // Unsupported mentions and metadata remain outside the revision carrier.
+        let mut mentioned = plain_revision(&message_id, "@bob");
+        mentioned["content"]["mentions"] =
+            serde_json::json!([{"target_id": "ak:did_core:web:bob.example"}]);
+        for payload in [
+            mentioned,
+            serde_json::json!({
+                "message_id": message_id,
+                "content": {"kind": "ak.content.text", "body": "meta", "format": "plain"},
+                "metadata": {"title": "x"}
+            }),
+        ] {
+            let refused = realm_event_request_as(
+                &revised,
+                &creator,
+                arkret_wire::EventKind::MessageRevise,
+                payload,
+            );
+            let refused = source_if_human(&pool, refused).await;
+            let before = message_families(&pool, &realm_id).await;
+            assert!(uow.commit_event(refused.clone()).await.is_err());
+            assert_eq!(message_families(&pool, &realm_id).await, before);
+        }
+
+        let markdown_payload = serde_json::json!({
             "message_id": message_id,
-            "content": {"kind": "ak.content.text", "body": "meta", "format": "plain"},
-            "metadata": {"title": "x"}
-        }),
-    ] {
-        let refused = realm_event_request_as(
+            "content": {"kind": "ak.content.text", "body": "**edited**", "format": "markdown"}
+        });
+        let revised = realm_event_request_as(
             &revised,
             &creator,
             arkret_wire::EventKind::MessageRevise,
-            payload,
+            markdown_payload.clone(),
         );
-        let refused = source_if_human(&pool, refused).await;
-        let before = message_families(&pool, &realm_id).await;
-        assert!(uow.commit_event(refused.clone()).await.is_err());
-        assert_eq!(message_families(&pool, &realm_id).await, before);
-    }
+        let revised = source_if_human(&pool, revised).await;
+        uow.commit_event(revised.clone()).await.unwrap();
+        assert_eq!(
+            message_families(&pool, &realm_id).await.revisions,
+            vec![(
+                message_id.to_string(),
+                revised.authority_commit.commit.commit_id.to_string(),
+                markdown_payload
+            )]
+        );
 
-    let markdown_payload = serde_json::json!({
-        "message_id": message_id,
-        "content": {"kind": "ak.content.text", "body": "**edited**", "format": "markdown"}
-    });
-    let revised = realm_event_request_as(
-        &revised,
-        &creator,
-        arkret_wire::EventKind::MessageRevise,
-        markdown_payload.clone(),
-    );
-    let revised = source_if_human(&pool, revised).await;
-    uow.commit_event(revised.clone()).await.unwrap();
-    assert_eq!(
-        message_families(&pool, &realm_id).await.revisions,
-        vec![(
-            message_id.to_string(),
-            revised.authority_commit.commit.commit_id.to_string(),
-            markdown_payload
-        )]
-    );
+        revised
+    })
+}
 
-    let station = unit.transactions[0].expected_authority.service_id.clone();
-    let (member, membership_head) =
-        admit_joined_human(&pool, &uow, &revised, &unit, "message-member", 'a').await;
-    let stranger = invite_account(
-        "stranger.example",
-        &station.as_str()["ak:did_core:web:".len()..],
-    );
-    for actor in [&member, &stranger] {
-        let foreign = realm_event_request_as(
+fn assert_message_revision_editor_grants<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    fixture: &'a MessageRevisionFixture,
+    revised: &'a EventCommitRequest,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + 'a>> {
+    Box::pin(async move {
+        let unit = &fixture.unit;
+        let realm_id = &unit.transactions[0].event.realm_id;
+        let message_id =
+            arkret_wire::MessageId::from_event_id(&fixture.created.authority_commit.event.event_id);
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let station = unit.transactions[0].expected_authority.service_id.clone();
+        let (member, membership_head) =
+            admit_joined_human(&pool, &uow, &revised, &unit, "message-member", 'a').await;
+        let stranger = invite_account(
+            "stranger.example",
+            &station.as_str()["ak:did_core:web:".len()..],
+        );
+        for actor in [&member, &stranger] {
+            let foreign = realm_event_request_as(
+                &membership_head,
+                actor,
+                arkret_wire::EventKind::MessageRevise,
+                plain_revision(&message_id, "not yours"),
+            );
+            let foreign = source_if_human(&pool, foreign).await;
+            assert_message_write_refused(
+                &uow,
+                &store,
+                &pool,
+                &foreign,
+                Some(soland_storage::ConflictCode::CapabilityDenied),
+            )
+            .await;
+        }
+
+        // `.own` authorizes only the author: the member's grant of it is no
+        // edit right over the creator's Message.
+        let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
+        let own = invite_grant_request(
+            &pool,
             &membership_head,
-            actor,
+            &unit,
+            &root_event_ref,
+            &member,
+            &["ak.message.revise.own"],
+        )
+        .await;
+        uow.commit_event(own.clone()).await.unwrap();
+        let foreign = realm_event_request_as(
+            &own,
+            &member,
             arkret_wire::EventKind::MessageRevise,
-            plain_revision(&message_id, "not yours"),
+            plain_revision(&message_id, "own is not others"),
         );
         let foreign = source_if_human(&pool, foreign).await;
         assert_message_write_refused(
@@ -7155,160 +7234,153 @@ async fn message_revise_replaces_exact_revision_and_rejects_foreign_editor() {
             Some(soland_storage::ConflictCode::CapabilityDenied),
         )
         .await;
-    }
 
-    // `.own` authorizes only the author: the member's grant of it is no
-    // edit right over the creator's Message.
-    let root_event_ref = realm_root_authority_event_ref(&pool, &realm_id).await;
-    let own = invite_grant_request(
-        &pool,
-        &membership_head,
-        &unit,
-        &root_event_ref,
-        &member,
-        &["ak.message.revise.own"],
-    )
-    .await;
-    uow.commit_event(own.clone()).await.unwrap();
-    let foreign = realm_event_request_as(
-        &own,
-        &member,
-        arkret_wire::EventKind::MessageRevise,
-        plain_revision(&message_id, "own is not others"),
-    );
-    let foreign = source_if_human(&pool, foreign).await;
-    assert_message_write_refused(
-        &uow,
-        &store,
-        &pool,
-        &foreign,
-        Some(soland_storage::ConflictCode::CapabilityDenied),
-    )
-    .await;
-
-    // The unqualified action is an edit right over any Message.
-    let broad = invite_grant_request(
-        &pool,
-        &own,
-        &unit,
-        &root_event_ref,
-        &member,
-        &["ak.message.revise"],
-    )
-    .await;
-    uow.commit_event(broad.clone()).await.unwrap();
-    let moderated = realm_event_request_as(
-        &broad,
-        &member,
-        arkret_wire::EventKind::MessageRevise,
-        plain_revision(&message_id, "moderated"),
-    );
-    let moderated = source_if_human(&pool, moderated).await;
-    uow.commit_event(moderated.clone()).await.unwrap();
-    assert_eq!(
-        message_families(&pool, &realm_id).await.revisions,
-        vec![(
-            message_id.to_string(),
-            moderated.authority_commit.commit.commit_id.to_string(),
+        // The unqualified action is an edit right over any Message.
+        let broad = invite_grant_request(
+            &pool,
+            &own,
+            &unit,
+            &root_event_ref,
+            &member,
+            &["ak.message.revise"],
+        )
+        .await;
+        uow.commit_event(broad.clone()).await.unwrap();
+        let moderated = realm_event_request_as(
+            &broad,
+            &member,
+            arkret_wire::EventKind::MessageRevise,
             plain_revision(&message_id, "moderated"),
-        )]
-    );
+        );
+        let moderated = source_if_human(&pool, moderated).await;
+        uow.commit_event(moderated.clone()).await.unwrap();
+        assert_eq!(
+            message_families(&pool, &realm_id).await.revisions,
+            vec![(
+                message_id.to_string(),
+                moderated.authority_commit.commit.commit_id.to_string(),
+                plain_revision(&message_id, "moderated"),
+            )]
+        );
 
-    // The author path: a member holding `ak.message.create` and
-    // `ak.message.revise.own` under a 15-minute edit window edits its own
-    // Message inside the window and is `failed_precondition` once it closed.
-    let (author, author_join_head) =
-        admit_joined_human(&pool, &uow, &moderated, &unit, "message-author", 'b').await;
-    let mut windowed = invite_grant_request(
-        &pool,
-        &author_join_head,
-        &unit,
-        &root_event_ref,
-        &author,
-        &["ak.message.create", "ak.message.revise.own"],
-    )
-    .await;
-    let mut payload = serde_json::to_value(&windowed.authority_commit.event.payload).unwrap();
-    payload["grant"]["constraints"] = serde_json::json!([{
-        "constraint_kind": "temporal",
-        "constraint_subkind": "edit_window",
-        "applies_to_actions": ["ak.message.revise.own"],
-        "effect": "allow",
-        "message_edit_window": "PT15M"
-    }]);
-    windowed = realm_event_request_as(
-        &author_join_head,
-        &creator,
-        arkret_wire::EventKind::CapabilityGrant,
-        payload,
-    );
-    windowed = source_if_human(&pool, windowed).await;
-    uow.commit_event(windowed.clone()).await.unwrap();
-    let authored = realm_event_request_as(
-        &windowed,
-        &author,
-        arkret_wire::EventKind::MessageCreate,
-        serde_json::json!({
-            "strand_id": strand_id,
-            "track_name": "discussion",
-            "content": {"kind": "ak.content.text", "body": "member draft", "format": "plain"}
-        }),
-    );
-    let authored = source_if_human(&pool, authored).await;
-    uow.commit_event(authored.clone()).await.unwrap();
-    let authored_id =
-        arkret_wire::MessageId::from_event_id(&authored.authority_commit.event.event_id);
-    let own_edit = realm_event_request_as(
-        &authored,
-        &author,
-        arkret_wire::EventKind::MessageRevise,
-        plain_revision(&authored_id, "member final"),
-    );
-    let own_edit = source_if_human(&pool, own_edit).await;
-    uow.commit_event(own_edit.clone()).await.unwrap();
-    let mut late_edit = realm_event_request_as(
-        &own_edit,
-        &author,
-        arkret_wire::EventKind::MessageRevise,
-        plain_revision(&authored_id, "member too late"),
-    );
-    let mut late_edit = source_if_human(&pool, late_edit).await;
-    // The window closes 15 minutes after creation plus the registered
-    // temporal tolerance (`constraint-schema.md` §16.1).
-    late_edit.authority_commit.commit.committed_at += chrono::TimeDelta::minutes(21);
-    assert_message_write_refused(
-        &uow,
-        &store,
-        &pool,
-        &late_edit,
-        Some(soland_storage::ConflictCode::FailedPrecondition),
-    )
-    .await;
+        moderated
+    })
+}
 
-    // A redacted Message is terminal for revise.
-    let redaction = realm_event_request_as(
-        &own_edit,
-        &creator,
-        arkret_wire::EventKind::MessageRedact,
-        serde_json::json!({ "message_id": message_id }),
-    );
-    let redaction = source_if_human(&pool, redaction).await;
-    uow.commit_event(redaction.clone()).await.unwrap();
-    let after_redaction = realm_event_request_as(
-        &redaction,
-        &creator,
-        arkret_wire::EventKind::MessageRevise,
-        plain_revision(&message_id, "too late"),
-    );
-    let after_redaction = source_if_human(&pool, after_redaction).await;
-    assert_message_write_refused(
-        &uow,
-        &store,
-        &pool,
-        &after_redaction,
-        Some(soland_storage::ConflictCode::FailedPrecondition),
-    )
-    .await;
+fn assert_message_revision_window_and_redaction<'a>(
+    pool: &'a soland_storage_postgres::PgPool,
+    fixture: &'a MessageRevisionFixture,
+    moderated: &'a EventCommitRequest,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>> {
+    Box::pin(async move {
+        let MessageRevisionFixture {
+            unit,
+            strand_id,
+            created,
+        } = fixture;
+        let realm_id = &unit.transactions[0].event.realm_id;
+        let creator = creator_account(unit);
+        let message_id =
+            arkret_wire::MessageId::from_event_id(&created.authority_commit.event.event_id);
+        let root_event_ref = realm_root_authority_event_ref(pool, realm_id).await;
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        // The author path: a member holding `ak.message.create` and
+        // `ak.message.revise.own` under a 15-minute edit window edits its own
+        // Message inside the window and is `failed_precondition` once it closed.
+        let (author, author_join_head) =
+            admit_joined_human(&pool, &uow, &moderated, &unit, "message-author", 'b').await;
+        let mut windowed = invite_grant_request(
+            &pool,
+            &author_join_head,
+            &unit,
+            &root_event_ref,
+            &author,
+            &["ak.message.create", "ak.message.revise.own"],
+        )
+        .await;
+        let mut payload = serde_json::to_value(&windowed.authority_commit.event.payload).unwrap();
+        payload["grant"]["constraints"] = serde_json::json!([{
+            "constraint_kind": "temporal",
+            "constraint_subkind": "edit_window",
+            "applies_to_actions": ["ak.message.revise.own"],
+            "effect": "allow",
+            "message_edit_window": "PT15M"
+        }]);
+        windowed = realm_event_request_as(
+            &author_join_head,
+            &creator,
+            arkret_wire::EventKind::CapabilityGrant,
+            payload,
+        );
+        windowed = source_if_human(&pool, windowed).await;
+        uow.commit_event(windowed.clone()).await.unwrap();
+        let authored = realm_event_request_as(
+            &windowed,
+            &author,
+            arkret_wire::EventKind::MessageCreate,
+            serde_json::json!({
+                "strand_id": strand_id,
+                "track_name": "discussion",
+                "content": {"kind": "ak.content.text", "body": "member draft", "format": "plain"}
+            }),
+        );
+        let authored = source_if_human(&pool, authored).await;
+        uow.commit_event(authored.clone()).await.unwrap();
+        let authored_id =
+            arkret_wire::MessageId::from_event_id(&authored.authority_commit.event.event_id);
+        let own_edit = realm_event_request_as(
+            &authored,
+            &author,
+            arkret_wire::EventKind::MessageRevise,
+            plain_revision(&authored_id, "member final"),
+        );
+        let own_edit = source_if_human(&pool, own_edit).await;
+        uow.commit_event(own_edit.clone()).await.unwrap();
+        let mut late_edit = realm_event_request_as(
+            &own_edit,
+            &author,
+            arkret_wire::EventKind::MessageRevise,
+            plain_revision(&authored_id, "member too late"),
+        );
+        let mut late_edit = source_if_human(&pool, late_edit).await;
+        // The window closes 15 minutes after creation plus the registered
+        // temporal tolerance (`constraint-schema.md` §16.1).
+        late_edit.authority_commit.commit.committed_at += chrono::TimeDelta::minutes(21);
+        assert_message_write_refused(
+            &uow,
+            &store,
+            &pool,
+            &late_edit,
+            Some(soland_storage::ConflictCode::FailedPrecondition),
+        )
+        .await;
+
+        // A redacted Message is terminal for revise.
+        let redaction = realm_event_request_as(
+            &own_edit,
+            &creator,
+            arkret_wire::EventKind::MessageRedact,
+            serde_json::json!({ "message_id": message_id }),
+        );
+        let redaction = source_if_human(&pool, redaction).await;
+        uow.commit_event(redaction.clone()).await.unwrap();
+        let after_redaction = realm_event_request_as(
+            &redaction,
+            &creator,
+            arkret_wire::EventKind::MessageRevise,
+            plain_revision(&message_id, "too late"),
+        );
+        let after_redaction = source_if_human(&pool, after_redaction).await;
+        assert_message_write_refused(
+            &uow,
+            &store,
+            &pool,
+            &after_redaction,
+            Some(soland_storage::ConflictCode::FailedPrecondition),
+        )
+        .await;
+    })
 }
 
 /// Real PostgreSQL: `ak.message.redact` is admitted through the same-cut
