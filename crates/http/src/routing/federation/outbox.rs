@@ -2410,6 +2410,11 @@ mod tests {
             chrono::Utc::now(),
         )
         .unwrap();
+        // This classifier does not admit a producer; use a valid non-Agent
+        // forward shape without fabricating Agent authority evidence.
+        event.actor_id = arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new("ak:did_core:web:queued-producer.example").unwrap(),
+        );
         crate::test_event::attach_structural_only_producer_proof(
             &mut event,
             arkret_wire::DidUrl::new("did:web:queued-producer.example#key-1").unwrap(),

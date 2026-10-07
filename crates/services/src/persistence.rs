@@ -83,6 +83,20 @@ impl PersistenceHandle {
             .await
     }
 
+    pub async fn forwarded_bound_human_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        governance: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    > {
+        self.persistence
+            .account_device_signer_evidence()
+            .forwarded_bound_human_signer_fact(event, commit, governance)
+            .await
+    }
+
     pub async fn retain_current_account_device_signer_evidence(
         &self,
         evidence: &arkret_models_identity::AccountDeviceSignerEvidence,

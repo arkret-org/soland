@@ -781,6 +781,14 @@ pub(crate) async fn recover_forwarded_original(
         .map_err(|e| temporarily_unavailable(e.message))?
     };
     validate_recovery_caller(state, session, event).await?;
+    if let Some(commit) = attempt.accepted_commit.as_ref()
+        && verify_bound_invite_claim(state, &governance, event, commit, &located, session).await?
+    {
+        return Ok(Some(AuthoritySubmitOutcome::Accepted {
+            status: arkret_wire::AuthorityCommitStatus::Duplicate,
+            commit: commit.clone(),
+        }));
+    }
     if attempt.accepted_commit.is_none() {
         let stream = arkret_wire::CommitStreamRef::from_scope(
             &event.scope_ref,
@@ -914,6 +922,11 @@ async fn send_forward(
                 .retain_forwarded_acceptance(event, commit, crate::wire::now())
                 .await?;
             validate_recovery_caller(state, session, event).await?;
+            if verify_bound_invite_claim(state, governance, event, commit, &located, session)
+                .await?
+            {
+                return Ok(outcome);
+            }
             super::replica_anchor::ensure_forwarded_target(
                 state,
                 governance,
@@ -959,6 +972,67 @@ async fn send_forward(
         .record_forward_attempt(&event.event_id, status, reason_code, crate::wire::now())
         .await?;
     result
+}
+
+/// A claim is not a join: its bound self result needs no member scan or replica.
+async fn verify_bound_invite_claim(
+    state: &AppState,
+    governance: &DidCoreId,
+    event: &Event,
+    commit: &arkret_wire::RealmCommit,
+    located: &crate::routing::realm_join::LocatedRealmAuthority,
+    session: &soland_services::identity::SessionIdentityState,
+) -> ServiceResult<bool> {
+    if event.kind != arkret_wire::EventKind::InviteClaim {
+        return Ok(false);
+    }
+    validate_recovery_caller(state, session, event).await?;
+    let commits = state.authority_commits();
+    let queued = commits
+        .queued_event(&event.event_id)
+        .await?
+        .ok_or_else(|| temporarily_unavailable("bound claim has no frozen submission"))?;
+    let attempt = queued
+        .forward_attempt
+        .ok_or_else(|| temporarily_unavailable("bound claim has no retained forward"))?;
+    if queued.event != *event
+        || attempt.accepted_commit.as_ref() != Some(commit)
+        || !matches!(attempt.original_submission,
+            Some(SelfAuthoritySubmitRequest::Event(ref original)) if original.event == *event)
+    {
+        return Err(temporarily_unavailable(
+            "bound claim differs from its frozen accepted original",
+        ));
+    }
+    let fact = state
+        .persistence()
+        .forwarded_bound_human_signer_fact(event, commit, governance)
+        .await?
+        .ok_or_else(|| {
+            temporarily_unavailable("bound claim historical producer source is unavailable")
+        })?;
+    soland_services::committed_receipt::verify_committed_event_receipt_with_source(
+        state.persistence(),
+        event,
+        commit,
+        soland_services::committed_receipt::CommitContinuity::Standalone,
+        &located.authority,
+        &located.keys,
+        &state.service_core_id(),
+        event.realm_id.digest_suite_code().digest_suite(),
+        Some(&fact.into()),
+    )
+    .await?;
+    validate_recovery_caller(state, session, event).await?;
+    if commits.current_authority(&event.realm_id).await?.as_ref()
+        != Some(&located.current_authority())
+    {
+        return Err(temporarily_unavailable(
+            "bound claim governing tenure changed",
+        ));
+    }
+    validate_recovery_caller(state, session, event).await?;
+    Ok(true)
 }
 
 async fn verify_forwarded_acknowledgement(

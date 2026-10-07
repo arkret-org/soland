@@ -3,8 +3,8 @@
 mod historical_human;
 use diesel::sql_types::{BigInt, Text};
 use diesel_async::RunQueryDsl;
-use soland_storage::{EventCommitUnitOfWork, ForwardedProducerDeviceEvidence};
-use soland_storage_postgres::{PgEventCommitUnitOfWork, PgPool};
+use soland_storage::{EventCommitUnitOfWork, ForwardedProducerDeviceEvidence, PersistenceStore};
+use soland_storage_postgres::{PgEventCommitUnitOfWork, PgPersistenceStore, PgPool};
 
 async fn evidence_rows(pool: &PgPool) -> Vec<(String, String)> {
     #[derive(diesel::QueryableByName)]
@@ -96,6 +96,65 @@ async fn forwarded_evidence_is_retained_with_the_first_commit_or_not_at_all() {
     historical_human::seal_commit(
         &mut request.authority_commit.commit,
         &governing.pcr.history.station_did,
+    );
+    let origin_store = PgPersistenceStore::new(origin_pool.clone());
+    let source = origin_store
+        .account_device_signer_evidence()
+        .forwarded_bound_human_signer_fact(
+            &request.authority_commit.event,
+            &request.authority_commit.commit,
+            &governing.pcr.history.account.station_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(source.as_ref(), Some(&retained.producer_signer_fact));
+    let mut wrong = request.authority_commit.commit.clone();
+    wrong.producer_signer_fact_digest = None;
+    assert!(
+        origin_store
+            .account_device_signer_evidence()
+            .forwarded_bound_human_signer_fact(
+                &request.authority_commit.event,
+                &wrong,
+                &governing.pcr.history.account.station_id,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    wrong = request.authority_commit.commit.clone();
+    wrong.event_ref = previous.event.event_id.clone();
+    assert!(
+        origin_store
+            .account_device_signer_evidence()
+            .forwarded_bound_human_signer_fact(
+                &request.authority_commit.event,
+                &wrong,
+                &governing.pcr.history.account.station_id,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        origin_store
+            .account_device_signer_evidence()
+            .forwarded_bound_human_signer_fact(
+                &request.authority_commit.event,
+                &request.authority_commit.commit,
+                &origin.pcr.history.account.station_id,
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        origin_store
+            .authority_commits()
+            .replica_anchor_for_stream(&request.authority_commit.commit.stream_ref,)
+            .await
+            .unwrap()
+            .is_none()
     );
     let commit_id = request.authority_commit.commit.commit_id.to_string();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());

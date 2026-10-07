@@ -52,6 +52,17 @@ pub fn forwarded_producer_device_evidence_ref(
 /// historical reads require the caller to authorize disclosure separately.
 #[async_trait]
 pub trait AccountDeviceSignerEvidenceStore: Send + Sync {
+    /// Resolve only an immutable origin source already bound by this Commit.
+    /// This neither authorizes current admission nor installs a stream replica.
+    async fn forwarded_bound_human_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        governance: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    >;
+
     async fn get_forward(
         &self,
         account: &AccountId,

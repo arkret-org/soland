@@ -28,6 +28,73 @@ pub struct PgAccountDeviceSignerEvidenceArchive {
 
 #[async_trait::async_trait]
 impl AccountDeviceSignerEvidenceStore for PgAccountDeviceSignerEvidenceArchive {
+    async fn forwarded_bound_human_signer_fact(
+        &self,
+        event: &arkret_wire::Event,
+        commit: &arkret_wire::RealmCommit,
+        governance: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact>,
+    > {
+        let stream = arkret_wire::CommitStreamRef::from_scope(
+            &event.scope_ref,
+            Some(event.realm_id.clone()),
+        )
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if commit.event_ref != event.event_id
+            || commit.realm_id != event.realm_id
+            || commit.stream_ref != stream
+        {
+            return Ok(None);
+        }
+        let Some(producer) = event
+            .human_device_producer()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let Some(digest) = commit.producer_signer_fact_digest.as_ref() else {
+            return Ok(None);
+        };
+        let mut conn = pg_conn(&self.pool).await?;
+        let rows = sql_query("SELECT evidence_json,authorization_commit_id FROM account_device_signer_evidence WHERE principal_id=$1 AND station_id=$2 AND device_id=$3 AND evidence_json #>> '{device_projection_attestation,attestation,event_authorization,event_id}'=$4")
+            .bind::<Text,_>(producer.account_id.principal_id.as_str())
+            .bind::<Text,_>(producer.account_id.station_id.as_str())
+            .bind::<Text,_>(producer.device_id.as_str())
+            .bind::<Text,_>(event.event_id.as_str())
+            .load::<ArchiveRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        for row in rows {
+            let evidence: arkret_models_identity::ForwardAccountDeviceSignerEvidence =
+                serde_json::from_value(row.evidence_json).map_err(PersistenceError::database)?;
+            let core = &evidence.device_projection_attestation.attestation;
+            if core.event_authorization.destination_service_id != *governance
+                || core
+                    .event_authorization
+                    .authorization_ref
+                    .commit_id
+                    .as_str()
+                    != row.authorization_commit_id
+            {
+                continue;
+            }
+            // Verify at the retained issuance time, never with today's device key.
+            // The verified governing Commit pins the exact accepted source digest.
+            let fact = arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
+                &evidence, event, &producer.account_id.station_id, governance,
+                &core.event_authorization.forward_body_digest,
+                event.realm_id.digest_suite_code().digest_suite(), core.attested_at,
+            ).map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?.into_fact();
+            if fact
+                .digest()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                == *digest
+            {
+                return Ok(Some(fact));
+            }
+        }
+        Ok(None)
+    }
+
     async fn get_forward(
         &self,
         account: &AccountId,
