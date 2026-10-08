@@ -346,6 +346,7 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 | soland_storage::ConflictCode::SpaceNotActive
                 | soland_storage::ConflictCode::SpaceNotArchived
                 | soland_storage::ConflictCode::SpaceAlreadyTerminal
+                | soland_storage::ConflictCode::SpaceHasLiveDependents
                 | soland_storage::ConflictCode::CrossRealmStructuralRelation
                 | soland_storage::ConflictCode::GrantExceedsIssuerAuthority
                 | soland_storage::ConflictCode::AuthorityCycle
@@ -1075,6 +1076,12 @@ mod tests {
                 StatusCode::CONFLICT,
                 "failed_precondition",
                 Some("space_already_terminal"),
+            ),
+            (
+                ConflictCode::SpaceHasLiveDependents,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some("space_has_live_dependents"),
             ),
             (
                 ConflictCode::CrossRealmStructuralRelation,
