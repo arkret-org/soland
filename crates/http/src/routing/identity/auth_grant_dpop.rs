@@ -494,6 +494,10 @@ fn require_successful_introspection(
     if (200..300).contains(&status) {
         Ok(())
     } else {
+        tracing::warn!(
+            upstream_status = status,
+            "session grant introspection returned no authoritative outcome"
+        );
         Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "temporarily_unavailable",

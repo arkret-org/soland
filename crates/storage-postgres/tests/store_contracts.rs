@@ -258,6 +258,66 @@ async fn confirmed_contract_device(pool: &PgPool) -> soland_storage::DeviceRevoc
 static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
 
 #[tokio::test]
+async fn postgres_realm_directory_hydration_preserves_unrelated_live_metadata() {
+    use soland_storage::IdentityStoreRegistry as _;
+    use soland_storage_postgres::PgPersistenceStore;
+
+    // A retained contract database can contain a previous run's revoked
+    // fixed founder. Lease a clean real database for this recovery invariant.
+    let database = soland_storage_postgres::TestDatabase::lease().await;
+    let pool = database.pool();
+    let seed = uuid::Uuid::now_v7().to_string();
+    let target = ordinary_realm::open_discussion(&pool, &format!("directory-target-{seed}")).await;
+    let other = ordinary_realm::open_discussion(&pool, &format!("directory-other-{seed}")).await;
+    let store = std::sync::Arc::new(PgPersistenceStore::new(pool.clone()));
+    let handle = soland_services::persistence::PersistenceHandle::new(store.clone());
+    handle
+        .hydrate_realm_directory_entry(&other.realm_id())
+        .await
+        .unwrap()
+        .expect("other Realm directory entry");
+    let expected = handle
+        .hydrate_realm_directory_entry(&target.realm_id())
+        .await
+        .unwrap()
+        .expect("target Realm directory entry");
+    assert!(!expected.members.is_empty());
+
+    // A hot-path founding install must not overwrite another live Realm's
+    // metadata with the defaults from its historical genesis.
+    let mut other_meta = store
+        .realm_meta()
+        .get(other.realm_id().as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    other_meta.deleted = true;
+    other_meta.updated_at += chrono::TimeDelta::days(1);
+    store
+        .realm_meta()
+        .put(other.realm_id().as_str(), &other_meta)
+        .await
+        .unwrap();
+    let actual = handle
+        .hydrate_realm_directory_entry(&target.realm_id())
+        .await
+        .unwrap()
+        .expect("target Realm directory entry");
+    assert_eq!(actual.realm_id, target.realm_id());
+    assert_eq!(actual.title, expected.title);
+    assert_eq!(actual.members, expected.members);
+    assert_eq!(actual.source_refs, expected.source_refs);
+    let unchanged = store
+        .realm_meta()
+        .get(other.realm_id().as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(unchanged.deleted);
+    assert_eq!(unchanged.updated_at, other_meta.updated_at);
+}
+
+#[tokio::test]
 async fn postgres_notification_relay_delivers_large_payload_by_committed_reference() {
     use diesel::sql_query;
     use diesel_async::RunQueryDsl;

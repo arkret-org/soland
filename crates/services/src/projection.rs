@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::RealmId;
@@ -78,7 +79,7 @@ impl std::ops::Deref for ServiceClock {
 #[derive(Clone)]
 pub struct ProjectionService {
     state: Arc<Mutex<ProjectionState>>,
-    history_authority_view_cas_lock: Arc<Mutex<()>>,
+    generation: Arc<AtomicU64>,
     clock: Arc<ServiceClock>,
 }
 
@@ -188,28 +189,35 @@ impl From<ProjectionEffect> for ProjectionEffectView {
 }
 
 impl ProjectionService {
-    /// Acquire the process-wide history-authority CAS guard without parking a
-    /// Tokio worker thread.
-    ///
-    /// The guarded operation can await PostgreSQL I/O. Under concurrent Realm
-    /// sealing, a plain `parking_lot::Mutex::lock` can park the last worker
-    /// while the current guard holder is suspended. Marking only lock
-    /// acquisition as blocking lets Tokio provision a replacement worker
-    /// without weakening the global CAS boundary.
-    fn history_authority_view_cas_guard(&self) -> MutexGuard<'_, ()> {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-                tokio::task::block_in_place(|| self.history_authority_view_cas_lock.lock())
-            }
-            _ => self.history_authority_view_cas_lock.lock(),
+    /// Every live mutation invalidates an outstanding persistence rebuild.
+    /// The counter and publication are observed under the same state lock;
+    /// no lock is held while the rebuild awaits persistence I/O.
+    fn write_state(&self) -> MutexGuard<'_, ProjectionState> {
+        let state = self.state.lock();
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        state
+    }
+
+    fn rebuild_generation(&self) -> u64 {
+        let _state = self.state.lock();
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    fn install_rebuild(&self, generation: u64, rebuilt: ProjectionState) -> bool {
+        let mut live = self.state.lock();
+        if self.generation.load(Ordering::Relaxed) != generation {
+            return false;
         }
+        *live = rebuilt;
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        true
     }
 
     #[must_use]
     pub fn new(clock_node: &str) -> Self {
         Self {
             state: Arc::new(Mutex::new(ProjectionState::new())),
-            history_authority_view_cas_lock: Arc::new(Mutex::new(())),
+            generation: Arc::new(AtomicU64::new(0)),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
     }
@@ -220,47 +228,52 @@ impl ProjectionService {
         projection_adapter: &dyn HydrationProjectionAdapter,
         _realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
-        // A whole-store rebuild must exclude projection writers from its
-        // first persistence read through publication. Otherwise a concurrent
-        // committed bootstrap or successor can be overwritten by this cut.
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let mut state = ProjectionState::new();
-        hydrate_projections_from_persistence(persistence, &mut state, projection_adapter).await?;
-        state.replay_resolved_pending(self.clock());
-        for record in persistence
-            .realm_organization_statements()
-            .snapshot_all()
-            .await?
-        {
-            let key = (
-                record.realm_id.clone(),
-                record.organization_id.clone(),
-                record.relationship.clone(),
-            );
-            state.realm_organization_statements.insert(
-                key,
-                soland_domain::reducer::RealmOrganizationStatementState {
-                    realm_id: record.realm_id,
-                    organization_id: record.organization_id,
-                    relationship: record.relationship,
-                    statement_id: record.statement_id,
-                    status: record.status,
-                    control_scopes: record.control_scopes,
-                    issued_at: record.issued_at,
-                    not_before: record.not_before,
-                    expires_at: record.expires_at,
-                    supersedes_statement_id: record.supersedes_statement_id,
-                    revokes_statement_id: record.revokes_statement_id,
-                    realm_commit_ref: record.realm_commit_ref,
-                    proof_digest: record.proof_digest,
-                    delegation_ref: record.delegation_ref,
-                    issuer_role: record.issuer_role,
-                    updated_at: record.updated_at,
-                },
-            );
+        // Reconstruct privately, then publish only if no live writer ran
+        // since the first persistence read. A moved cut requires a fresh
+        // rebuild, never overwriting a concurrent bootstrap or successor.
+        loop {
+            let generation = self.rebuild_generation();
+            let mut state = ProjectionState::new();
+            hydrate_projections_from_persistence(persistence, &mut state, projection_adapter)
+                .await?;
+            state.replay_resolved_pending(self.clock());
+            for record in persistence
+                .realm_organization_statements()
+                .snapshot_all()
+                .await?
+            {
+                let key = (
+                    record.realm_id.clone(),
+                    record.organization_id.clone(),
+                    record.relationship.clone(),
+                );
+                state.realm_organization_statements.insert(
+                    key,
+                    soland_domain::reducer::RealmOrganizationStatementState {
+                        realm_id: record.realm_id,
+                        organization_id: record.organization_id,
+                        relationship: record.relationship,
+                        statement_id: record.statement_id,
+                        status: record.status,
+                        control_scopes: record.control_scopes,
+                        issued_at: record.issued_at,
+                        not_before: record.not_before,
+                        expires_at: record.expires_at,
+                        supersedes_statement_id: record.supersedes_statement_id,
+                        revokes_statement_id: record.revokes_statement_id,
+                        realm_commit_ref: record.realm_commit_ref,
+                        proof_digest: record.proof_digest,
+                        delegation_ref: record.delegation_ref,
+                        issuer_role: record.issuer_role,
+                        updated_at: record.updated_at,
+                    },
+                );
+            }
+            if self.install_rebuild(generation, state) {
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
         }
-        *self.state.lock() = state;
-        Ok(())
     }
 
     /// The Realm's effective digest suite
@@ -441,8 +454,7 @@ impl ProjectionService {
         &self,
         staged: StagedRealmBootstrap,
     ) -> Result<(), RealmBootstrapProjectionError> {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let mut live = self.state.lock();
+        let mut live = self.write_state();
         // A bootstrap becomes visible through two paths after its durable
         // commit: this synchronous install and the genesis Seal coordinator.
         // Realm ids are derived from the create Event id, so an already
@@ -635,8 +647,7 @@ impl ProjectionService {
     }
 
     pub fn install_snapshot(&self, state: ProjectionState) {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        *self.state.lock() = state;
+        *self.write_state() = state;
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -655,8 +666,7 @@ impl ProjectionService {
     }
 
     pub fn apply_projected(&self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffectView {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        self.state.lock().apply_projected(operation, hlc).into()
+        self.write_state().apply_projected(operation, hlc).into()
     }
 
     /// All-or-nothing install of one Sidecar-ensure run.
@@ -678,7 +688,7 @@ impl ProjectionService {
         projection: &soland_domain::reducer::mls::MlsKeyPackagePublishProjection,
     ) -> ProjectionEffectView {
         soland_domain::reducer::mls::apply_keypackage_upload_projection(
-            &mut self.state.lock(),
+            &mut self.write_state(),
             projection,
         )
         .into()
@@ -832,7 +842,7 @@ impl ProjectionService {
     }
 
     pub fn mark_key_packages_revoked(&self, keypackage_ids: &[String]) {
-        let mut state = self.state.lock();
+        let mut state = self.write_state();
         for keypackage_id in keypackage_ids {
             if let Some(row) = state.mls_key_packages.get_mut(keypackage_id)
                 && row.consumed_at.is_none()
@@ -845,7 +855,7 @@ impl ProjectionService {
     }
 
     pub fn mark_key_packages_retired(&self, keypackage_ids: &[String]) {
-        let mut state = self.state.lock();
+        let mut state = self.write_state();
         for keypackage_id in keypackage_ids {
             if let Some(row) = state.mls_key_packages.get_mut(keypackage_id)
                 && row.claimed_by.is_none()
@@ -865,7 +875,7 @@ impl ProjectionService {
         claimed_at: i64,
         claim_expires_at_unix_ms: Option<i64>,
     ) {
-        if let Some(row) = self.state.lock().mls_key_packages.get_mut(keypackage_id) {
+        if let Some(row) = self.write_state().mls_key_packages.get_mut(keypackage_id) {
             row.claimed_by = Some(claimed_by);
             row.claimed_at = Some(claimed_at);
             row.claim_expires_at_unix_ms = claim_expires_at_unix_ms;
@@ -874,7 +884,7 @@ impl ProjectionService {
     }
 
     pub fn mark_key_package_consumed(&self, keypackage_id: &str, consumed_at: i64) {
-        if let Some(row) = self.state.lock().mls_key_packages.get_mut(keypackage_id) {
+        if let Some(row) = self.write_state().mls_key_packages.get_mut(keypackage_id) {
             row.consumed_at = Some(consumed_at);
         }
     }
@@ -887,8 +897,7 @@ impl ProjectionService {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> bool {
-        let _authority_guard = self.history_authority_view_cas_guard();
-        let mut state = self.state.lock();
+        let mut state = self.write_state();
         match state.realm_states.get_mut(realm_id) {
             Some(realm) => match realm.owner.as_deref() {
                 Some(owner) if owner != controller_actor_id => false,
@@ -995,50 +1004,70 @@ mod projection_service_tests {
     }
 
     #[test]
-    fn contended_history_authority_guard_does_not_starve_tokio_worker() {
+    fn persistence_rebuild_preserves_a_concurrent_projection_writer() {
         use std::sync::mpsc;
         use std::time::Duration;
 
         let service = Arc::new(service());
-        let held_lock = Arc::clone(&service.history_authority_view_cas_lock);
-        let (held_tx, held_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let holder = std::thread::spawn(move || {
-            let _guard = held_lock.lock();
-            held_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-        });
-        held_rx.recv().unwrap();
-
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .unwrap();
-        let contending_service = Arc::clone(&service);
-        let (contending_tx, contending_rx) = mpsc::channel();
-        let contender = runtime.spawn(async move {
-            contending_tx.send(()).unwrap();
-            let _guard = contending_service.history_authority_view_cas_guard();
-        });
-        contending_rx.recv().unwrap();
-
+        let generation = service.rebuild_generation();
+        let writer_service = Arc::clone(&service);
         let (progress_tx, progress_rx) = mpsc::channel();
-        let progress = runtime.spawn(async move {
-            progress_tx.send(()).unwrap();
+        let writer = std::thread::spawn(move || {
+            let now = Utc::now();
+            progress_tx
+                .send(writer_service.reconcile_realm_owner(
+                    "ak:realm:concurrent-rebuild",
+                    "ak:did_core:webvh:concurrent-owner",
+                    false,
+                    now,
+                    now,
+                ))
+                .unwrap();
         });
-        let unrelated_task_progressed = progress_rx.recv_timeout(Duration::from_millis(500));
-
-        release_tx.send(()).unwrap();
-        runtime.block_on(async {
-            contender.await.unwrap();
-            progress.await.unwrap();
-        });
-        holder.join().unwrap();
-
+        assert_eq!(
+            progress_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            true,
+            "a persistence rebuild must not block live projection writers"
+        );
+        writer.join().unwrap();
+        assert!(!service.install_rebuild(generation, ProjectionState::new()));
         assert!(
-            unrelated_task_progressed.is_ok(),
-            "CAS lock contention parked the runtime's only worker"
+            service
+                .snapshot()
+                .realm_states
+                .contains_key("ak:realm:concurrent-rebuild")
+        );
+        // A fresh reconstruction may publish after including that write.
+        let fresh_generation = service.rebuild_generation();
+        let fresh = service.snapshot();
+        assert!(service.install_rebuild(fresh_generation, fresh));
+        assert!(
+            service
+                .snapshot()
+                .realm_states
+                .contains_key("ak:realm:concurrent-rebuild")
+        );
+    }
+
+    #[test]
+    fn concurrent_rebuilds_cannot_publish_over_an_installed_snapshot() {
+        let service = service();
+        let now = Utc::now();
+        service.reconcile_realm_owner(
+            "ak:realm:installed-rebuild",
+            "ak:did_core:webvh:owner",
+            false,
+            now,
+            now,
+        );
+        let generation = service.rebuild_generation();
+        assert!(service.install_rebuild(generation, service.snapshot()));
+        assert!(!service.install_rebuild(generation, ProjectionState::new()));
+        assert!(
+            service
+                .snapshot()
+                .realm_states
+                .contains_key("ak:realm:installed-rebuild")
         );
     }
 

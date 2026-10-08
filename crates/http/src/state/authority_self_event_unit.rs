@@ -557,7 +557,11 @@ fn commit_event_unit_with_idempotency_impl<'a>(
         }
         // The Commit is durable. This Station's recipients' ordinary notification
         // rows are a derived projection; their failure never changes the outcome.
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(phase = "unit_committed", kind = %event.kind.as_str(), "self Event execution boundary");
         crate::routing::events::notify::dispatch_committed_event_notifications(state, event).await;
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(phase = "notifications_dispatched", kind = %event.kind.as_str(), "self Event execution boundary");
         if decided_at_cut && !poll_at_cut && event.kind != arkret_wire::EventKind::StrandCreate {
             return Ok(AuthoritySubmitOutcome::Accepted {
                 status: AuthorityCommitStatus::Committed,
@@ -572,7 +576,11 @@ fn commit_event_unit_with_idempotency_impl<'a>(
                 stream_position: transaction.commit.stream_position,
             })
             .map_err(|error| ServiceError::Internal(error.to_string()))?;
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(phase = "projection_installing", kind = %event.kind.as_str(), "self Event execution boundary");
         let effect = state.projections().apply_projected(&operation, state.hlc());
+        #[cfg(feature = "conformance-harness")]
+        tracing::warn!(phase = "projection_installed", kind = %event.kind.as_str(), "self Event execution boundary");
         let needs_repair = matches!(
             effect,
             soland_services::projection::ProjectionEffectView::Rejected { .. }

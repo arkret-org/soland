@@ -339,6 +339,11 @@ impl AuthorityProtocolPort for AppState {
                     repair_needed = true;
                 }
             }
+            #[cfg(feature = "conformance-harness")]
+            tracing::warn!(
+                phase = "directory_reconciled",
+                "ordinary bootstrap execution boundary"
+            );
             if repair_needed {
                 let repair_state = self.clone();
                 tokio::spawn(async move {
@@ -387,6 +392,7 @@ impl AuthorityProtocolPort for AppState {
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.event;
+        super::authority_self_event_unit::validate_replay_event_identity(event)?;
         refuse_actor_private_event(&event.kind)?;
         if matches!(
             event.kind,
@@ -595,6 +601,7 @@ impl AuthorityProtocolPort for AppState {
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let event = &request.commit_event;
+        super::authority_self_event_unit::validate_replay_event_identity(event)?;
         if self
             .authority_commits()
             .queued_event(&event.event_id)

@@ -80,14 +80,15 @@ async fn reconcile_founding_projection(
         .projections()
         .snapshot()
         .realm_ordinary_writes_blocked(realm_id.as_str());
-    match state.persistence().hydrate_realm_directory().await {
-        Ok(directory) => {
-            if let Some(entry) = directory.get(realm_id) {
-                state.realm_directory().upsert(entry.clone());
-            } else {
-                tracing::error!(%realm_id, "durable Direct Conversation founding is absent from directory hydration");
-                repair_needed = true;
-            }
+    match state
+        .persistence()
+        .hydrate_realm_directory_entry(realm_id)
+        .await
+    {
+        Ok(Some(entry)) => state.realm_directory().upsert(entry),
+        Ok(None) => {
+            tracing::error!(%realm_id, "durable Direct Conversation founding is absent from directory hydration");
+            repair_needed = true;
         }
         Err(error) => {
             tracing::error!(%realm_id, %error, "durable Direct Conversation directory hydration failed");

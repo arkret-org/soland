@@ -25,7 +25,7 @@ impl ProjectionService {
         operations: &[&Operation],
         hlc: &ServerHlc,
     ) -> Result<Vec<ProjectionEffectView>, String> {
-        let mut live = self.state.lock();
+        let mut live = self.write_state();
         let mut staged = live.clone();
         let mut effects = Vec::with_capacity(operations.len());
         for operation in operations {
