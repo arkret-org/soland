@@ -4039,7 +4039,6 @@ fn account_status_record(
         reason_code: None,
         reason: None,
         issued_at,
-        effective_at: issued_at,
         expires_at: None,
     };
     let proof = account_status_fixture_proof(

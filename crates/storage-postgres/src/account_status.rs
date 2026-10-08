@@ -857,7 +857,6 @@ mod tests {
             reason_code: None,
             reason: None,
             issued_at: base,
-            effective_at: base,
             expires_at: None,
         });
         attach(UnsignedAccountStatusRecord {
@@ -872,7 +871,6 @@ mod tests {
             reason_code: None,
             reason: None,
             issued_at: base + chrono::Duration::seconds(1),
-            effective_at: base + chrono::Duration::seconds(1),
             expires_at: None,
         })
     }
@@ -1116,7 +1114,7 @@ mod tests {
             arkret_wire::DidCoreId::new("ak:did_core:web:propagation-a.example").unwrap();
         let destination_b =
             arkret_wire::DidCoreId::new("ak:did_core:web:propagation-b.example").unwrap();
-        let now = record.effective_at;
+        let now = record.issued_at;
         let deadline = now + chrono::Duration::minutes(10);
 
         let scheduled = store
@@ -1203,13 +1201,13 @@ mod tests {
         assert!(!durable.became_complete);
 
         let direct_record = propagation_record(&unique_namespace());
-        let direct_deadline = direct_record.effective_at + chrono::Duration::minutes(10);
+        let direct_deadline = direct_record.issued_at + chrono::Duration::minutes(10);
         store
             .begin_propagation(
                 &direct_record,
                 std::slice::from_ref(&destination_a),
                 direct_deadline,
-                direct_record.effective_at,
+                direct_record.issued_at,
             )
             .await
             .expect("freeze direct-late-ack target");
