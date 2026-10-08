@@ -5,9 +5,12 @@ use arkret_identifiers::RealmId;
 use soland_storage::{PersistenceResult, PersistenceStore};
 
 use crate::delivery::{DeliveryService, ObjectStoragePort};
-use crate::events::RealmDirectoryIndex;
+use crate::events::{RealmDirectoryEntry, RealmDirectoryIndex};
 use crate::governance::RuntimeSettingsPort;
-use crate::hydration::{HydrationProjectionAdapter, hydrate_realms_from_canonical_events};
+use crate::hydration::{
+    HydrationProjectionAdapter, hydrate_realm_from_canonical_events,
+    hydrate_realms_from_canonical_events,
+};
 use crate::identity::{
     DidDocumentState, DidLogEvent, DidResolverPort, ServiceRegistrationCommitResult,
 };
@@ -1334,6 +1337,16 @@ impl PersistenceHandle {
         let mut realms = RealmDirectoryIndex::new();
         hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realms).await?;
         Ok(realms)
+    }
+
+    pub async fn hydrate_realm_directory_entry(
+        &self,
+        realm_id: &RealmId,
+    ) -> PersistenceResult<Option<RealmDirectoryEntry>> {
+        let mut realms = RealmDirectoryIndex::new();
+        hydrate_realm_from_canonical_events(self.persistence.as_ref(), &mut realms, realm_id)
+            .await?;
+        Ok(realms.get(realm_id).cloned())
     }
 
     pub async fn hydrate_projection(

@@ -264,6 +264,13 @@ async fn hydration_replay_records(
     persistence: &dyn soland_storage::PersistenceStore,
 ) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
     let records = persistence.events().snapshot_all().await?;
+    ordered_hydration_replay_records(persistence, records).await
+}
+
+async fn ordered_hydration_replay_records(
+    persistence: &dyn soland_storage::PersistenceStore,
+    records: Vec<CanonicalEventRecord>,
+) -> soland_storage::PersistenceResult<Vec<CanonicalEventRecord>> {
     let mut ordered = BTreeMap::new();
     for record in records {
         let id = arkret_wire::EventId::new(record.event_id.clone())
@@ -275,6 +282,16 @@ async fn hydration_replay_records(
             .ok_or_else(|| {
                 soland_storage::PersistenceError::Internal(
                     "hydration canonical Event has no accepting Commit".to_owned(),
+                )
+            })?;
+        // The accepting Event may be decoded from the same canonical mirror;
+        // compare its content-derived identity with the Commit's frozen ref.
+        accepted
+            .event
+            .verify_event_id_matches_content_with_digest_suite(record.digest_suite)
+            .map_err(|_| {
+                soland_storage::PersistenceError::Internal(
+                    "hydration canonical Event differs from its Commit binding".to_owned(),
                 )
             })?;
         if serde_json::to_value(&accepted.event)
@@ -1626,7 +1643,40 @@ pub async fn hydrate_realms_from_canonical_events(
     realms: &mut RealmDirectoryIndex,
 ) -> soland_storage::PersistenceResult<()> {
     let events = hydration_replay_records(persistence).await?;
+    hydrate_realm_directory_records(persistence, realms, &events).await;
+    Ok(())
+}
 
+/// Rebuild one Realm without replaying unrelated Station history.
+pub async fn hydrate_realm_from_canonical_events(
+    persistence: &dyn soland_storage::PersistenceStore,
+    realms: &mut RealmDirectoryIndex,
+    realm_id: &RealmId,
+) -> soland_storage::PersistenceResult<()> {
+    let records = persistence
+        .events()
+        .realm_events_newest_first(realm_id.as_str())
+        .await?;
+    if records.iter().any(|record| {
+        record.realm_id.as_deref() != Some(realm_id.as_str())
+            || serde_json::from_value::<Event>(record.envelope.clone())
+                .ok()
+                .is_none_or(|event| event.realm_id != *realm_id)
+    }) {
+        return Err(soland_storage::PersistenceError::Internal(
+            "Realm-local hydration contains a foreign canonical Event".to_owned(),
+        ));
+    }
+    let events = ordered_hydration_replay_records(persistence, records).await?;
+    hydrate_realm_directory_records(persistence, realms, &events).await;
+    Ok(())
+}
+
+async fn hydrate_realm_directory_records(
+    persistence: &dyn soland_storage::PersistenceStore,
+    realms: &mut RealmDirectoryIndex,
+    events: &[CanonicalEventRecord],
+) {
     // Directory entries are the replay roots for every subsequent Realm
     // facet. Hydrate all confirmed genesis Events first so bootstrap Events
     // that share one transaction timestamp never depend on storage iteration
@@ -1638,7 +1688,7 @@ pub async fn hydrate_realms_from_canonical_events(
         hydrate_realm_create_event(persistence, realms, record).await;
     }
 
-    for record in &events {
+    for record in events {
         if record.kind == arkret_wire::EventKind::RealmProfile.as_str() {
             hydrate_realm_profile_event(realms, record);
         } else if matches!(
@@ -1665,7 +1715,6 @@ pub async fn hydrate_realms_from_canonical_events(
             hydrate_realm_policy_event(persistence, record).await;
         }
     }
-    Ok(())
 }
 
 pub fn reconcile_hydrated_agent_memberships(

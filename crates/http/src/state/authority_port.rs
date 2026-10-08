@@ -319,18 +319,19 @@ impl AuthorityProtocolPort for AppState {
             }
             // The directory is a separate, rebuildable view used by the
             // ordinary Realm reads and subsequent local Event admission.
-            // Hydrate it from confirmed Events after the transaction, then
-            // install the one new Realm. The durable Commit/current rows are
-            // already the truth if this read temporarily fails.
-            match self.persistence().hydrate_realm_directory().await {
-                Ok(directory) => {
-                    if let Some(entry) = directory.get(&genesis.realm_id) {
-                        self.realm_directory().upsert(entry.clone());
-                    } else {
-                        tracing::error!(realm_id = %genesis.realm_id,
-                            "durably committed ordinary bootstrap is absent from directory hydration");
-                        repair_needed = true;
-                    }
+            // Replay only this Realm's confirmed Events; unrelated Station
+            // history must not delay the new Realm's accepted response.
+            // Durable Commit/current rows remain the truth on read failure.
+            match self
+                .persistence()
+                .hydrate_realm_directory_entry(&genesis.realm_id)
+                .await
+            {
+                Ok(Some(entry)) => self.realm_directory().upsert(entry),
+                Ok(None) => {
+                    tracing::error!(realm_id = %genesis.realm_id,
+                        "durably committed ordinary bootstrap is absent from directory hydration");
+                    repair_needed = true;
                 }
                 Err(error) => {
                     tracing::error!(realm_id = %genesis.realm_id, %error,

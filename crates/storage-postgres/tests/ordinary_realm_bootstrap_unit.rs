@@ -54,6 +54,137 @@ fn snapshot_signer_for_issuer(
 }
 
 #[tokio::test]
+async fn realm_directory_entry_replays_only_its_committed_realm() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let target = unit(&pool).await;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&target, target.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let unrelated = unit(&pool).await;
+    store
+        .admit_ordinary_realm_bootstrap_unit(
+            &unrelated,
+            unrelated.transactions[0].commit.committed_at,
+        )
+        .await
+        .unwrap();
+    let realm_id = &target.transactions[0].event.realm_id;
+    assert_ne!(realm_id, &unrelated.transactions[0].event.realm_id);
+    let persistence = soland_services::persistence::PersistenceHandle::new(std::sync::Arc::new(
+        soland_storage_postgres::PgPersistenceStore::new(pool.clone()),
+    ));
+    let directory = persistence.hydrate_realm_directory().await.unwrap();
+    let expected = directory.get(realm_id).unwrap().clone();
+    assert_eq!(expected.title, "Test Realm");
+    assert!(
+        expected
+            .members
+            .contains(target.transactions[0].event.actor_id.signing_principal_id())
+    );
+    assert_eq!(
+        expected.source_refs,
+        vec![target.transactions[0].event.event_id.to_string()]
+    );
+    assert_eq!(
+        persistence
+            .hydrate_realm_directory_entry(realm_id)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+
+    // Poison an unrelated accepted mirror. Whole-Station replay must fail,
+    // while a Realm-local read must neither inspect nor rewrite that Realm.
+    let mut damaged = serde_json::to_value(&unrelated.transactions[0].event).unwrap();
+    damaged["payload"]["object"]["unregistered"] = serde_json::json!(true);
+    damage_hydration_mirror(&pool, &unrelated.transactions[0].event.event_id, damaged).await;
+    assert!(persistence.hydrate_realm_directory().await.is_err());
+    assert_eq!(
+        persistence
+            .hydrate_realm_directory_entry(realm_id)
+            .await
+            .unwrap(),
+        Some(expected)
+    );
+    let absent = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [227; 32],
+    ));
+    assert!(
+        persistence
+            .hydrate_realm_directory_entry(&absent)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn realm_directory_entry_rejects_target_commit_binding_mismatch() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let target = unit(&pool).await;
+    store
+        .admit_ordinary_realm_bootstrap_unit(&target, target.transactions[0].commit.committed_at)
+        .await
+        .unwrap();
+    let persistence = soland_services::persistence::PersistenceHandle::new(std::sync::Arc::new(
+        soland_storage_postgres::PgPersistenceStore::new(pool.clone()),
+    ));
+    let mut damaged = serde_json::to_value(&target.transactions[1].event).unwrap();
+    damaged["payload"]["title"] = serde_json::json!("forged title");
+    damage_hydration_mirror(&pool, &target.transactions[1].event.event_id, damaged).await;
+    let error = persistence
+        .hydrate_realm_directory_entry(&target.transactions[0].event.realm_id)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("differs from its Commit binding")
+    );
+}
+
+async fn damage_hydration_mirror(
+    pool: &soland_storage_postgres::PgPool,
+    event_id: &arkret_wire::EventId,
+    damaged: serde_json::Value,
+) {
+    use diesel_async::AsyncConnection as _;
+    let mut conn = pool.get().await.unwrap();
+    // This leased test database simulates physical mirror corruption, not
+    // an admitted write. Restore the immutable trigger in the same transaction.
+    (&mut *conn)
+        .transaction::<_, diesel::result::Error, _>(async move |conn| {
+            diesel::sql_query(
+                "ALTER TABLE canonical_events DISABLE TRIGGER canonical_events_immutable",
+            )
+            .execute(&mut *conn)
+            .await?;
+            let changed = diesel::sql_query(
+                "UPDATE canonical_events SET envelope=$2 WHERE envelope->>'event_id'=$1",
+            )
+            .bind::<Text, _>(event_id.as_str())
+            .bind::<diesel::sql_types::Jsonb, _>(damaged)
+            .execute(&mut *conn)
+            .await?;
+            assert_eq!(changed, 1);
+            diesel::sql_query(
+                "ALTER TABLE canonical_events ENABLE TRIGGER canonical_events_immutable",
+            )
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn owned_agent_exact_current_is_issuer_only_even_after_membership_ends() {
     use arkret_models_collaboration::exact_current_results::{
         ExactCurrentResultEntry, ExactCurrentResultsReadOutcome, ExactCurrentResultsReadRequestBody,
