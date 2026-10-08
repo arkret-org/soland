@@ -1523,6 +1523,20 @@ pub(crate) async fn advance_in_connection(
             )
             .await?;
         }
+        arkret_wire::EventKind::SpaceParent => {
+            let payload: arkret_models_collaboration::events_payloads::space::SpaceParentPayload =
+                serde_json::from_value(payload()?)
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            upsert_keyed(
+                conn,
+                &event.realm_id,
+                "space_parent_current_results",
+                Some(("space_id", payload.space_id.as_str())),
+                &row,
+                &serde_json::json!({ "parent_space_id": payload.parent_space_id }),
+            )
+            .await?;
+        }
         arkret_wire::EventKind::RelationCreate
         | arkret_wire::EventKind::RelationUpdate
         | arkret_wire::EventKind::RelationTombstone => {

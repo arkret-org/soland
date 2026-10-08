@@ -73,11 +73,11 @@ async fn strand_scope_rebind_returns_the_contract_reason_without_writes() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let discussion = open_discussion(&pool, "strand-scope-rebind").await;
+    let discussion = Box::pin(open_discussion(&pool, "strand-scope-rebind")).await;
     let head = &discussion.head.authority_commit;
     let before = current(&pool, &discussion.strand_id).await;
     let counts = realm_counts(&pool, &head.event.realm_id).await;
-    let request = next_request(
+    let request = Box::pin(ordinary_realm::source_request(&pool, next_request(
         head,
         arkret_wire::EventKind::StrandUpdate,
         head.event.actor_id.signing_principal_id(),
@@ -85,7 +85,7 @@ async fn strand_scope_rebind_returns_the_contract_reason_without_writes() {
             "scope_circle_id":{"$op":"set","value":arkret_wire::CircleId::from_event_id(&head.event.event_id)}
         }}),
         head.commit.committed_at,
-    );
+    ))).await;
     let event_id = request.authority_commit.event.event_id.clone();
     let error = uow.commit_event(request).await.unwrap_err();
     assert!(
@@ -110,7 +110,7 @@ async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let discussion = open_discussion(&pool, "synthesis-content-current").await;
+    let discussion = Box::pin(open_discussion(&pool, "synthesis-content-current")).await;
     let realm = discussion.head.authority_commit.event.realm_id.clone();
     let at = discussion.head.authority_commit.commit.committed_at;
     let update = |head: &soland_storage::AuthorityCommitTransaction, body: &str| {
@@ -135,32 +135,46 @@ async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_
     let before = current(&pool, &discussion.strand_id).await;
     let counts = realm_counts(&pool, &realm).await;
     assert!(
-        uow.commit_event(update(&discussion.head.authority_commit, "Absent track"))
+        uow.commit_event(
+            Box::pin(ordinary_realm::source_request(
+                &pool,
+                update(&discussion.head.authority_commit, "Absent track")
+            ))
             .await
-            .unwrap_err()
-            .to_string()
-            .contains("track_disabled")
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("track_disabled")
     );
     assert_eq!(current(&pool, &discussion.strand_id).await, before);
     assert_eq!(realm_counts(&pool, &realm).await, counts);
-    let enable = next_request(
-        &discussion.head.authority_commit,
-        arkret_wire::EventKind::StrandTracksUpdate,
-        &discussion
-            .head
-            .authority_commit
-            .event
-            .actor_id
-            .signing_principal_id()
-            .clone(),
-        json!({"target_ref": discussion.strand_id, "patch": {
-            "tracks.synthesis.enabled": {"$op":"set", "value":true},
-            "tracks.synthesis.is_primary": {"$op":"set", "value":false}
-        }}),
-        at,
-    );
+    let enable = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::StrandTracksUpdate,
+            &discussion
+                .head
+                .authority_commit
+                .event
+                .actor_id
+                .signing_principal_id()
+                .clone(),
+            json!({"target_ref": discussion.strand_id, "patch": {
+                "tracks.synthesis.enabled": {"$op":"set", "value":true},
+                "tracks.synthesis.is_primary": {"$op":"set", "value":false}
+            }}),
+            at,
+        ),
+    ))
+    .await;
     uow.commit_event(enable.clone()).await.unwrap();
-    let write = update(&enable.authority_commit, "Accepted synthesis");
+    let write = Box::pin(ordinary_realm::source_request(
+        &pool,
+        update(&enable.authority_commit, "Accepted synthesis"),
+    ))
+    .await;
     uow.commit_event(write.clone()).await.unwrap();
     let accepted = current(&pool, &discussion.strand_id).await;
     assert_eq!(
@@ -168,30 +182,40 @@ async fn synthesis_content_update_preserves_track_controls_and_refuses_inactive_
         "Accepted synthesis"
     );
     assert_eq!(accepted.value["tracks"]["synthesis"]["is_primary"], false);
-    let disable = next_request(
-        &write.authority_commit,
-        arkret_wire::EventKind::StrandTracksUpdate,
-        &discussion
-            .head
-            .authority_commit
-            .event
-            .actor_id
-            .signing_principal_id()
-            .clone(),
-        json!({"target_ref": discussion.strand_id, "patch": {
-            "tracks.synthesis.enabled": {"$op":"set", "value":false}
-        }}),
-        at,
-    );
+    let disable = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &write.authority_commit,
+            arkret_wire::EventKind::StrandTracksUpdate,
+            &discussion
+                .head
+                .authority_commit
+                .event
+                .actor_id
+                .signing_principal_id()
+                .clone(),
+            json!({"target_ref": discussion.strand_id, "patch": {
+                "tracks.synthesis.enabled": {"$op":"set", "value":false}
+            }}),
+            at,
+        ),
+    ))
+    .await;
     uow.commit_event(disable.clone()).await.unwrap();
     let before = current(&pool, &discussion.strand_id).await;
     let counts = realm_counts(&pool, &realm).await;
     assert!(
-        uow.commit_event(update(&disable.authority_commit, "Disabled track"))
+        uow.commit_event(
+            Box::pin(ordinary_realm::source_request(
+                &pool,
+                update(&disable.authority_commit, "Disabled track")
+            ))
             .await
-            .unwrap_err()
-            .to_string()
-            .contains("track_disabled")
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("track_disabled")
     );
     assert_eq!(current(&pool, &discussion.strand_id).await, before);
     assert_eq!(realm_counts(&pool, &realm).await, counts);
@@ -208,23 +232,29 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
     let before = current(&pool, &discussion.strand_id).await;
     let baseline = realm_counts(&pool, &realm_id).await;
 
-    let accepted = Box::new(next_request(
-        &discussion.head.authority_commit,
-        arkret_wire::EventKind::StrandUpdate,
-        &discussion
-            .head
-            .authority_commit
-            .event
-            .actor_id
-            .signing_principal_id()
-            .clone(),
-        json!({
-            "target_ref": discussion.strand_id,
-            "expected_state_digest": digest(&before.value),
-            "patch": {"metadata.title": {"$op":"set", "value":"Accepted title"}},
-        }),
-        at,
-    ));
+    let accepted = Box::new(
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            next_request(
+                &discussion.head.authority_commit,
+                arkret_wire::EventKind::StrandUpdate,
+                &discussion
+                    .head
+                    .authority_commit
+                    .event
+                    .actor_id
+                    .signing_principal_id()
+                    .clone(),
+                json!({
+                    "target_ref": discussion.strand_id,
+                    "expected_state_digest": digest(&before.value),
+                    "patch": {"metadata.title": {"$op":"set", "value":"Accepted title"}},
+                }),
+                at,
+            ),
+        ))
+        .await,
+    );
     let outcome = uow.commit_event((*accepted).clone()).await.unwrap();
     assert!(outcome.event_inserted);
     let after = current(&pool, &discussion.strand_id).await;
@@ -336,24 +366,30 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
     );
 
     let head = &accepted.authority_commit;
-    let stale = Box::new(next_request(
-        head,
-        arkret_wire::EventKind::StrandUpdate,
-        &discussion
-            .head
-            .authority_commit
-            .event
-            .actor_id
-            .signing_principal_id()
-            .clone(),
-        json!({
-            "target_ref": discussion.strand_id,
-            "expected_state_digest": digest(&before.value),
-            "patch": {"metadata.title": {"$op":"set", "value":"Stale title"}},
-        }),
-        at,
-    ));
-    let unknown = Box::new(next_request(
+    let stale = Box::new(
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            next_request(
+                head,
+                arkret_wire::EventKind::StrandUpdate,
+                &discussion
+                    .head
+                    .authority_commit
+                    .event
+                    .actor_id
+                    .signing_principal_id()
+                    .clone(),
+                json!({
+                    "target_ref": discussion.strand_id,
+                    "expected_state_digest": digest(&before.value),
+                    "patch": {"metadata.title": {"$op":"set", "value":"Stale title"}},
+                }),
+                at,
+            ),
+        ))
+        .await,
+    );
+    let unknown = Box::new(Box::pin(ordinary_realm::source_request(&pool, next_request(
         head,
         arkret_wire::EventKind::StrandUpdate,
         &discussion
@@ -368,40 +404,51 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
             "patch": {"metadata.title": {"$op":"set", "value":"Unknown title"}},
         }),
         at,
-    ));
-    let forbidden = Box::new(next_request(
-        head,
-        arkret_wire::EventKind::StrandUpdate,
-        &discussion
-            .head
-            .authority_commit
-            .event
-            .actor_id
-            .signing_principal_id()
-            .clone(),
-        json!({
-            "target_ref": discussion.strand_id,
-            "patch": {"stage": {"$op":"set", "value":"done"}},
-        }),
-        at,
-    ));
+    ))).await);
+    let forbidden = Box::new(
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            next_request(
+                head,
+                arkret_wire::EventKind::StrandUpdate,
+                &discussion
+                    .head
+                    .authority_commit
+                    .event
+                    .actor_id
+                    .signing_principal_id()
+                    .clone(),
+                json!({
+                    "target_ref": discussion.strand_id,
+                    "patch": {"stage": {"$op":"set", "value":"done"}},
+                }),
+                at,
+            ),
+        ))
+        .await,
+    );
     let outsider = Box::pin(ordinary_realm::human_profile::admit(
         &pool,
         &ordinary_realm::station(),
         "strand-update-outsider",
     ))
     .await;
-    let not_joined = Box::new(next_request(
-        head,
-        arkret_wire::EventKind::StrandUpdate,
-        &outsider.principal_id,
-        json!({
-            "target_ref": discussion.strand_id,
-            "patch": {"metadata.title": {"$op":"set", "value":"Unauthorized title"}},
-        }),
-        at,
-    ));
-    let not_joined = Box::new(Box::pin(ordinary_realm::source_request(&pool, *not_joined)).await);
+    let not_joined = Box::new(
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            next_request(
+                head,
+                arkret_wire::EventKind::StrandUpdate,
+                &outsider.principal_id,
+                json!({
+                    "target_ref": discussion.strand_id,
+                    "patch": {"metadata.title": {"$op":"set", "value":"Unauthorized title"}},
+                }),
+                at,
+            ),
+        ))
+        .await,
+    );
     for (request, reason) in [
         (stale, "expected_state_digest"),
         (unknown, "target is absent"),
@@ -423,7 +470,7 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let discussion = open_discussion(&pool, "strand-update-calendar-pair").await;
+    let discussion = Box::pin(open_discussion(&pool, "strand-update-calendar-pair")).await;
     let author = discussion
         .head
         .authority_commit
@@ -441,19 +488,23 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
         "all_day": true,
         "status": "confirmed"
     });
-    let accepted = next_request(
-        &discussion.head.authority_commit,
-        arkret_wire::EventKind::StrandUpdate,
-        &author,
-        json!({
-            "target_ref": discussion.strand_id,
-            "patch": {
-                "schema_refs": {"$op":"set", "value":["ak.schema.calendar_event.v1"]},
-                "metadata.fields.calendar": {"$op":"set", "value":schedule},
-            },
-        }),
-        at,
-    );
+    let accepted = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &discussion.head.authority_commit,
+            arkret_wire::EventKind::StrandUpdate,
+            &author,
+            json!({
+                "target_ref": discussion.strand_id,
+                "patch": {
+                    "schema_refs": {"$op":"set", "value":["ak.schema.calendar_event.v1"]},
+                    "metadata.fields.calendar": {"$op":"set", "value":schedule},
+                },
+            }),
+            at,
+        ),
+    ))
+    .await;
     uow.commit_event(accepted.clone()).await.unwrap();
     let confirmed = current(&pool, &discussion.strand_id).await;
     assert_eq!(
@@ -484,13 +535,13 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
         initial.strand_revision.commit_id,
         accepted.authority_commit.commit.commit_id
     );
-    let title = next_request(
+    let title = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &accepted.authority_commit,
         arkret_wire::EventKind::StrandUpdate,
         &author,
         json!({"target_ref":discussion.strand_id,"patch":{"metadata.title":{"$op":"set","value":"Renamed calendar"}}}),
         at,
-    );
+    ))).await;
     uow.commit_event(title.clone()).await.unwrap();
     let renamed = source(&pool, &discussion.strand_id).await;
     assert_eq!(renamed.source, initial.source);
@@ -498,13 +549,13 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
         renamed.strand_revision.commit_id,
         title.authority_commit.commit.commit_id
     );
-    let same_schedule = next_request(
+    let same_schedule = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &title.authority_commit,
         arkret_wire::EventKind::StrandUpdate,
         &author,
         json!({"target_ref":discussion.strand_id,"patch":{"metadata.fields.calendar":{"$op":"set","value":schedule}}}),
         at,
-    );
+    ))).await;
     uow.commit_event(same_schedule.clone()).await.unwrap();
     let repeated = source(&pool, &discussion.strand_id).await;
     assert_eq!(
@@ -516,16 +567,20 @@ async fn strand_update_calendar_profile_requires_ref_and_subtree_together() {
     let confirmed = current(&pool, &discussion.strand_id).await;
     let counts = realm_counts(&pool, &realm_id).await;
 
-    let unpaired = next_request(
-        &accepted.authority_commit,
-        arkret_wire::EventKind::StrandUpdate,
-        &author,
-        json!({
-            "target_ref": discussion.strand_id,
-            "patch": {"schema_refs": {"$op":"unset"}},
-        }),
-        at,
-    );
+    let unpaired = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &accepted.authority_commit,
+            arkret_wire::EventKind::StrandUpdate,
+            &author,
+            json!({
+                "target_ref": discussion.strand_id,
+                "patch": {"schema_refs": {"$op":"unset"}},
+            }),
+            at,
+        ),
+    ))
+    .await;
     let error = uow.commit_event(unpaired).await.unwrap_err().to_string();
     assert!(error.contains("calendar_activation_mismatch"), "{error}");
     assert_eq!(current(&pool, &discussion.strand_id).await, confirmed);

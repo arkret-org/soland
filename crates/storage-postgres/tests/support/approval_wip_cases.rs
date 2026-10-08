@@ -13,12 +13,14 @@ fn vote(
     revision: CurrentRevision,
     nonce: &str,
 ) -> soland_storage::EventApprovalCommit {
-    let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed([43; 32], "fixture");
+    let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed([70; 32], "fixture");
     let multibase =
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
     let did = Did::new(format!("did:key:{multibase}")).unwrap();
     let method = DidUrl::new(format!("{did}#{multibase}")).unwrap();
-    let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed([43; 32], method.as_str());
+    let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed([70; 32], method.as_str());
+    let station = &request.authority_commit.expected_authority.service_id;
+    let approver = ordinary_realm::human_profile::fixture(station, &approval_account_label(43));
     let event = &request.authority_commit.event;
     let digest = arkret_canonical::canonical_sha256(event).unwrap();
     let mut signature = ApprovalSignature {
@@ -35,7 +37,7 @@ fn vote(
             action: CapabilityActionId::StrandMove,
             realm_id: event.realm_id.clone(),
             initiating_actor_id: event.actor_id.clone(),
-            approver_did: did,
+            approver_did: approver.history.did,
             approved_at: request.authority_commit.commit.committed_at,
             nonce: nonce.to_owned(),
         },
@@ -53,12 +55,7 @@ fn vote(
         event_id: event.event_id.clone(),
         event_digest: digest,
         committed_at: request.authority_commit.commit.committed_at,
-        methods: vec![soland_storage::ApprovalHistoricalMethod {
-            signature,
-            public_key: signer.verifying_key().to_bytes(),
-            native_control: None,
-            control_history: None,
-        }],
+        methods: vec![native_approval_method(signature, 43, station)],
     }
 }
 
@@ -78,69 +75,109 @@ fn batch(
     }
 }
 
-#[tokio::test]
-async fn list_wip_review_verifies_actual_signatures_and_consumes_only_at_success() {
-    let database = TestDatabase::lease().await;
-    let pool = database.pool();
-    let opened = open_discussion(&pool, "list-wip-approval").await;
+struct WipSetup {
+    opened: ordinary_realm::Discussion,
+    board_id: arkret_wire::SpaceId,
+    list: soland_storage::EventCommitRequest,
+    list_id: arkret_wire::SpaceId,
+    second_id: arkret_wire::StrandId,
+    first: soland_storage::EventCommitRequest,
+}
+
+async fn prepare_wip_setup(pool: &PgPool) -> WipSetup {
+    let opened = Box::pin(open_discussion(&pool, "list-wip-approval")).await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let realm = opened.head.authority_commit.event.realm_id.clone();
     let actor = opened.head.authority_commit.event.actor_id.clone();
     let at = opened.head.authority_commit.commit.committed_at;
-    let board = next_request(
-        &opened.head.authority_commit,
-        arkret_wire::EventKind::SpaceCreate,
-        &founder(),
-        space_payload(&realm, &actor, at, "board", "Review Board", None, json!({})),
-        at,
-    );
+    let board = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &opened.head.authority_commit,
+            arkret_wire::EventKind::SpaceCreate,
+            &founder(),
+            space_payload(&realm, &actor, at, "board", "Review Board", None, json!({})),
+            at,
+        ),
+    ))
+    .await;
     let board_id = arkret_wire::SpaceId::from_event_id(&board.authority_commit.event.event_id);
     uow.commit_event(board.clone()).await.unwrap();
-    let list = next_request(
-        &board.authority_commit,
-        arkret_wire::EventKind::SpaceCreate,
-        &founder(),
-        space_payload(
-            &realm,
-            &actor,
+    let list = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &board.authority_commit,
+            arkret_wire::EventKind::SpaceCreate,
+            &founder(),
+            space_payload(
+                &realm,
+                &actor,
+                at,
+                "list",
+                "Review",
+                Some(&board_id),
+                json!({"wip_limit":1,"wip_limit_enforcement":"require_review"}),
+            ),
             at,
-            "list",
-            "Review",
-            Some(&board_id),
-            json!({"wip_limit":1,"wip_limit_enforcement":"require_review"}),
         ),
-        at,
-    );
+    ))
+    .await;
     let list_id = arkret_wire::SpaceId::from_event_id(&list.authority_commit.event.event_id);
-    let revision = CurrentRevision {
-        commit_id: list.authority_commit.commit.commit_id.clone(),
-        stream_position: list.authority_commit.commit.stream_position,
-    };
     uow.commit_event(list.clone()).await.unwrap();
-    let second = next_request(
+    let second = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &list.authority_commit,
         arkret_wire::EventKind::StrandCreate,
         &founder(),
         json!({"object":{"schema":"ak.schema.strand.v1","realm_id":realm,"tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},"metadata":{"title":"Second reviewed"},"state":"active","created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
-    );
+    ))).await;
     let second_id = arkret_wire::StrandId::from_event_id(&second.authority_commit.event.event_id);
     uow.commit_event(second.clone()).await.unwrap();
-    let first = next_request(
+    let first = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &second.authority_commit,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":opened.strand_id,"target_space_id":list_id,"rank":"a"}),
         at,
-    );
+    ))).await;
     uow.commit_event(first.clone()).await.unwrap();
-    let mut review = next_request(
+    WipSetup {
+        opened,
+        board_id,
+        list,
+        list_id,
+        second_id,
+        first,
+    }
+}
+
+async fn qualify_wip_review(pool: &PgPool, setup: &WipSetup) -> soland_storage::EventCommitRequest {
+    let opened = &setup.opened;
+    let board_id = setup.board_id.clone();
+    let list_id = setup.list_id.clone();
+    let second_id = setup.second_id.clone();
+    let first = &setup.first;
+    let realm = opened.head.authority_commit.event.realm_id.clone();
+    let actor = opened.head.authority_commit.event.actor_id.clone();
+    let at = opened.head.authority_commit.commit.committed_at;
+    let revision = CurrentRevision {
+        commit_id: setup.list.authority_commit.commit.commit_id.clone(),
+        stream_position: setup.list.authority_commit.commit.stream_position,
+    };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let review = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &first.authority_commit,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":second_id,"target_space_id":list_id,"rank":"b"}),
         at,
-    );
+    ))).await;
+    Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        &approval_account_label(43),
+    ))
+    .await;
     let proof = vote(
         &review,
         &list_id,
@@ -173,23 +210,23 @@ async fn list_wip_review_verifies_actual_signatures_and_consumes_only_at_success
         .bind::<Text,_>(first.authority_commit.commit.commit_id.as_str()).bind::<BigInt,_>(first.authority_commit.commit.stream_position as i64)
         .bind::<diesel::sql_types::Timestamptz,_>(at).execute(&mut conn).await.unwrap();
     drop(conn);
-    let grant = next_request(
+    let grant = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &first.authority_commit,
         arkret_wire::EventKind::CapabilityGrant,
         &founder(),
         json!({"grant":{"schema":"ak.schema.capability.v1","realm_id":realm,"issuer_id":actor,"subject":approver,"actions":["ak.space.update"],"resources":[arkret_wire::WireResourceSelector::space(realm.clone(),list_id.clone())],"constraints":[],"issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,"authority_event_ref":opened.unit.transactions[0].event.event_id,"authority_generation":0}],"issued_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
-    );
+    ))).await;
     uow.commit_event(grant.clone()).await.unwrap();
     // A joined approver's exact-resource grant still needs the action's
     // registered allowed_space_kinds constraint before it can earn a vote.
-    let incomplete_review = next_request(
+    let incomplete_review = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &grant.authority_commit,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":second_id,"target_space_id":list_id,"rank":"b"}),
         at,
-    );
+    ))).await;
     let incomplete_proof = vote(
         &incomplete_review,
         &list_id,
@@ -219,21 +256,43 @@ async fn list_wip_review_verifies_actual_signatures_and_consumes_only_at_success
         count(&pool, &realm, "event_approval_private_audit").await,
         0
     );
-    let grant = next_request(
+    let grant = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &grant.authority_commit,
         arkret_wire::EventKind::CapabilityGrant,
         &founder(),
         json!({"grant":{"schema":"ak.schema.capability.v1","realm_id":realm,"issuer_id":actor,"subject":approver,"actions":["ak.space.update"],"resources":[arkret_wire::WireResourceSelector::space(realm.clone(),list_id.clone())],"constraints":[{"constraint_kind":"kind_restriction","effect":"allow","allowed_space_kinds":["list"]}],"issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,"authority_event_ref":opened.unit.transactions[0].event.event_id,"authority_generation":0}],"issued_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
-    );
+    ))).await;
     uow.commit_event(grant.clone()).await.unwrap();
-    review = next_request(
+    let review = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &grant.authority_commit,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":second_id,"target_space_id":list_id,"rank":"b"}),
         at,
-    );
+    ))).await;
+    review
+}
+
+#[tokio::test]
+async fn list_wip_review_verifies_actual_signatures_and_consumes_only_at_success() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let setup = Box::pin(prepare_wip_setup(&pool)).await;
+    let review = Box::pin(qualify_wip_review(&pool, &setup)).await;
+    let opened = &setup.opened;
+    let board_id = setup.board_id.clone();
+    let list = &setup.list;
+    let list_id = setup.list_id.clone();
+    let second_id = setup.second_id.clone();
+    let first = &setup.first;
+    let realm = opened.head.authority_commit.event.realm_id.clone();
+    let at = opened.head.authority_commit.commit.committed_at;
+    let revision = CurrentRevision {
+        commit_id: list.authority_commit.commit.commit_id.clone(),
+        stream_position: list.authority_commit.commit.stream_position,
+    };
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let proof = vote(
         &review,
         &list_id,
@@ -276,7 +335,7 @@ async fn list_wip_review_verifies_actual_signatures_and_consumes_only_at_success
         };
     }
     let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed(
-        [43; 32],
+        [70; 32],
         stale.methods[0]
             .signature
             .proof
@@ -325,14 +384,14 @@ async fn list_wip_review_verifies_actual_signatures_and_consumes_only_at_success
         count(&pool, &realm, "event_approval_private_audit").await,
         1
     );
-    let reused = next_request(
+    let reused = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &review.authority_commit,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":second_id,"target_space_id":list_id,"rank":"c",
             "expected_position":{"list_space_id":list_id,"rank":"b"}}),
         at,
-    );
+    ))).await;
     let reused_proof = vote(
         &reused,
         &list_id,

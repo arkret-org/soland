@@ -520,77 +520,6 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Read-only state-machine preflight for a `ak.strand.*` lifecycle event.
-    /// Mirror of `check_space_container_lifecycle_transition` — used by
-    /// `event_log::submit_event` to short-circuit HTTP admission with 412
-    /// failed_precondition. Unknown Strand returns `Ok` (causal/backfill
-    /// tolerance per common-fields.md §5.1).
-    pub fn check_strand_lifecycle_transition(
-        &self,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
-        let kind = match crate::kinds::canonical_kind_for_operation(operation) {
-            Some(k) => k,
-            None => return Ok(()),
-        };
-        // `ak.strand.create` is unconditional (no current state to validate).
-        // `ak.strand.update` requires Active source.
-        // `ak.strand.archive` requires Active source.
-        // `ak.strand.restore` requires Archived source.
-        // `common-fields.md` §5.3.3 rules 1-2: the stage axis has two distinct
-        // physical-lifecycle guards, so it cannot share the single-reason
-        // `(allowed_source, reason)` shape below.
-        if kind == arkret_wire::EventKind::StrandStageSet {
-            return self.check_stage_set_source_state(
-                operation
-                    .payload
-                    .get("strand_id")
-                    .and_then(Value::as_str)
-                    .and_then(|strand_id| self.strands.get(strand_id))
-                    .map(|strand| strand.state),
-                "strand_already_terminal",
-                "strand_not_active",
-            );
-        }
-        let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match &kind {
-            arkret_wire::EventKind::StrandCreate => return Ok(()),
-            arkret_wire::EventKind::StrandUpdate => {
-                (&[ObjectLifecycleState::Active], "strand_not_active")
-            }
-            arkret_wire::EventKind::StrandArchive => {
-                (&[ObjectLifecycleState::Active], "strand_not_active")
-            }
-            arkret_wire::EventKind::StrandRestore => {
-                (&[ObjectLifecycleState::Archived], "strand_not_archived")
-            }
-            _ => return Ok(()),
-        };
-        let strand_id = match kind {
-            arkret_wire::EventKind::StrandUpdate => strand_id_from_payload(&operation.payload),
-            arkret_wire::EventKind::StrandArchive | arkret_wire::EventKind::StrandRestore => {
-                operation
-                    .payload
-                    .get("target_ref")
-                    .and_then(Value::as_str)
-                    .filter(|value| value.starts_with("ak:strand:"))
-            }
-            _ => None,
-        };
-        let Some(strand_id) = strand_id else {
-            // Missing strand_id is caught upstream by the operation-schema
-            // validator; preflight tolerates absence to keep responsibilities
-            // separate.
-            return Ok(());
-        };
-        let Some(strand) = self.strands.get(strand_id) else {
-            return Ok(());
-        };
-        if !allowed_source.contains(&strand.state) {
-            return Err(reason);
-        }
-        Ok(())
-    }
-
     /// Read-only preflight for `ak.redaction` events that
     /// target a Strand / Morph via `object_ref`. Per spec common-fields.md
     /// §5.1, redaction is legal only from `active` or `archived` source;
@@ -626,7 +555,7 @@ impl ProjectionState {
     }
 
     /// Read-only state-machine preflight for a `ak.morph.*` lifecycle event.
-    /// Same shape as `check_strand_lifecycle_transition`.
+    /// The Morph display preflight uses its current projected lifecycle.
     pub fn check_morph_lifecycle_transition(
         &self,
         operation: &Operation,

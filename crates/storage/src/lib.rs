@@ -254,6 +254,12 @@ pub enum ConflictCode {
     SpaceAlreadyTerminal,
     /// A Space tombstone still has a live child or Strand placement.
     SpaceHasLiveDependents,
+    /// The signed parent pre-state differs from the current parent register.
+    SpaceParentMismatch,
+    /// The parent structural evidence is not readable at the operation cut.
+    SpaceParentUnreadable,
+    /// A readable canonical parent belongs to a different Realm.
+    SpaceRealmMismatch,
     /// A structural Relation endpoint is not an object of the Relation's own
     /// Realm (`relation.md` section 4.4).
     CrossRealmStructuralRelation,
@@ -377,7 +383,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 81] = [
+    pub const ALL: [Self; 84] = [
         Self::ApprovalNonceReused,
         Self::ApprovalRequired,
         Self::AppletRevoked,
@@ -405,6 +411,9 @@ impl ConflictCode {
         Self::SpaceNotArchived,
         Self::SpaceAlreadyTerminal,
         Self::SpaceHasLiveDependents,
+        Self::SpaceParentMismatch,
+        Self::SpaceParentUnreadable,
+        Self::SpaceRealmMismatch,
         Self::CrossRealmStructuralRelation,
         Self::GateCheckFailed,
         Self::InvalidMembershipTransition,
@@ -495,6 +504,9 @@ impl ConflictCode {
             Self::SpaceNotArchived => arkret_wire::ReasonCode::SPACE_NOT_ARCHIVED,
             Self::SpaceAlreadyTerminal => arkret_wire::ReasonCode::SPACE_ALREADY_TERMINAL,
             Self::SpaceHasLiveDependents => arkret_wire::ReasonCode::SPACE_HAS_LIVE_DEPENDENTS,
+            Self::SpaceParentMismatch => arkret_wire::ReasonCode::SPACE_PARENT_MISMATCH,
+            Self::SpaceParentUnreadable => arkret_wire::ReasonCode::SPACE_PARENT_UNREADABLE,
+            Self::SpaceRealmMismatch => arkret_wire::ReasonCode::SPACE_REALM_MISMATCH,
             Self::CrossRealmStructuralRelation => {
                 arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION
             }

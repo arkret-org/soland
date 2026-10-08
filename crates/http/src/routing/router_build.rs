@@ -212,9 +212,11 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // a no-Content-Length body is counted against 16 MiB instead of
         // Salvo's unrelated 64 KiB fallback.
         .hoop(SecureMaxSize::new(max_request_size_bytes))
-        .hoop(soland_http::canonical_body::RequestWireSizeLimitMiddleware::new(
-            max_request_size_bytes,
-        ))
+        .hoop(
+            soland_http::canonical_body::RequestWireSizeLimitMiddleware::new(
+                max_request_size_bytes,
+            ),
+        )
         // Step 5: after the 16 MiB transport precheck, apply the independent
         // 8 MiB JCS-canonical operation-body bound to valid JSON.
         .hoop(soland_http::canonical_body::CanonicalJsonBodyLimitMiddleware)
@@ -264,12 +266,11 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
         // `_soland` parent prepends the new namespace segment in one place.
         // Four sibling sub-trees are resolved by salvo fallthrough; ordering
         // matters only where paths overlap:
-        //   1. `server_ops_router` — soland-local admin endpoints
-        //      (server/status, accounts, devices, moderation/queue).
-        //   2. `admin_router`  — operator surface (Realm and account
-        //      administration).
-        //   3. `router`        — collection (`/_soland/admin/{resource}`),
-        //      cells, control-frames, retention.
+        //   1. `server_ops_router` — soland-local admin endpoints (server/status, accounts,
+        //      devices, moderation/queue).
+        //   2. `admin_router`  — operator surface (Realm and account administration).
+        //   3. `router`        — collection (`/_soland/admin/{resource}`), cells, control-frames,
+        //      retention.
         .push(
             Router::with_path("_soland")
                 .push(admin::server_ops_router())

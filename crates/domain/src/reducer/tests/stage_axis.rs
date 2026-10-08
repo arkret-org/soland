@@ -211,10 +211,6 @@ fn strand_stage_set_is_refused_on_archived_and_terminal_objects() {
     );
 
     let archived = strand_stage_set(strand_id, "done");
-    assert_eq!(
-        state.check_strand_lifecycle_transition(&archived),
-        Err("strand_not_active")
-    );
     assert!(matches!(
         state.apply(&archived, &hlc),
         ProjectionEffect::Rejected { ref reason } if reason == "strand_not_active"
@@ -226,10 +222,6 @@ fn strand_stage_set_is_refused_on_archived_and_terminal_objects() {
 
     state.strands.get_mut(strand_id).expect("strand").state = ObjectLifecycleState::Redacted;
     let terminal = strand_stage_set(strand_id, "done");
-    assert_eq!(
-        state.check_strand_lifecycle_transition(&terminal),
-        Err("strand_already_terminal")
-    );
     assert!(matches!(
         state.apply(&terminal, &hlc),
         ProjectionEffect::Rejected { ref reason } if reason == "strand_already_terminal"
@@ -237,8 +229,7 @@ fn strand_stage_set_is_refused_on_archived_and_terminal_objects() {
 }
 
 /// An unknown target is causal / backfill, not an error: the stage event is
-/// queued for replay like every other Strand mutation, and the preflight
-/// tolerates it.
+/// queued for replay like every other Strand mutation.
 #[test]
 fn strand_stage_set_on_unknown_strand_queues_pending_replay() {
     let mut state = ProjectionState::new();
@@ -246,7 +237,6 @@ fn strand_stage_set_on_unknown_strand_queues_pending_replay() {
     let strand_id = "ak:strand:AYRc8fL0uJ6bQeqf3XvXwLyRLROGvBjZL5mCq6Uu3Kdi";
 
     let op = strand_stage_set(strand_id, "blocked");
-    assert_eq!(state.check_strand_lifecycle_transition(&op), Ok(()));
     assert!(matches!(
         state.apply(&op, &hlc),
         ProjectionEffect::PendingReplayQueued { ref reason, .. } if reason == "strand_unknown"

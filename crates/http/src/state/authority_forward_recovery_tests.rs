@@ -3,6 +3,8 @@
 //! does not claim a live OIDC/DPoP middleware or subprocess-crash test.
 #[path = "../../../storage-postgres/tests/support/historical_human.rs"]
 mod historical_human;
+#[path = "realm_terminal_peer_tests.rs"]
+mod realm_terminal_peer_tests;
 
 use std::io::{Read, Write};
 use std::sync::Arc;

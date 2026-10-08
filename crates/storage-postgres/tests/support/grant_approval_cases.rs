@@ -11,15 +11,13 @@ fn approver(
     seed: u8,
     station: &arkret_wire::DidCoreId,
 ) -> (arkret_wire::ActorId, Did, DidUrl, [u8; 32]) {
-    let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed([seed; 32], "fixture");
+    let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed([70; 32], "fixture");
     let multibase =
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
-    let did = Did::new(format!("did:key:{multibase}")).unwrap();
-    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::project_did_to_core_id(&did).unwrap(),
-        station.clone(),
-    ));
-    let method = DidUrl::new(format!("{did}#{multibase}")).unwrap();
+    let fixture = ordinary_realm::human_profile::fixture(station, &approval_account_label(seed));
+    let actor = arkret_wire::ActorId::account(fixture.history.account);
+    let did = fixture.history.did;
+    let method = DidUrl::new(format!("did:key:{multibase}#{multibase}")).unwrap();
     (actor, did, method, signer.verifying_key().to_bytes())
 }
 fn proofs(
@@ -34,11 +32,9 @@ fn proofs(
     let methods = seeds
         .iter()
         .map(|seed| {
-            let (_, did, method, key) = approver(*seed, station);
-            let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed(
-                [*seed; 32],
-                method.as_str(),
-            );
+            let (_, did, method, _) = approver(*seed, station);
+            let signer =
+                arkret_signatures::Ed25519DetachedJwsSigner::from_seed([70; 32], method.as_str());
             let mut signature = ApprovalSignature {
                 input: ApprovalSignatureInput {
                     approval_context: if governance {
@@ -72,12 +68,7 @@ fn proofs(
                 )
                 .unwrap(),
             );
-            soland_storage::ApprovalHistoricalMethod {
-                signature,
-                public_key: key,
-                native_control: None,
-                control_history: None,
-            }
+            native_approval_method(signature, *seed, station)
         })
         .collect();
     soland_storage::EventApprovalCommit {
@@ -110,7 +101,7 @@ fn signed_age(
     for (method, seed) in proof.methods.iter_mut().zip([81, 82]) {
         method.signature.input.approved_at = proof.committed_at - age;
         let signer = arkret_signatures::Ed25519DetachedJwsSigner::from_seed(
-            [seed; 32],
+            [70; 32],
             method.signature.proof.verification_method.as_str(),
         );
         method.signature.proof.jws = signer.sign_detached_jws(
@@ -119,51 +110,73 @@ fn signed_age(
             )
             .unwrap(),
         );
+        *method =
+            native_approval_method(method.signature.clone(), seed, &ordinary_realm::station());
     }
     proof
 }
 
-#[tokio::test]
-async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_denominator() {
-    let db = TestDatabase::lease().await;
-    let pool = db.pool();
-    let opened = open_discussion(&pool, "grant-approval-roster").await;
+struct GrantSetup {
+    opened: ordinary_realm::Discussion,
+    head: soland_storage::AuthorityCommitTransaction,
+    board_id: arkret_wire::SpaceId,
+    list_id: arkret_wire::SpaceId,
+    grant_id: GrantId,
+    command: soland_storage::EventCommitRequest,
+}
+
+async fn prepare_grant_setup(pool: &PgPool) -> GrantSetup {
+    let opened = Box::pin(open_discussion(&pool, "grant-approval-roster")).await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let mut head = opened.head.authority_commit.clone();
     let realm = head.event.realm_id.clone();
     let actor = head.event.actor_id.clone();
     let at = head.commit.committed_at;
-    let board = next_request(
-        &head,
-        arkret_wire::EventKind::SpaceCreate,
-        &founder(),
-        space_payload(&realm, &actor, at, "board", "Grant review", None, json!({})),
-        at,
-    );
+    let board = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &head,
+            arkret_wire::EventKind::SpaceCreate,
+            &founder(),
+            space_payload(&realm, &actor, at, "board", "Grant review", None, json!({})),
+            at,
+        ),
+    ))
+    .await;
     let board_id = arkret_wire::SpaceId::from_event_id(&board.authority_commit.event.event_id);
     uow.commit_event(board.clone()).await.unwrap();
     head = board.authority_commit;
-    let list = next_request(
-        &head,
-        arkret_wire::EventKind::SpaceCreate,
-        &founder(),
-        space_payload(
-            &realm,
-            &actor,
+    let list = Box::pin(ordinary_realm::source_request(
+        &pool,
+        next_request(
+            &head,
+            arkret_wire::EventKind::SpaceCreate,
+            &founder(),
+            space_payload(
+                &realm,
+                &actor,
+                at,
+                "list",
+                "Destination",
+                Some(&board_id),
+                json!({}),
+            ),
             at,
-            "list",
-            "Destination",
-            Some(&board_id),
-            json!({}),
         ),
-        at,
-    );
+    ))
+    .await;
     let list_id = arkret_wire::SpaceId::from_event_id(&list.authority_commit.event.event_id);
     uow.commit_event(list.clone()).await.unwrap();
     head = list.authority_commit;
     let target = arkret_wire::WireResourceSelector::strand(realm.clone(), opened.strand_id.clone());
     let mut roster = Vec::new();
     for seed in [81, 82] {
+        Box::pin(ordinary_realm::human_profile::admit(
+            &pool,
+            &ordinary_realm::station(),
+            &approval_account_label(seed),
+        ))
+        .await;
         let (approver, ..) = approver(seed, &head.expected_authority.service_id);
         roster.push(approver.signing_principal_id().clone());
         let mut conn = pool.get().await.unwrap();
@@ -171,7 +184,7 @@ async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_deno
             .bind::<Text,_>(realm.as_str()).bind::<Text,_>(approver.to_string()).bind::<Text,_>(head.commit.commit_id.as_str())
             .bind::<BigInt,_>(head.commit.stream_position as i64).bind::<diesel::sql_types::Timestamptz,_>(at).execute(&mut conn).await.unwrap();
         drop(conn);
-        let grant = next_request(
+        let grant = Box::pin(ordinary_realm::source_request(&pool, next_request(
             &head,
             arkret_wire::EventKind::CapabilityGrant,
             &founder(),
@@ -180,11 +193,11 @@ async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_deno
             "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,"authority_event_ref":opened.unit.transactions[0].event.event_id,"authority_generation":0}],
             "issued_at":arkret_canonical::format_timestamp_canonical(at)}}),
             at,
-        );
+        ))).await;
         uow.commit_event(grant.clone()).await.unwrap();
         head = grant.authority_commit;
     }
-    let requirement = next_request(
+    let requirement = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &head,
         arkret_wire::EventKind::CapabilityGrant,
         &founder(),
@@ -195,7 +208,7 @@ async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_deno
         "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,"authority_event_ref":opened.unit.transactions[0].event.event_id,"authority_generation":0}],
         "issued_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
-    );
+    ))).await;
     let grant_id = GrantId::from_event_id(&requirement.authority_commit.event.event_id);
     uow.commit_event(requirement.clone()).await.unwrap();
     head = requirement.authority_commit;
@@ -208,26 +221,55 @@ async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_deno
         ("disabled_review", false, 99, realm.to_string()),
         ("destination_review", true, 1, list_id.to_string()),
     ] {
-        let config = next_request(
-            &head,
-            arkret_wire::EventKind::PolicyAction,
-            &founder(),
-            json!({
+        let config = Box::pin(ordinary_realm::source_request(
+            &pool,
+            next_request(
+                &head,
+                arkret_wire::EventKind::PolicyAction,
+                &founder(),
+                json!({
             "action_id":id,"value":{"action":"ak.strand.move","approval_required":required,
                 "approval_quorum":quorum,"policy_scope":scope}}),
-            at,
-        );
+                at,
+            ),
+        ))
+        .await;
         uow.commit_event(config.clone()).await.unwrap();
         head = config.authority_commit;
     }
     let command_at = at + chrono::TimeDelta::seconds(120);
-    let command = next_request(
+    let command = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &head,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":opened.strand_id,"target_space_id":list_id,"rank":"a"}),
         command_at,
-    );
+    ))).await;
+    GrantSetup {
+        opened,
+        head,
+        board_id,
+        list_id,
+        grant_id,
+        command,
+    }
+}
+
+#[tokio::test]
+async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_denominator() {
+    let db = TestDatabase::lease().await;
+    let pool = db.pool();
+    let setup = Box::pin(prepare_grant_setup(&pool)).await;
+    let opened = &setup.opened;
+    let head = &setup.head;
+    let board_id = setup.board_id.clone();
+    let list_id = setup.list_id.clone();
+    let grant_id = setup.grant_id.clone();
+    let command = setup.command.clone();
+    let realm = head.event.realm_id.clone();
+    let at = opened.head.authority_commit.commit.committed_at;
+    let command_at = at + chrono::TimeDelta::seconds(120);
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let before = (
         count(&pool, &realm, "canonical_events").await,
         count(&pool, &realm, "realm_commits").await,
@@ -261,13 +303,13 @@ async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_deno
     }
     // These signatures are inside the timeout but precede respectively issued_at
     // and the temporal not_before. Neither failure consumes their nonces.
-    let early = next_request(
+    let early = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &head,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":opened.strand_id,"target_space_id":list_id,"rank":"a"}),
         at + chrono::TimeDelta::seconds(30),
-    );
+    ))).await;
     for age in [
         chrono::TimeDelta::seconds(31),
         chrono::TimeDelta::seconds(25),
@@ -340,14 +382,14 @@ async fn grant_approval_roster_does_not_use_received_votes_as_the_threshold_deno
         position(&pool, &board_id, &opened.strand_id).await.value,
         json!({"list_space_id":list_id,"rank":"a"})
     );
-    let reused = next_request(
+    let reused = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &command.authority_commit,
         arkret_wire::EventKind::StrandMove,
         &founder(),
         json!({"board_space_id":board_id,"strand_id":opened.strand_id,"target_space_id":list_id,"rank":"b",
             "expected_position":{"list_space_id":list_id,"rank":"a"}}),
         command_at,
-    );
+    ))).await;
     let before = (
         count(&pool, &realm, "canonical_events").await,
         count(&pool, &realm, "realm_commits").await,

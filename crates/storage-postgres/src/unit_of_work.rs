@@ -3275,6 +3275,8 @@ async fn commit_object_current_results_inner(
         crate::space_current_results::commit_space_update_in_connection(conn, event, commit, true),
     )
     .await?;
+    Box::pin(crate::space_current_results::commit_space_parent_in_connection(conn, event, commit))
+        .await?;
     Box::pin(
         crate::rsvp_current_results::commit_rsvp_current_result_in_connection(conn, event, commit),
     )

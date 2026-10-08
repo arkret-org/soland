@@ -482,8 +482,7 @@ async fn pair(pool: &PgPool) -> Pair {
     let pcr = pcr_genesis::PcrGenesisFixture::new(device_authorization_history::did_web_station(
         &station,
     ));
-    let selector = pcr
-        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+    let selector = Box::pin(pcr.admit_founding_device(&PgPersistenceStore::new(pool.clone())))
         .await
         .expect("accepted founder PCR genesis");
     let founder = pcr.history.account.clone();
@@ -504,10 +503,10 @@ async fn pair(pool: &PgPool) -> Pair {
             ..Default::default()
         },
     );
-    let peer_selector = peer_pcr
-        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
-        .await
-        .expect("accepted independent peer PCR genesis");
+    let peer_selector =
+        Box::pin(peer_pcr.admit_founding_device(&PgPersistenceStore::new(pool.clone())))
+            .await
+            .expect("accepted independent peer PCR genesis");
     let peer = peer_pcr.history.account.clone();
     ordinary_realm::human_profile::register_fixture_signer(
         &peer,
@@ -2349,13 +2348,68 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     );
 }
 
+async fn terminal_persistent_rows(pool: &soland_storage_postgres::PgPool) -> serde_json::Value {
+    use diesel_async::RunQueryDsl as _;
+    #[derive(diesel::QueryableByName)]
+    struct Table {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        tablename: String,
+    }
+    #[derive(diesel::QueryableByName)]
+    struct Rows {
+        #[diesel(sql_type = diesel::sql_types::Jsonb)]
+        value: serde_json::Value,
+    }
+    let mut conn = pool.get().await.unwrap();
+    let tables = diesel::sql_query("SELECT tablename::text AS tablename FROM pg_tables WHERE schemaname='public' AND (tablename LIKE '%current_results' OR tablename IN ('canonical_events','realm_commits','realm_authorities','federation_outbox','event_federation_outbox','replica_stream_anchors','replica_authorization_rows','replica_authorization_cuts','account_summary_current','account_summary_versions','account_summary_clock','current_result_heads','current_result_versions','direct_conversation_founding_slots')) ORDER BY tablename")
+        .load::<Table>(&mut *conn).await.unwrap();
+    let mut snapshot = serde_json::Map::new();
+    for table in tables {
+        assert!(
+            table
+                .tablename
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        );
+        let query = format!(
+            "SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) AS value FROM public.{} r",
+            table.tablename
+        );
+        let rows = diesel::sql_query(query)
+            .get_result::<Rows>(&mut *conn)
+            .await
+            .unwrap();
+        snapshot.insert(table.tablename, rows.value);
+    }
+    for table in [
+        "canonical_events",
+        "realm_commits",
+        "realm_authorities",
+        "federation_outbox",
+        "event_federation_outbox",
+        "realm_bootstrap_current_results",
+        "replica_stream_anchors",
+        "replica_authorization_rows",
+        "replica_authorization_cuts",
+        "account_summary_current",
+        "account_summary_versions",
+        "account_summary_clock",
+    ] {
+        assert!(
+            snapshot.contains_key(table),
+            "missing acceptance footprint table: {table}"
+        );
+    }
+    serde_json::Value::Object(snapshot)
+}
+
 #[tokio::test]
 async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writes() {
     let pool = contract_pool().await;
-    let pair = pair(&pool).await;
+    let pair = Box::pin(pair(&pool)).await;
     let store = pair.store();
     let at = now();
-    let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
+    let unit = Box::pin(founding_unit(&pair, &UnitShape::exact(&pair), key(), at)).await;
     store
         .admit_self_direct_conversation_founding_unit(&unit, &pair.guards(), at)
         .await
@@ -2366,11 +2420,11 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     // An unrelated, genuinely accepted Human device reaches the profile
     // admission gate; it has no membership in the founding pair.
-    let third = ordinary_realm::human_profile::admit_without_profile(
+    let third = Box::pin(ordinary_realm::human_profile::admit_without_profile(
         &pool,
         &pair.station,
         &format!("dc-third-{}", uuid::Uuid::now_v7().simple()),
-    )
+    ))
     .await;
     let invite = |invitee: &AccountId| {
         serde_json::json!({
@@ -2381,48 +2435,91 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     };
     let refused = async |kind: EventKind, actor: &AccountId, payload: serde_json::Value| {
         let request = ordinary_realm::next_request(&head, kind, &actor.principal_id, payload, at);
-        let request = ordinary_realm::source_request(&pool, request).await;
-        let code = refusal_code(uow.commit_event(request).await);
+        let request = Box::pin(ordinary_realm::source_request(&pool, request)).await;
+        let before = store
+            .realm_state_snapshot_material(&realm_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .current_state_entries;
+        let outbox_sql = "SELECT COUNT(*) AS count FROM event_federation_outbox o JOIN canonical_events e ON e.pk=o.event_pk WHERE e.realm_id=$1";
+        let outbox_before = count(&pool, outbox_sql, &realm_id).await;
+        let persistent_before = terminal_persistent_rows(&pool).await;
+        let result = uow.commit_event(request.clone()).await;
+        assert!(
+            !result
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("realm_terminal_state")
+        );
+        let code = refusal_code(result);
+        assert_eq!(terminal_persistent_rows(&pool).await, persistent_before);
         assert_eq!(footprint(&pool, &realm_id).await, [1, 4, 4, 1, 2]);
+        assert_eq!(
+            store
+                .realm_state_snapshot_material(&realm_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .current_state_entries,
+            before
+        );
+        assert_eq!(count(&pool, outbox_sql, &realm_id).await, outbox_before);
+        assert!(
+            store
+                .committed_event(&request.authority_commit.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
         code
     };
 
     // A pair-external invite hits both the third-party and the invite guard;
     // the third-party reason wins.
     assert_eq!(
-        refused(EventKind::InviteCreate, &pair.founder, invite(&third)).await,
-        ConflictCode::DirectConversationThirdPartyMemberForbidden
-    );
-    assert_eq!(
-        refused(
-            EventKind::MemberState,
-            &third,
-            serde_json::json!({"realm_id":realm_id,"member_id":ActorId::account(third.clone()),"membership":"join"}),
-        )
+        Box::pin(refused(
+            EventKind::InviteCreate,
+            &pair.founder,
+            invite(&third)
+        ))
         .await,
         ConflictCode::DirectConversationThirdPartyMemberForbidden
     );
     assert_eq!(
-        refused(EventKind::InviteCreate, &pair.founder, invite(&pair.peer)).await,
+        Box::pin(refused(
+            EventKind::MemberState,
+            &third,
+            serde_json::json!({"realm_id":realm_id,"member_id":ActorId::account(third.clone()),"membership":"join"}),
+        )).await,
+        ConflictCode::DirectConversationThirdPartyMemberForbidden
+    );
+    assert_eq!(
+        Box::pin(refused(
+            EventKind::InviteCreate,
+            &pair.founder,
+            invite(&pair.peer)
+        ))
+        .await,
         ConflictCode::DirectConversationInviteForbidden
     );
     // Removing the peer would lean on the technical root's owner aggregate.
     assert_eq!(
-        refused(
+        Box::pin(refused(
             EventKind::MemberState,
             &pair.founder,
             serde_json::json!({"realm_id":realm_id,"member_id":pair.peer_actor(),"membership":"ban"}),
-        )
-        .await,
+        )).await,
         ConflictCode::DirectConversationRootMaskViolation
     );
     // The founder's provisional Message has no accepted group Genesis.
     assert_eq!(
-        refused(
+        Box::pin(refused(
             EventKind::MessageCreate,
             &pair.founder,
             ordinary_realm::message_payload(&facts.main_strand_id, "hello"),
-        )
+        ))
         .await,
         ConflictCode::DirectConversationParticipantAuthorityDenied
     );
@@ -2434,18 +2531,33 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
             .await
             .unwrap()
     };
-    // Destroy relies on the root too; the terminal reason wins.
-    assert_eq!(
-        evaluate(
+    // Neither terminal action may destroy the canonical participant pair.
+    for (kind, payload) in [
+        (
             EventKind::RealmDestroy,
-            &pair.founder,
-            serde_json::json!({"realm_id":realm_id}),
-        )
-        .await,
-        DirectConversationAdmissionCut::Refused(ConflictCode::DirectConversationTerminalForbidden)
-    );
+            serde_json::json!({"reason":"terminal"}),
+        ),
+        (
+            EventKind::RealmTombstone,
+            serde_json::json!({
+                "successor_realm_id": "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW",
+                "reason":"terminal"
+            }),
+        ),
+    ] {
+        assert_eq!(
+            Box::pin(evaluate(kind.clone(), &pair.founder, payload.clone())).await,
+            DirectConversationAdmissionCut::Refused(
+                ConflictCode::DirectConversationTerminalForbidden
+            )
+        );
+        assert_eq!(
+            Box::pin(refused(kind, &pair.founder, payload)).await,
+            ConflictCode::DirectConversationTerminalForbidden
+        );
+    }
     assert_eq!(
-        evaluate(
+        Box::pin(evaluate(
             EventKind::DirectConversationBound,
             &pair.peer,
             serde_json::json!({
@@ -2460,13 +2572,13 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
                 "initial_exact_pair_group_state_ref":unique_event_id("group-state"),
                 "created_at":at
             }),
-        )
+        ))
         .await,
         DirectConversationAdmissionCut::Refused(ConflictCode::DirectConversationBindingInvalid)
     );
 
     // A participant who left still counts for the exact-two gate
-    // (`contact-and-direct-conversation.md` §8.4): the pair-external invite
+    // (`contact-and-direct-conversation.md` Â§8.4): the pair-external invite
     // keeps its third-party reason.  This pre-binding Realm cannot use repair:
     // the registered repair source requires an accepted stable binding.  The
     // complete found -> leave -> rejoin path is exercised below.
@@ -2483,16 +2595,20 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     .unwrap();
     drop(conn);
     assert_eq!(
-        refused(EventKind::InviteCreate, &pair.founder, invite(&third)).await,
+        Box::pin(refused(
+            EventKind::InviteCreate,
+            &pair.founder,
+            invite(&third)
+        ))
+        .await,
         ConflictCode::DirectConversationThirdPartyMemberForbidden
     );
     assert_eq!(
-        evaluate(
+        Box::pin(evaluate(
             EventKind::MemberState,
             &pair.peer,
             serde_json::json!({"realm_id":realm_id,"member_id":pair.peer_actor(),"membership":"join"}),
-        )
-        .await,
+        )).await,
         DirectConversationAdmissionCut::Refused(
             ConflictCode::DirectConversationParticipantAuthorityDenied
         )
@@ -2511,7 +2627,12 @@ async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writ
     .unwrap();
     drop(conn);
     assert_eq!(
-        evaluate(EventKind::InviteCreate, &pair.founder, invite(&third)).await,
+        Box::pin(evaluate(
+            EventKind::InviteCreate,
+            &pair.founder,
+            invite(&third)
+        ))
+        .await,
         DirectConversationAdmissionCut::Refused(ConflictCode::DirectConversationMemberCountInvalid)
     );
 }
@@ -2972,7 +3093,7 @@ async fn group_state(pool: &PgPool, realm_id: &RealmId) -> (bool, Option<String>
     )
 }
 
-/// `contact-and-direct-conversation.md` §7.2, §8.3 and §8.4 at the accepting
+/// `contact-and-direct-conversation.md` Â§7.2, Â§8.3 and Â§8.4 at the accepting
 /// cut: the root's materialization mask admits the one group Genesis; the
 /// bootstrap source's provisional phase lets only the founder send and Add the
 /// peer; once the peer's Welcome of the first exact-pair Commit is durable,
@@ -3022,7 +3143,7 @@ async fn participant_authority_scenario() {
     };
 
     let (genesis_ref, add, add_ref, mut encryption_group, scope) = boxed_source(|| async {
-        // realm-and-space.md §2.5 row 5: the founding create fixed history.
+        // realm-and-space.md Â§2.5 row 5: the founding create fixed history.
         assert_eq!(
             count(
                 &pool,

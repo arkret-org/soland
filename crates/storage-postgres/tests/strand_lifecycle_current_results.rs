@@ -7,7 +7,7 @@ mod ordinary_realm;
 use arkret_wire::{ActorId, EventKind, StrandId};
 use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
-use ordinary_realm::{founder, next_request, open_discussion};
+use ordinary_realm::{next_request, open_discussion};
 use serde_json::{Value, json};
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, EventCommitRequest, EventCommitUnitOfWork,
@@ -39,6 +39,200 @@ async fn footprint(pool: &PgPool) -> Value {
     diesel::sql_query("SELECT jsonb_build_object('events',(SELECT count(*) FROM canonical_events),'commits',(SELECT count(*) FROM realm_commits),'currents',(SELECT count(*) FROM strand_current_results),'outbox',(SELECT count(*) FROM federation_outbox)) AS value")
         .get_result::<Footprint>(&mut *conn).await.unwrap().value
 }
+
+async fn full_write_footprint(pool: &PgPool) -> Value {
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("SELECT jsonb_build_object( \
+        'events',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM canonical_events r), \
+        'commits',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM realm_commits r), \
+        'current',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM strand_current_results r), \
+        'authority',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM realm_authorities r), \
+        'producer_keys',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM agent_producer_signer_keys r), \
+        'outbox',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM federation_outbox r), \
+        'event_outbox',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text),'[]'::jsonb) FROM event_federation_outbox r)) AS value")
+        .get_result::<Footprint>(&mut *conn).await.unwrap().value
+}
+
+async fn assert_capability_denied_without_writes(pool: &PgPool, request: EventCommitRequest) {
+    let before = full_write_footprint(pool).await;
+    let id = request.authority_commit.event.event_id.clone();
+    let error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(request)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.conflict_code(),
+        Some(soland_storage::ConflictCode::CapabilityDenied)
+    );
+    assert_eq!(full_write_footprint(pool).await, before);
+    assert!(
+        soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() }
+            .committed_event(&id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn accept_and_assert_exact_replay(pool: &PgPool, request: EventCommitRequest) {
+    let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    assert!(
+        uow.commit_event(request.clone())
+            .await
+            .unwrap()
+            .event_inserted
+    );
+    let accepted = full_write_footprint(pool).await;
+    let replay = uow.commit_event(request.clone()).await.unwrap();
+    assert!(!replay.event_inserted);
+    assert_eq!(replay.projections_inserted, 0);
+    assert_eq!(replay.outbox_inserted, 0);
+    assert_eq!(full_write_footprint(pool).await, accepted);
+    let held = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() }
+        .committed_event(&request.authority_commit.event.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.event, request.authority_commit.event);
+    assert_eq!(held.commit, request.authority_commit.commit);
+}
+
+async fn create_for_actor(
+    pool: &PgPool,
+    previous: &AuthorityCommitTransaction,
+    actor: ActorId,
+    title: &str,
+) -> EventCommitRequest {
+    let at = previous.commit.committed_at + chrono::Duration::seconds(1);
+    let request = ordinary_realm::next_human_request_for_actor(
+        previous,
+        EventKind::StrandCreate,
+        actor.clone(),
+        json!({"object":{"schema":"ak.schema.strand.v1","realm_id":previous.event.realm_id,
+            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":title},"state":"active","created_by":actor,
+            "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
+        at,
+    );
+    Box::pin(ordinary_realm::source_request(pool, request)).await
+}
+
+async fn lifecycle_for_actor(
+    pool: &PgPool,
+    previous: &AuthorityCommitTransaction,
+    strand: &StrandId,
+    actor: ActorId,
+    kind: EventKind,
+) -> EventCommitRequest {
+    let request = ordinary_realm::next_human_request_for_actor(
+        previous,
+        kind,
+        actor,
+        json!({"target_ref":strand}),
+        previous.commit.committed_at + chrono::Duration::seconds(1),
+    );
+    Box::pin(ordinary_realm::source_request(pool, request)).await
+}
+
+#[tokio::test]
+async fn strand_create_checks_capability_and_exact_replay_preserves_all_rows() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let opened = Box::pin(open_discussion(&pool, "create-capability-replay")).await;
+    let intruder = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "create-intruder",
+    ))
+    .await;
+    let denied = Box::pin(create_for_actor(
+        &pool,
+        &opened.head.authority_commit,
+        ActorId::account(intruder),
+        "Denied create",
+    ))
+    .await;
+    Box::pin(assert_capability_denied_without_writes(&pool, denied)).await;
+    let accepted = Box::pin(create_for_actor(
+        &pool,
+        &opened.head.authority_commit,
+        opened.head.authority_commit.event.actor_id.clone(),
+        "Accepted create",
+    ))
+    .await;
+    Box::pin(accept_and_assert_exact_replay(&pool, accepted)).await;
+}
+
+#[tokio::test]
+async fn strand_archive_checks_capability_and_exact_replay_preserves_all_rows() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let opened = Box::pin(open_discussion(&pool, "archive-capability-replay")).await;
+    let intruder = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "archive-intruder",
+    ))
+    .await;
+    let denied = Box::pin(lifecycle_for_actor(
+        &pool,
+        &opened.head.authority_commit,
+        &opened.strand_id,
+        ActorId::account(intruder),
+        EventKind::StrandArchive,
+    ))
+    .await;
+    Box::pin(assert_capability_denied_without_writes(&pool, denied)).await;
+    let accepted = Box::pin(lifecycle_for_actor(
+        &pool,
+        &opened.head.authority_commit,
+        &opened.strand_id,
+        opened.head.authority_commit.event.actor_id.clone(),
+        EventKind::StrandArchive,
+    ))
+    .await;
+    Box::pin(accept_and_assert_exact_replay(&pool, accepted)).await;
+}
+
+#[tokio::test]
+async fn strand_restore_checks_capability_and_exact_replay_preserves_all_rows() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let opened = Box::pin(open_discussion(&pool, "restore-capability-replay")).await;
+    let intruder = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "restore-intruder",
+    ))
+    .await;
+    let archived = Box::pin(lifecycle_for_actor(
+        &pool,
+        &opened.head.authority_commit,
+        &opened.strand_id,
+        opened.head.authority_commit.event.actor_id.clone(),
+        EventKind::StrandArchive,
+    ))
+    .await;
+    Box::pin(accept_and_assert_exact_replay(&pool, archived.clone())).await;
+    let denied = Box::pin(lifecycle_for_actor(
+        &pool,
+        &archived.authority_commit,
+        &opened.strand_id,
+        ActorId::account(intruder),
+        EventKind::StrandRestore,
+    ))
+    .await;
+    Box::pin(assert_capability_denied_without_writes(&pool, denied)).await;
+    let accepted = Box::pin(lifecycle_for_actor(
+        &pool,
+        &archived.authority_commit,
+        &opened.strand_id,
+        opened.head.authority_commit.event.actor_id.clone(),
+        EventKind::StrandRestore,
+    ))
+    .await;
+    Box::pin(accept_and_assert_exact_replay(&pool, accepted)).await;
+}
 fn stage(
     previous: &AuthorityCommitTransaction,
     strand: &StrandId,
@@ -53,7 +247,7 @@ fn stage(
     next_request(
         previous,
         EventKind::StrandStageSet,
-        &founder(),
+        previous.event.actor_id.signing_principal_id(),
         payload,
         previous.commit.committed_at + chrono::Duration::seconds(seconds),
     )
@@ -67,7 +261,7 @@ fn lifecycle(
     next_request(
         previous,
         kind,
-        &founder(),
+        previous.event.actor_id.signing_principal_id(),
         json!({"target_ref":strand}),
         previous.commit.committed_at + chrono::Duration::seconds(seconds),
     )
@@ -94,17 +288,21 @@ async fn assert_refused(
 async fn stage_initial_cas_concurrent_winner_and_noop_revision_are_durable() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = open_discussion(&pool, "strand-stage-cas").await;
+    let discussion = Box::pin(open_discussion(&pool, "strand-stage-cas")).await;
     let initial = current(&pool, &discussion.strand_id).await;
     assert!(initial.value.get("stage").is_none());
     assert!(initial.value.get("stage_changed_at").is_none());
-    let first = stage(
-        &discussion.head.authority_commit,
-        &discussion.strand_id,
-        "planned",
-        None,
-        1,
-    );
+    let first = Box::pin(ordinary_realm::source_request(
+        &pool,
+        stage(
+            &discussion.head.authority_commit,
+            &discussion.strand_id,
+            "planned",
+            None,
+            1,
+        ),
+    ))
+    .await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     uow.commit_event(first.clone()).await.unwrap();
     let planned = current(&pool, &discussion.strand_id).await;
@@ -121,31 +319,43 @@ async fn stage_initial_cas_concurrent_winner_and_noop_revision_are_durable() {
         assert_refused(
             &pool,
             &discussion.strand_id,
-            stage(
-                &first.authority_commit,
-                &discussion.strand_id,
-                "in_progress",
-                expected,
-                2,
-            ),
+            Box::pin(ordinary_realm::source_request(
+                &pool,
+                stage(
+                    &first.authority_commit,
+                    &discussion.strand_id,
+                    "in_progress",
+                    expected,
+                    2,
+                ),
+            ))
+            .await,
             "expected_stage",
         )
         .await;
     }
-    let left = stage(
-        &first.authority_commit,
-        &discussion.strand_id,
-        "in_progress",
-        Some("planned"),
-        3,
-    );
-    let right = stage(
-        &first.authority_commit,
-        &discussion.strand_id,
-        "blocked",
-        Some("planned"),
-        3,
-    );
+    let left = Box::pin(ordinary_realm::source_request(
+        &pool,
+        stage(
+            &first.authority_commit,
+            &discussion.strand_id,
+            "in_progress",
+            Some("planned"),
+            3,
+        ),
+    ))
+    .await;
+    let right = Box::pin(ordinary_realm::source_request(
+        &pool,
+        stage(
+            &first.authority_commit,
+            &discussion.strand_id,
+            "blocked",
+            Some("planned"),
+            3,
+        ),
+    ))
+    .await;
     let second_uow = PgEventCommitUnitOfWork::new(pool.clone());
     let baseline = footprint(&pool).await;
     let (left_result, right_result) = tokio::join!(
@@ -174,13 +384,17 @@ async fn stage_initial_cas_concurrent_winner_and_noop_revision_are_durable() {
     );
     assert_eq!(after["outbox"], baseline["outbox"]);
     let value = won.value["stage"].as_str().unwrap();
-    let noop = stage(
-        &winner.authority_commit,
-        &discussion.strand_id,
-        value,
-        Some(value),
-        4,
-    );
+    let noop = Box::pin(ordinary_realm::source_request(
+        &pool,
+        stage(
+            &winner.authority_commit,
+            &discussion.strand_id,
+            value,
+            Some(value),
+            4,
+        ),
+    ))
+    .await;
     uow.commit_event(noop.clone()).await.unwrap();
     let settled = current(&pool, &discussion.strand_id).await;
     assert_eq!(
@@ -225,7 +439,16 @@ async fn stage_initial_cas_concurrent_winner_and_noop_revision_are_durable() {
     }
     assert_eq!(current(&pool, &discussion.strand_id).await, settled);
     assert_eq!(footprint(&pool).await, counts);
-    let account = arkret_wire::AccountId::new(founder(), ordinary_realm::station());
+    let account = arkret_wire::AccountId::new(
+        discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id()
+            .clone(),
+        ordinary_realm::station(),
+    );
     let snapshot =
         soland_storage_postgres::account_snapshot_material(&pool, &discussion.realm_id(), &account)
             .await
@@ -238,16 +461,20 @@ async fn stage_initial_cas_concurrent_winner_and_noop_revision_are_durable() {
 async fn archive_restore_fsm_and_accepting_time_replay_do_not_diverge() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = open_discussion(&pool, "strand-lifecycle-fsm").await;
+    let discussion = Box::pin(open_discussion(&pool, "strand-lifecycle-fsm")).await;
     assert_refused(
         &pool,
         &discussion.strand_id,
-        lifecycle(
-            &discussion.head.authority_commit,
-            &discussion.strand_id,
-            EventKind::StrandRestore,
-            1,
-        ),
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            lifecycle(
+                &discussion.head.authority_commit,
+                &discussion.strand_id,
+                EventKind::StrandRestore,
+                1,
+            ),
+        ))
+        .await,
         "strand_not_archived",
     )
     .await;
@@ -265,6 +492,7 @@ async fn archive_restore_fsm_and_accepting_time_replay_do_not_diverge() {
     for projection in &mut archive.projections {
         projection.received_at = accepted_at;
     }
+    let archive = Box::pin(ordinary_realm::source_request(&pool, archive)).await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     uow.commit_event(archive.clone()).await.unwrap();
     let archived = current(&pool, &discussion.strand_id).await;
@@ -280,34 +508,46 @@ async fn archive_restore_fsm_and_accepting_time_replay_do_not_diverge() {
     assert_refused(
         &pool,
         &discussion.strand_id,
-        lifecycle(
-            &archive.authority_commit,
-            &discussion.strand_id,
-            EventKind::StrandArchive,
-            1,
-        ),
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            lifecycle(
+                &archive.authority_commit,
+                &discussion.strand_id,
+                EventKind::StrandArchive,
+                1,
+            ),
+        ))
+        .await,
         "strand_not_active",
     )
     .await;
     assert_refused(
         &pool,
         &discussion.strand_id,
-        stage(
-            &archive.authority_commit,
-            &discussion.strand_id,
-            "done",
-            None,
-            1,
-        ),
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            stage(
+                &archive.authority_commit,
+                &discussion.strand_id,
+                "done",
+                None,
+                1,
+            ),
+        ))
+        .await,
         "strand_not_active",
     )
     .await;
-    let restore = lifecycle(
-        &archive.authority_commit,
-        &discussion.strand_id,
-        EventKind::StrandRestore,
-        2,
-    );
+    let restore = Box::pin(ordinary_realm::source_request(
+        &pool,
+        lifecycle(
+            &archive.authority_commit,
+            &discussion.strand_id,
+            EventKind::StrandRestore,
+            2,
+        ),
+    ))
+    .await;
     uow.commit_event(restore.clone()).await.unwrap();
     let restored = current(&pool, &discussion.strand_id).await;
     assert_eq!(restored.value["state"], "active");
@@ -344,33 +584,46 @@ async fn archive_restore_fsm_and_accepting_time_replay_do_not_diverge() {
 async fn transition_actor_realm_and_scope_refusals_leave_no_durable_footprint() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = open_discussion(&pool, "strand-transition-gates").await;
-    let other = open_discussion(&pool, "strand-transition-other-realm").await;
+    let discussion = Box::pin(open_discussion(&pool, "strand-transition-gates")).await;
+    let other = Box::pin(open_discussion(&pool, "strand-transition-other-realm")).await;
     let previous = &discussion.head.authority_commit;
-    for actor in [
-        ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new("ak:did_core:web:transition-outsider.example").unwrap(),
-            ordinary_realm::station(),
-        )),
-        ActorId::account(arkret_wire::AccountId::new(
-            founder(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:other-transition-station.example")
-                .unwrap(),
-        )),
-    ] {
-        let request = ordinary_realm::next_request_for_actor(
+    let outsider = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "transition-outsider",
+    ))
+    .await;
+    for actor in [ActorId::account(outsider)] {
+        let request = ordinary_realm::next_human_request_for_actor(
             previous,
             EventKind::StrandStageSet,
             actor,
             json!({"strand_id":discussion.strand_id,"stage":"done"}),
             previous.commit.committed_at + chrono::Duration::seconds(1),
         );
+        let request = Box::pin(ordinary_realm::source_request(&pool, request)).await;
         assert_refused(&pool, &discussion.strand_id, request, "capability_denied").await;
     }
+    let (foreign_request, _origin_state) = Box::pin(foreign_station_stage_request(
+        previous,
+        &discussion.strand_id,
+    ))
+    .await;
     assert_refused(
         &pool,
         &discussion.strand_id,
-        stage(previous, &other.strand_id, "done", None, 2),
+        foreign_request,
+        "capability_denied",
+    )
+    .await;
+    assert_refused(
+        &pool,
+        &discussion.strand_id,
+        Box::pin(ordinary_realm::source_request(
+            &pool,
+            stage(previous, &other.strand_id, "done", None, 2),
+        ))
+        .await,
         "target",
     )
     .await;
@@ -380,7 +633,7 @@ async fn transition_actor_realm_and_scope_refusals_leave_no_durable_footprint() 
             realm_id: discussion.realm_id(),
             circle_id: arkret_wire::CircleId::from_event_id(&previous.event.event_id),
         },
-        &founder(),
+        previous.event.actor_id.signing_principal_id(),
         &ordinary_realm::station(),
         json!({"strand_id":discussion.strand_id,"stage":"done"}),
         previous.commit.committed_at + chrono::Duration::seconds(3),
@@ -390,23 +643,107 @@ async fn transition_actor_realm_and_scope_refusals_leave_no_durable_footprint() 
         event,
         previous.commit.committed_at + chrono::Duration::seconds(3),
     );
+    let request = Box::pin(ordinary_realm::source_request(&pool, request)).await;
     // The malformed request's Event scope does not match its Realm Commit;
     // either transaction validation or the writer must reject it before writes.
-    assert_refused(&pool, &discussion.strand_id, request, "bindings disagree").await;
+    Box::pin(assert_independent_scope_schema_refused(&pool, request)).await;
+}
+
+async fn assert_independent_scope_schema_refused(pool: &PgPool, request: EventCommitRequest) {
+    let before = full_write_footprint(pool).await;
+    let error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(request)
+        .await
+        .unwrap_err();
+    let soland_storage::PersistenceError::SchemaViolation(detail) = error else {
+        panic!("expected independent-scope schema violation, got {error:?}");
+    };
+    assert_eq!(
+        detail,
+        "wire validation failed: committed Event view must bind the exact Event and its independent scope stream"
+    );
+    assert_eq!(full_write_footprint(pool).await, before);
+}
+
+async fn foreign_station_stage_request(
+    previous: &AuthorityCommitTransaction,
+    strand: &StrandId,
+) -> (EventCommitRequest, soland_http::state::AppState) {
+    let mut config = soland_test_support::app_config();
+    config.public_base_url = "https://other-transition-station.example".into();
+    let (origin, origin_pool) = soland_test_support::app_state_with_pool(config);
+    let account = Box::pin(ordinary_realm::human_profile::admit_for_station_did(
+        &origin_pool,
+        origin.service_did(),
+        "ordinary-founder",
+    ))
+    .await;
+    assert_eq!(
+        &account.principal_id,
+        previous.event.actor_id.signing_principal_id()
+    );
+    assert_ne!(account.station_id, ordinary_realm::station());
+    let request = ordinary_realm::next_human_request_for_actor(
+        previous,
+        EventKind::StrandStageSet,
+        ActorId::account(account.clone()),
+        json!({"strand_id":strand,"stage":"done"}),
+        previous.commit.committed_at + chrono::Duration::seconds(1),
+    );
+    let mut request = Box::pin(ordinary_realm::source_request(&origin_pool, request)).await;
+    let evidence = Box::pin(soland_http::test_fresh_producer_device_evidence(
+        &origin,
+        &request.authority_commit.event,
+        &previous.expected_authority.service_id,
+    ))
+    .await
+    .unwrap()
+    .unwrap();
+    let core = &evidence.device_projection_attestation.attestation;
+    let fact = arkret_identity::account_device_signer_evidence::verify_forwarded_human_signer_fact(
+        &evidence,
+        &request.authority_commit.event,
+        &account.station_id,
+        &previous.expected_authority.service_id,
+        &core.event_authorization.forward_body_digest,
+        arkret_canonical::DigestSuite::Sha256,
+        core.attested_at,
+    )
+    .unwrap()
+    .into_fact();
+    request.authority_commit.producer_signer_fact = Some(fact.clone().into());
+    request.authority_commit.commit.producer_signer_fact_digest = Some(fact.digest().unwrap());
+    request.authority_commit.commit.committed_at = core.attested_at;
+    request.self_producer_guard = None;
+    request.forwarded_producer_evidence =
+        Some(soland_storage::ForwardedProducerDeviceEvidence::new(evidence, fact).unwrap());
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
+        request.authority_commit.event.clone(),
+    ));
+    ordinary_realm::seal_final_commit(&mut request.authority_commit.commit);
+    (request, origin)
 }
 
 #[tokio::test]
 async fn transition_update_fault_rolls_back_event_commit_and_current_together() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let discussion = open_discussion(&pool, "strand-transition-fault").await;
+    let discussion = Box::pin(open_discussion(&pool, "strand-transition-fault")).await;
     let mut previous = discussion.head.authority_commit.clone();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     for kind in [EventKind::StrandStageSet, EventKind::StrandArchive] {
         let request = if kind == EventKind::StrandStageSet {
-            stage(&previous, &discussion.strand_id, "done", None, 1)
+            Box::pin(ordinary_realm::source_request(
+                &pool,
+                stage(&previous, &discussion.strand_id, "done", None, 1),
+            ))
+            .await
         } else {
-            lifecycle(&previous, &discussion.strand_id, kind, 1)
+            Box::pin(ordinary_realm::source_request(
+                &pool,
+                lifecycle(&previous, &discussion.strand_id, kind, 1),
+            ))
+            .await
         };
         let before = current(&pool, &discussion.strand_id).await;
         let baseline = footprint(&pool).await;

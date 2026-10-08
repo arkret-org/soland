@@ -22,6 +22,10 @@ mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
+#[path = "support/realm_terminal_replica_cases.rs"]
+mod realm_terminal_replica_cases;
+#[path = "support/space_parent_replica_cases.rs"]
+mod space_parent_replica_cases;
 
 use arkret_models_collaboration::authority_commit::PeerAuthoritySubmitRequest;
 use diesel::sql_types::{BigInt, Jsonb, Text};

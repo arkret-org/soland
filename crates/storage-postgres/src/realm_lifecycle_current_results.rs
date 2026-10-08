@@ -41,6 +41,16 @@ pub(crate) async fn require_replica_live_in_connection(
         ));
     }
     let payload = serde_json::Value::Object(event.payload.clone().into_iter().collect());
+    if event.kind == arkret_wire::EventKind::RealmTombstone {
+        let typed: arkret_models_collaboration::governance::realm_lifecycle::RealmTombstonePayload =
+            serde_json::from_value(payload.clone())
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        if typed.successor_realm_id == event.realm_id {
+            return Err(PersistenceError::Conflict(
+                "failed_precondition: successor must differ from the terminating Realm".to_owned(),
+            ));
+        }
+    }
     if (gates.archived || gates.frozen)
         && !arkret_wire::events::kinds::realm_write_gate_exempt(&event.kind, &payload)
     {
@@ -94,4 +104,96 @@ pub(crate) async fn commit_in_connection(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn replica_terminal_gate_refuses_destroy_and_live_effects_but_preserves_audit() {
+        let database = crate::TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let realm =
+            arkret_wire::RealmId::new("ak:realm:AY6DJbBwavsGTQuBZZiqqw9MVcqPZ8QX8invQ3i2kpi7")
+                .unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let at = chrono::Utc::now();
+        let event = |kind: &str| {
+            arkret_wire::test_support::raw_event_for_actor_at(
+                kind,
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                actor.clone(),
+                serde_json::json!({}),
+                at,
+            )
+            .unwrap()
+        };
+        let destroy = event("ak.realm.destroy");
+        let error = require_replica_live_in_connection(&mut conn, &destroy)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("failed_precondition"), "{error}");
+        assert!(
+            !error.to_string().contains("realm_terminal_state"),
+            "{error}"
+        );
+        // The gate itself never installs the forbidden registered destroy result.
+        #[derive(diesel::QueryableByName)]
+        struct CountRow {
+            #[diesel(sql_type = BigInt)]
+            count: i64,
+        }
+        let count = diesel::sql_query(
+            "SELECT COUNT(*) AS count FROM realm_bootstrap_current_results WHERE realm_id=$1",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .get_result::<CountRow>(&mut *conn)
+        .await
+        .unwrap();
+        assert_eq!(count.count, 0);
+        let terminal = serde_json::json!({"successor_realm_id": "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW"});
+        diesel::sql_query("INSERT INTO realm_bootstrap_current_results (realm_id,result_family,current_commit_id,current_stream_position,value,updated_at) VALUES($1,'realm_tombstone',$2,9,$3,$4)")
+            .bind::<Text, _>(realm.as_str())
+            .bind::<Text, _>(arkret_wire::RealmCommitId::from_digest([73; 32]).as_str())
+            .bind::<Jsonb, _>(&terminal).bind::<Timestamptz, _>(at)
+            .execute(&mut *conn).await.unwrap();
+        for kind in [
+            "ak.space.update",
+            "ak.realm.restore",
+            "ak.realm.tombstone",
+            "ak.realm.destroy",
+        ] {
+            let error = require_replica_live_in_connection(&mut conn, &event(kind))
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("failed_precondition"),
+                "{kind}: {error}"
+            );
+            assert!(
+                !error.to_string().contains("realm_terminal_state"),
+                "{kind}: {error}"
+            );
+        }
+        for kind in ["ak.audit.accessed", "ak.audit.erasure_receipt"] {
+            require_replica_live_in_connection(&mut conn, &event(kind))
+                .await
+                .unwrap();
+        }
+        #[derive(diesel::QueryableByName)]
+        struct ValueRow {
+            #[diesel(sql_type = Jsonb)]
+            value: serde_json::Value,
+        }
+        let retained = diesel::sql_query("SELECT value FROM realm_bootstrap_current_results WHERE realm_id=$1 AND result_family='realm_tombstone'")
+            .bind::<Text, _>(realm.as_str()).get_result::<ValueRow>(&mut *conn).await.unwrap();
+        assert_eq!(retained.value, terminal);
+    }
 }

@@ -8176,12 +8176,12 @@ async fn source_unit(
     unit
 }
 async fn unit(pool: &soland_storage_postgres::PgPool) -> OrdinaryRealmBootstrapCommitUnit {
-    source_unit(pool, legacy_unit()).await
+    Box::pin(source_unit(pool, legacy_unit())).await
 }
 async fn unit_with_plaintext_service(
     pool: &soland_storage_postgres::PgPool,
 ) -> OrdinaryRealmBootstrapCommitUnit {
-    source_unit(pool, legacy_unit_with_plaintext_service()).await
+    Box::pin(source_unit(pool, legacy_unit_with_plaintext_service())).await
 }
 fn seal_suite_commit(commit: &mut arkret_wire::RealmCommit) {
     let identity =

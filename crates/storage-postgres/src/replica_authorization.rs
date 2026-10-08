@@ -282,6 +282,71 @@ struct MemberEvidenceRow {
     value: serde_json::Value,
 }
 
+/// Exact selector evidence at the verified held replica cut. Point probes
+/// exclude unrelated Realm rows and stale bootstrap receipts.
+pub(crate) async fn exact_current_evidence(
+    conn: &mut AsyncPgConnection,
+    stream: &arkret_wire::CommitStreamRef,
+    selectors: &[CurrentSelector],
+) -> PersistenceResult<Option<(arkret_wire::CommitStreamHead, Vec<TypedCurrentResult>)>> {
+    let realm = stream.realm_id();
+    let Some(head) = verified_head(conn, stream).await? else {
+        return Ok(None);
+    };
+    let known = diesel::sql_query(
+        "SELECT commit_id AS head_commit_id,stream_position AS head_stream_position \
+         FROM realm_commits WHERE stream_key=$1 \
+         UNION ALL SELECT anchor_commit_id AS head_commit_id,anchor_stream_position AS head_stream_position \
+         FROM replica_stream_anchors WHERE stream_key=$1 AND anchor_commit_id IS NOT NULL \
+         ORDER BY head_stream_position DESC LIMIT 1",
+    )
+    .bind::<Text, _>(crate::authority_commit::stream_key(stream)?)
+    .get_result::<CutRow>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    if known.is_none_or(|known| {
+        known.head_stream_position != i64::try_from(head.stream_position).unwrap_or(-1)
+            || known.head_commit_id != head.commit_id.as_str()
+    }) {
+        return Ok(None);
+    }
+    let mut entries = Vec::with_capacity(selectors.len());
+    for selector in selectors {
+        let Some(row) = diesel::sql_query(
+            "SELECT jsonb_build_object('selector',selector,'source_stream_ref',source_stream_ref, \
+             'revision',jsonb_build_object('commit_id',current_commit_id,'stream_position',current_stream_position), \
+             'value',value) AS entry_json FROM replica_authorization_rows WHERE realm_id=$1 AND selector=$2",
+        )
+        .bind::<Text, _>(realm.as_str())
+        .bind::<Jsonb, _>(serde_json::to_value(selector).map_err(invalid)?)
+        .get_result::<CurrentEvidenceRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        else {
+            return Ok(None);
+        };
+        let entry: TypedCurrentResult = serde_json::from_value(row.entry_json).map_err(invalid)?;
+        let TypedCurrentResult::Value {
+            selector: found,
+            source_stream_ref,
+            revision,
+            ..
+        } = &entry;
+        if found != selector
+            || source_stream_ref != stream
+            || revision.stream_position > head.stream_position
+            || (revision.stream_position == head.stream_position
+                && revision.commit_id != head.commit_id)
+        {
+            return Ok(None);
+        }
+        entries.push(entry);
+    }
+    Ok(Some((head, entries)))
+}
+
 /// Point reads from the verified native prefix; unrelated object and message
 /// rows are neither loaded nor included in the resolver's change fence.
 pub(crate) async fn direct_current_evidence(
@@ -293,27 +358,6 @@ pub(crate) async fn direct_current_evidence(
     let stream = arkret_wire::CommitStreamRef::Realm {
         realm_id: realm.clone(),
     };
-    let Some(head) = verified_head(conn, &stream).await? else {
-        return Ok(None);
-    };
-    let known = diesel::sql_query(
-        "SELECT commit_id AS head_commit_id,stream_position AS head_stream_position \
-         FROM realm_commits WHERE stream_key=$1 \
-         UNION ALL SELECT anchor_commit_id AS head_commit_id,anchor_stream_position AS head_stream_position \
-         FROM replica_stream_anchors WHERE stream_key=$1 AND anchor_commit_id IS NOT NULL \
-         ORDER BY head_stream_position DESC LIMIT 1",
-    )
-    .bind::<Text, _>(crate::authority_commit::stream_key(&stream)?)
-    .get_result::<CutRow>(&mut *conn)
-    .await
-    .optional()
-    .map_err(PersistenceError::database)?;
-    if known.is_none_or(|known| {
-        known.head_stream_position != i64::try_from(head.stream_position).unwrap_or(-1)
-            || known.head_commit_id != head.commit_id.as_str()
-    }) {
-        return Ok(None);
-    }
     let mut members = diesel::sql_query(
         "SELECT member_id,current_commit_id,current_stream_position,value \
          FROM member_state_current_results WHERE realm_id=$1 AND member_id IN ($2,$3) \
@@ -359,37 +403,16 @@ pub(crate) async fn direct_current_evidence(
             actor_id: serde_json::from_str(&member.member_id).map_err(invalid)?,
         });
     }
-    let mut entries = Vec::with_capacity(selectors.len());
-    for selector in selectors {
-        let Some(row) = diesel::sql_query(
-            "SELECT jsonb_build_object('selector',selector,'source_stream_ref',source_stream_ref, \
-             'revision',jsonb_build_object('commit_id',current_commit_id,'stream_position',current_stream_position), \
-             'value',value) AS entry_json FROM replica_authorization_rows WHERE realm_id=$1 AND selector=$2",
-        )
-        .bind::<Text, _>(realm.as_str())
-        .bind::<Jsonb, _>(serde_json::to_value(&selector).map_err(invalid)?)
-        .get_result::<CurrentEvidenceRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?
-        else {
-            return Ok(None);
-        };
-        let entry: TypedCurrentResult = serde_json::from_value(row.entry_json).map_err(invalid)?;
+    let Some((head, entries)) = exact_current_evidence(conn, &stream, &selectors).await? else {
+        return Ok(None);
+    };
+    for entry in &entries {
         let TypedCurrentResult::Value {
             selector: found,
-            source_stream_ref,
             revision,
             value,
-        } = &entry;
-        if *found != selector
-            || *source_stream_ref != stream
-            || revision.stream_position > head.stream_position
-            || (revision.stream_position == head.stream_position
-                && revision.commit_id != head.commit_id)
-        {
-            return Ok(None);
-        }
+            ..
+        } = entry;
         if let CurrentSelector::MemberState { actor_id } = found {
             let member = members
                 .iter()
@@ -405,7 +428,6 @@ pub(crate) async fn direct_current_evidence(
                 return Ok(None);
             }
         }
-        entries.push(entry);
     }
     Ok(Some((head, entries)))
 }

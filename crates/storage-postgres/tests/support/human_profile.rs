@@ -50,8 +50,7 @@ pub fn sign_fixture_event(event: arkret_wire::Event) -> Option<arkret_wire::Even
 }
 pub async fn admit_without_profile(pool: &PgPool, station: &DidCoreId, label: &str) -> AccountId {
     let fixture = fixture(station, label);
-    fixture
-        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+    Box::pin(fixture.admit_founding_device(&PgPersistenceStore::new(pool.clone())))
         .await
         .unwrap();
     retain_signing_material(&fixture);
@@ -66,13 +65,14 @@ pub fn fixture(station: &DidCoreId, label: &str) -> pcr_genesis::PcrGenesisFixtu
 }
 
 fn fixture_for_did(station_did: arkret_wire::Did, label: &str) -> pcr_genesis::PcrGenesisFixture {
+    let device_identity = arkret_canonical::canonical_json_bytes(&(&station_did, label)).unwrap();
     pcr_genesis::PcrGenesisFixture::new_with(
         station_did,
         device_authorization_history::DeviceHistoryFixtureOptions {
             local_id: label.to_owned(),
             founding_device_id: arkret_wire::DeviceId::new(format!(
                 "ak:device:01904100-0000-7000-8000-{}",
-                arkret_canonical::sha256_bytes(label.as_bytes())[..6]
+                arkret_canonical::sha256_bytes(device_identity)[..6]
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
                     .collect::<String>(),
@@ -94,7 +94,7 @@ pub fn account(station: &DidCoreId, label: &str) -> AccountId {
 /// Repeated calls retain the exact accepted Profile. Nothing is seeded into
 /// a current table: the PCR unit and ProfileCreate use their production stores.
 pub async fn admit(pool: &PgPool, station: &DidCoreId, label: &str) -> AccountId {
-    admit_fixture(pool, fixture(station, label)).await
+    Box::pin(admit_fixture(pool, fixture(station, label))).await
 }
 
 /// WebVH core IDs are not reversible; retain the caller's full Station DID.
@@ -103,10 +103,20 @@ pub async fn admit_for_station_did(
     station_did: arkret_wire::Did,
     label: &str,
 ) -> AccountId {
-    admit_fixture(pool, fixture_for_did(station_did, label)).await
+    Box::pin(admit_fixture(pool, fixture_for_did(station_did, label))).await
 }
 
 async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -> AccountId {
+    // Drive the independent fixture admission without retaining a large test
+    // caller's poll frame. Dropping the JoinSet cancels the admission task;
+    // the caller retains its database lease and immediately awaits completion.
+    let pool = pool.clone();
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move { Box::pin(admit_fixture_inner(&pool, fixture)).await });
+    tasks.join_next().await.unwrap().unwrap()
+}
+
+async fn admit_fixture_inner(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -> AccountId {
     let account = fixture.history.account.clone();
     let mut conn = pool.get().await.unwrap();
     #[derive(diesel::QueryableByName)]
@@ -138,8 +148,7 @@ async fn admit_fixture(pool: &PgPool, fixture: pcr_genesis::PcrGenesisFixture) -
     .await
     .unwrap();
     drop(conn);
-    fixture
-        .admit_founding_device(&PgPersistenceStore::new(pool.clone()))
+    Box::pin(fixture.admit_founding_device(&PgPersistenceStore::new(pool.clone())))
         .await
         .unwrap();
     retain_signing_material(&fixture);

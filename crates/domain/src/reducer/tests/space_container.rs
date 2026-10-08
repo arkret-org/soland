@@ -78,10 +78,6 @@ fn space_structure_rejects_cross_realm_and_protects_archived_children() {
                 &hlc,
             );
         }
-        assert_eq!(
-            state.check_space_container_lifecycle_transition(&tombstone),
-            Err("space_has_live_dependents")
-        );
         assert!(
             matches!(state.apply(&tombstone,&hlc), ProjectionEffect::Rejected { reason } if reason == "space_has_live_dependents")
         );
@@ -212,125 +208,6 @@ fn space_container_lifecycle_round_trip() {
     assert_eq!(
         state.space_containers[container_space_id].state,
         SpaceContainerLifecycleState::Tombstoned
-    );
-}
-
-/// Preflight `check_space_container_lifecycle_transition` rejects each illegal
-/// transition with the spec-canonical reason_code per
-/// `arkret-spec/v1/zh/models/common-fields.md §5.1`.
-#[test]
-fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
-    let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
-    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    let container_space_id = "ak:space:AUL3zBF9Ie6BJCd66a0LuJsnNhuJzEodIPiuuuAr0i0W";
-
-    // Create the Space container (Active).
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::SpaceCreate,
-            realm_id,
-            serde_json::json!({
-                "object": {
-                    "id": container_space_id,
-                    "realm_id": realm_id,
-                    "kind": "list",
-                    "title": "Todo",
-                    "created_by": account_actor("ak:did_core:web:alice.example"),
-                }
-            }),
-        ),
-        &hlc,
-    );
-
-    // restore on Active → space_not_archived
-    let restore_op = make_operation(
-        arkret_wire::EventKind::SpaceRestore,
-        realm_id,
-        serde_json::json!({ "space_id": container_space_id }),
-    );
-    assert_eq!(
-        state.check_space_container_lifecycle_transition(&restore_op),
-        Err("space_not_archived")
-    );
-
-    // Archive then try archive again → space_not_active
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::SpaceArchive,
-            realm_id,
-            serde_json::json!({ "space_id": container_space_id }),
-        ),
-        &hlc,
-    );
-    let archive_op = make_operation(
-        arkret_wire::EventKind::SpaceArchive,
-        realm_id,
-        serde_json::json!({ "space_id": container_space_id }),
-    );
-    assert_eq!(
-        state.check_space_container_lifecycle_transition(&archive_op),
-        Err("space_not_active")
-    );
-
-    // Tombstone (legal from Archived).
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::SpaceTombstone,
-            realm_id,
-            serde_json::json!({ "space_id": container_space_id }),
-        ),
-        &hlc,
-    );
-    // Now restore on Tombstoned → still space_not_archived.
-    let restore_again = make_operation(
-        arkret_wire::EventKind::SpaceRestore,
-        realm_id,
-        serde_json::json!({ "space_id": container_space_id }),
-    );
-    assert_eq!(
-        state.check_space_container_lifecycle_transition(&restore_again),
-        Err("space_not_archived")
-    );
-    // Tombstone on Tombstoned → space_already_terminal.
-    let tombstone_again = make_operation(
-        arkret_wire::EventKind::SpaceTombstone,
-        realm_id,
-        serde_json::json!({ "space_id": container_space_id }),
-    );
-    assert_eq!(
-        state.check_space_container_lifecycle_transition(&tombstone_again),
-        Err("space_already_terminal")
-    );
-    // Update on Tombstoned → space_not_active.
-    let update_op = make_operation(
-        arkret_wire::EventKind::SpaceUpdate,
-        realm_id,
-        serde_json::json!({
-            "space_id": container_space_id,
-            "patch": { "title": "Renamed while tombstoned" }
-        }),
-    );
-    assert_eq!(
-        state.check_space_container_lifecycle_transition(&update_op),
-        Err("space_not_active")
-    );
-}
-
-/// Preflight is permissive when the Space container is unknown — causal /
-/// backfill window. Spec: unknown-object tolerance rule in
-/// common-fields §5.1.
-#[test]
-fn space_container_lifecycle_preflight_tolerates_unknown_space_container() {
-    let state = ProjectionState::new();
-    let archive_unknown = make_operation(
-        arkret_wire::EventKind::SpaceArchive,
-        "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-        serde_json::json!({ "space_id": "ak:space:AdGtCyltkLGkKlrj8jazJOSalIEWRmqDqr2ikq7IOWcL" }),
-    );
-    assert_eq!(
-        state.check_space_container_lifecycle_transition(&archive_unknown),
-        Ok(())
     );
 }
 
@@ -672,10 +549,6 @@ fn space_list_archive_restore_and_tombstone_protect_card_lifecycle_and_rank() {
         arkret_wire::EventKind::SpaceTombstone,
         realm_id,
         serde_json::json!({"space_id":list_id}),
-    );
-    assert_eq!(
-        state.check_space_container_lifecycle_transition(&tombstone),
-        Err("space_has_live_dependents")
     );
     assert!(
         matches!(state.apply(&tombstone, &hlc), ProjectionEffect::Rejected { reason } if reason == "space_has_live_dependents")

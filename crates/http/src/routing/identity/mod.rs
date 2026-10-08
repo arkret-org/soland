@@ -62,10 +62,7 @@ pub fn protocol_router() -> Router {
                         Router::with_path("service-registrations:ensure")
                             .post(service_registration::ensure),
                     )
-                    .push(
-                        Router::with_path("service-registrations")
-                            .get(service_registration::get),
-                    )
+                    .push(Router::with_path("service-registrations").get(service_registration::get))
                     .push(
                         Router::with_path("organization-registrations:prepare")
                             .post(organization_registration::prepare),

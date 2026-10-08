@@ -347,6 +347,9 @@ pub(crate) fn render_service_error(res: &mut Response, error: ServiceError) {
                 | soland_storage::ConflictCode::SpaceNotArchived
                 | soland_storage::ConflictCode::SpaceAlreadyTerminal
                 | soland_storage::ConflictCode::SpaceHasLiveDependents
+                | soland_storage::ConflictCode::SpaceParentMismatch
+                | soland_storage::ConflictCode::SpaceParentUnreadable
+                | soland_storage::ConflictCode::SpaceRealmMismatch
                 | soland_storage::ConflictCode::CrossRealmStructuralRelation
                 | soland_storage::ConflictCode::GrantExceedsIssuerAuthority
                 | soland_storage::ConflictCode::AuthorityCycle
@@ -996,7 +999,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mls_send_gate_refusals_render_their_registered_identities() {
+    async fn precondition_refusals_render_their_registered_identities() {
         use soland_storage::ConflictCode;
         for (code, status, wire_code, reason_code) in [
             (
@@ -1078,16 +1081,34 @@ mod tests {
                 Some("space_already_terminal"),
             ),
             (
-                ConflictCode::SpaceHasLiveDependents,
-                StatusCode::CONFLICT,
-                "failed_precondition",
-                Some("space_has_live_dependents"),
-            ),
-            (
                 ConflictCode::CrossRealmStructuralRelation,
                 StatusCode::CONFLICT,
                 "failed_precondition",
                 Some("cross_realm_structural_relation"),
+            ),
+            (
+                ConflictCode::SpaceHasLiveDependents,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some(arkret_wire::ReasonCode::SPACE_HAS_LIVE_DEPENDENTS),
+            ),
+            (
+                ConflictCode::SpaceParentMismatch,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some(arkret_wire::ReasonCode::SPACE_PARENT_MISMATCH),
+            ),
+            (
+                ConflictCode::SpaceParentUnreadable,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some(arkret_wire::ReasonCode::SPACE_PARENT_UNREADABLE),
+            ),
+            (
+                ConflictCode::SpaceRealmMismatch,
+                StatusCode::CONFLICT,
+                "failed_precondition",
+                Some(arkret_wire::ReasonCode::SPACE_REALM_MISMATCH),
             ),
         ] {
             let mut res = Response::new();

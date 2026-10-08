@@ -1320,9 +1320,15 @@ impl RealmAuthorizationCut {
                 );
             }
         }
-        if event.kind == EventKind::SpaceUpdate
-            && let Some(space) =
-                payload_id("space_id").and_then(|id| arkret_wire::SpaceId::new(id).ok())
+        if matches!(
+            event.kind,
+            EventKind::SpaceUpdate
+                | EventKind::SpaceParent
+                | EventKind::SpaceArchive
+                | EventKind::SpaceRestore
+                | EventKind::SpaceTombstone
+        ) && let Some(space) =
+            payload_id("space_id").and_then(|id| arkret_wire::SpaceId::new(id).ok())
         {
             return (
                 WireResourceSelector::space(self.realm_id.clone(), space),

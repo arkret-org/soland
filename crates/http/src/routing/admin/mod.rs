@@ -209,11 +209,11 @@ pub fn admin_router() -> Router {
     // Registered ahead of `router()` (the `{resource}` collection
     // wildcard) at the root so concrete admin resources take precedence.
     Router::with_path("admin")
-        .hoop(RequireAdmin::scope(arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ))
+        .hoop(RequireAdmin::scope(
+            arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ,
+        ))
         .push(Router::with_path("realms").post(collection::admin_create_realm))
-        .push(
-            Router::with_path("realms/{realm_id}").get(collection::admin_get_realm),
-        )
+        .push(Router::with_path("realms/{realm_id}").get(collection::admin_get_realm))
         .push(
             Router::with_path("realms/{realm_id}/links")
                 .get(crate::routing::realms::admin_list_realm_links),

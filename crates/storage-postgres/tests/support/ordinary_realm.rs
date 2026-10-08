@@ -728,7 +728,7 @@ pub async fn open_discussion(pool: &PgPool, seed: &str) -> Discussion {
 }
 
 pub async fn open_discussion_with_history(pool: &PgPool, seed: &str, history: &str) -> Discussion {
-    let account = human_profile::admit(pool, &station(), "ordinary-founder").await;
+    let account = Box::pin(human_profile::admit(pool, &station(), "ordinary-founder")).await;
     let unit = bootstrap_unit_with_history_for_account(
         seed,
         "public",
@@ -736,7 +736,7 @@ pub async fn open_discussion_with_history(pool: &PgPool, seed: &str, history: &s
         &account,
         &arkret_wire::Did::new("did:web:ordinary-station.example").unwrap(),
     );
-    open_discussion_unit(pool, unit).await
+    Box::pin(open_discussion_unit(pool, unit)).await
 }
 
 pub async fn open_discussion_for_station(
@@ -767,6 +767,19 @@ pub async fn open_human_discussion(pool: &PgPool, seed: &str) -> Discussion {
 }
 
 async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitUnit) -> Discussion {
+    // The fixture owns separate transactions, not a suspended production
+    // transaction. An immediately awaited, cancellation-bound task removes
+    // the large scenario's poll frame from those real admission calls.
+    let pool = pool.clone();
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move { Box::pin(open_discussion_unit_inner(&pool, unit)).await });
+    tasks.join_next().await.unwrap().unwrap()
+}
+
+async fn open_discussion_unit_inner(
+    pool: &PgPool,
+    unit: OrdinaryRealmBootstrapCommitUnit,
+) -> Discussion {
     let unit = Box::pin(source_bootstrap(pool, unit)).await;
     unit.validate().unwrap();
     PgAuthorityCommitStore { pool: pool.clone() }
@@ -793,7 +806,7 @@ async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitU
         }}),
         at,
     );
-    let strand = source_request(pool, strand).await;
+    let strand = Box::pin(source_request(pool, strand)).await;
     uow.commit_event(strand.clone())
         .await
         .expect("create the discussion Strand");
@@ -809,7 +822,7 @@ async fn open_discussion_unit(pool: &PgPool, unit: OrdinaryRealmBootstrapCommitU
         }),
         at,
     );
-    let default = source_request(pool, default).await;
+    let default = Box::pin(source_request(pool, default)).await;
     uow.commit_event(default.clone())
         .await
         .expect("make the discussion Strand the Realm default");

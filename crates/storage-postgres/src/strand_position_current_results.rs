@@ -64,7 +64,15 @@ struct CountRow {
 }
 
 fn refused(reason: &str) -> PersistenceError {
-    PersistenceError::Conflict(format!("failed_precondition: {reason}"))
+    let code = match reason {
+        arkret_wire::ReasonCode::SPACE_NOT_ACTIVE => soland_storage::ConflictCode::SpaceNotActive,
+        arkret_wire::ReasonCode::SPACE_REALM_MISMATCH => {
+            soland_storage::ConflictCode::SpaceRealmMismatch
+        }
+        arkret_wire::ReasonCode::STRAND_NOT_ACTIVE => soland_storage::ConflictCode::StrandNotActive,
+        _ => soland_storage::ConflictCode::FailedPrecondition,
+    };
+    PersistenceError::Conflict(format!("{}: {reason}", code.as_str()))
 }
 
 /// Admit a placement against the same locked Realm cut as its covering Commit.
