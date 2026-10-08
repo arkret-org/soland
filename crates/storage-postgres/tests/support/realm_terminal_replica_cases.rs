@@ -1,5 +1,135 @@
 use super::*;
 
+/// A terminal notification cannot extend a departed holder's canonical prefix.
+/// A different joined member on the same Station preserves replication authority.
+#[tokio::test]
+async fn terminal_replication_respects_last_member_departure_after_restart() {
+    use arkret_models_collaboration::governance::realm_lifecycle::RealmTombstonePayload;
+    for another_member_remains in [false, true] {
+        let database = TestDatabase::lease().await;
+        let pool = database.pool();
+        let store = PgAuthorityCommitStore { pool: pool.clone() };
+        let unit = bootstrap_unit_with_join_rule("terminal-departure", "public");
+        let last = unit.transactions.last().unwrap();
+        let alice = remote_member("terminal-departure-alice");
+        let join = membership_request(last, alice.clone(), &alice, "join");
+        store
+            .install_committed_replica(&replica(&unit, &join, true))
+            .await
+            .unwrap();
+        Box::pin(anchor_at_join(
+            &store,
+            &join,
+            vec![joined_row(&join, &alice)],
+        ))
+        .await;
+        let mut previous = join.authority_commit.clone();
+        let mut basis = vec![RealmFanoutAuthorityWitness {
+            member_id: alice.clone(),
+            circle_membership_event_ref: None,
+            membership_event_ref: join.authority_commit.event.event_id.to_string(),
+        }];
+        if another_member_remains {
+            let bob = remote_member("terminal-departure-bob");
+            let bob_join = membership_request(&previous, bob.clone(), &bob, "join");
+            store
+                .install_committed_replica(&replica(&unit, &bob_join, false))
+                .await
+                .unwrap();
+            basis.push(RealmFanoutAuthorityWitness {
+                member_id: bob,
+                circle_membership_event_ref: None,
+                membership_event_ref: bob_join.authority_commit.event.event_id.to_string(),
+            });
+            previous = bob_join.authority_commit;
+        }
+        let leave = membership_request(&previous, alice.clone(), &alice, "leave");
+        store
+            .install_committed_replica(&replica(&unit, &leave, false))
+            .await
+            .unwrap();
+        assert_eq!(
+            member_state(&pool, &last.event.realm_id, &alice)
+                .await
+                .as_deref(),
+            Some("leave")
+        );
+        let before = terminal_persistent_rows(&pool).await;
+        let mut source = leave.authority_commit.clone();
+        source.producer_signer_fact = last.producer_signer_fact.clone();
+        let terminal = sourced(next_request(
+            &source,
+            arkret_wire::EventKind::RealmTombstone,
+            &founder(),
+            RealmTombstonePayload::new(
+                "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW"
+                    .parse()
+                    .unwrap(),
+                "migration after membership change",
+            )
+            .to_value()
+            .unwrap(),
+            last.commit.committed_at,
+        ));
+        // Recreate the store so authorization must come from durable facts.
+        let restarted = PgAuthorityCommitStore { pool: pool.clone() };
+        // This is the sender's production target/basis revalidation function,
+        // evaluated against durable membership facts, not a synthetic oracle.
+        assert_eq!(
+            restarted
+                .realm_fanout_still_owed(
+                    &terminal.authority_commit.event,
+                    &arkret_wire::DidCoreId::new(STATION).unwrap(),
+                    &member_station(),
+                    &basis,
+                    last.commit.committed_at,
+                )
+                .await
+                .unwrap(),
+            another_member_remains,
+        );
+        if another_member_remains {
+            assert_eq!(
+                restarted
+                    .install_committed_replica(&replica(&unit, &terminal, false))
+                    .await
+                    .unwrap(),
+                CommittedReplicaOutcome::Stored
+            );
+        } else {
+            for _ in 0..2 {
+                let error = restarted
+                    .install_committed_replica(&replica(&unit, &terminal, false))
+                    .await
+                    .unwrap_err();
+                assert_code(&error, ConflictCode::CapabilityDenied);
+                assert_eq!(terminal_persistent_rows(&pool).await, before);
+                assert!(
+                    restarted
+                        .committed_event(&terminal.authority_commit.event.event_id)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            assert!(
+                restarted
+                    .committed_event(&leave.authority_commit.event.event_id)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                restarted
+                    .committed_event(&join.authority_commit.event.event_id)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+    }
+}
+
 async fn terminal_persistent_rows(pool: &soland_storage_postgres::PgPool) -> serde_json::Value {
     use diesel_async::RunQueryDsl as _;
     #[derive(diesel::QueryableByName)]
