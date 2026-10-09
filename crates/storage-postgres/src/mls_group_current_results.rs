@@ -14,6 +14,7 @@
 //! Realm and Circle groups use their exact membership and authority cut. Sidecar
 //! groups need their own scope membership basis and stay closed.
 
+use arkret_event_draft::{EventMetadataSendGateExt as _, EventPayloadExt as _};
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
 use arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody;
 use arkret_models_crypto::MlsCommitPayload;
@@ -1021,6 +1022,19 @@ async fn require_live_claim(
     Ok(())
 }
 
+fn message_envelopes(
+    content: Option<arkret_models_crypto::EncryptedEnvelope>,
+    metadata: Option<arkret_models_crypto::EncryptedEnvelope>,
+) -> PersistenceResult<Option<Vec<arkret_models_crypto::EncryptedEnvelope>>> {
+    match (content, metadata) {
+        (Some(content), metadata) => Ok(Some(std::iter::once(content).chain(metadata).collect())),
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(PersistenceError::SchemaViolation(
+            "message encrypted_metadata requires encrypted_content".to_owned(),
+        )),
+    }
+}
+
 /// encryption-and-audit.md §2.5.2: the current MLS send gate of one accepted
 /// `ak.message.create` / `.revise` or `ak.reaction.add` / `.remove`, decided
 /// on the scope's `mls_group` row read in the accepting transaction. A
@@ -1033,100 +1047,57 @@ pub(crate) async fn require_mls_send_gate_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
 ) -> PersistenceResult<()> {
-    let envelopes = match event.kind {
-        EventKind::SpaceCreate | EventKind::StrandCreate => {
-            let object = event.payload.get("object").ok_or_else(|| {
-                PersistenceError::SchemaViolation("object create is missing its object".to_owned())
-            })?;
-            let encrypted = object.get("encrypted_metadata");
-            let plaintext = if event.kind == EventKind::SpaceCreate {
-                ["title", "summary", "labels", "avatar_blob_ref"]
-                    .iter()
-                    .any(|field| object.get(*field).is_some())
-            } else {
-                object.get("metadata").is_some()
-            };
-            if !plaintext && encrypted.is_none() {
-                return Ok(());
-            }
-            encrypted
-                .map(|value| {
-                    serde_json::from_value::<arkret_models_crypto::EncryptedEnvelope>(value.clone())
-                        .map(|envelope| vec![envelope])
-                        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
-                })
-                .transpose()?
+    let envelopes = if let Some(metadata) = event
+        .event_metadata_send_gate()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+    {
+        if metadata.user_metadata_present && !metadata.encrypted_metadata.is_empty() {
+            return Err(PersistenceError::SchemaViolation(
+                "metadata must not carry both plaintext fields and encrypted_metadata".to_owned(),
+            ));
         }
-        EventKind::SpaceUpdate | EventKind::StrandUpdate => {
-            let Some(patch) = event.payload.get("patch") else {
-                return Ok(());
-            };
-            let patch: arkret_wire::Patch = serde_json::from_value(patch.clone())
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            let user_metadata = patch.iter().any(|(path, _)| {
-                if event.kind == EventKind::SpaceUpdate {
-                    matches!(
-                        path.split('.').next(),
-                        Some(
-                            "title"
-                                | "summary"
-                                | "labels"
-                                | "avatar_blob_ref"
-                                | "encrypted_metadata"
-                        )
-                    )
-                } else {
-                    matches!(
-                        path.split('.').next(),
-                        Some("metadata" | "encrypted_metadata")
-                    )
-                }
-            });
-            if !user_metadata {
-                return Ok(());
-            }
-            let mut encrypted = None;
-            for (path, op) in patch.iter() {
-                if path.starts_with("encrypted_metadata.")
-                    || (path == "encrypted_metadata"
-                        && op.op() != arkret_wire::patch::PatchOpKind::Set)
-                {
-                    return Err(PersistenceError::SchemaViolation(
-                        "encrypted metadata requires a whole-envelope set".to_owned(),
-                    ));
-                }
-                if path == "encrypted_metadata" {
-                    encrypted = Some(vec![
-                        serde_json::from_value::<arkret_models_crypto::EncryptedEnvelope>(
-                            op.value().cloned().unwrap_or_default(),
-                        )
-                        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
-                    ]);
-                }
-            }
-            encrypted
+        if !metadata.user_metadata_present && metadata.encrypted_metadata.is_empty() {
+            return Ok(());
         }
-        EventKind::MessageCreate | EventKind::MessageRevise => {
-            soland_storage::message_create_envelopes(&event.payload)
-                .map_err(PersistenceError::SchemaViolation)?
+        if metadata.encrypted_metadata.is_empty() {
+            None
+        } else {
+            Some(metadata.encrypted_metadata)
         }
-        EventKind::ReactionAdd
-        | EventKind::ReactionRemove
-        | EventKind::AgentSidecarExchangeControl => event
-            .payload
-            .get("encrypted_payload")
-            .map(|value| {
-                serde_json::from_value::<arkret_models_crypto::EncryptedEnvelope>(value.clone())
-                    .map(|envelope| vec![envelope])
-                    .map_err(|error| {
-                        PersistenceError::SchemaViolation(format!(
-                            "encrypted application payload: {error}"
-                        ))
-                    })
-            })
-            .transpose()?,
-        _ => return Ok(()),
+    } else {
+        match event.kind {
+            EventKind::MessageCreate => {
+                let p = event
+                    .as_message_create()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+                message_envelopes(p.encrypted_content, p.encrypted_metadata)?
+            }
+            EventKind::MessageRevise => {
+                let p = event
+                    .as_message_revise()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+                message_envelopes(p.encrypted_content, p.encrypted_metadata)?
+            }
+            EventKind::ReactionAdd => event
+                .as_reaction_add()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                .encrypted_payload
+                .map(|envelope| vec![envelope]),
+            EventKind::ReactionRemove => event
+                .as_reaction_remove()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                .encrypted_payload
+                .map(|envelope| vec![envelope]),
+            EventKind::AgentSidecarExchangeControl => Some(vec![
+                event
+                    .as_agent_sidecar_exchange_control()
+                    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                    .encrypted_payload,
+            ]),
+            _ => return Ok(()),
+        }
     };
+
     let current = sql_query(
         "SELECT realm_id,current_commit_id,current_stream_position,value,public_state \
          FROM mls_group_current_results WHERE scope_key=$1 FOR SHARE",
@@ -1509,5 +1480,164 @@ mod tests {
         assert_eq!(advanced.current_commit_id, membership_commit.commit_id);
         assert_eq!(advanced.current_stream_position, 7);
         assert_eq!(advanced.public_state, seeded.public_state);
+    }
+}
+
+#[cfg(test)]
+mod typed_application_envelope_tests {
+    use super::*;
+
+    fn envelope(content_type: &str) -> arkret_models_crypto::EncryptedEnvelope {
+        arkret_models_crypto::EncryptedEnvelope {
+            version: "1.0".to_owned(),
+            content_type: content_type.to_owned(),
+            encryption_context: arkret_models_crypto::EncryptedEnvelopeEncryptionContext::standard(
+                7,
+                arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [7; 32]),
+            ),
+            ciphertext: "Y2lwaGVydGV4dA".to_owned(),
+        }
+    }
+
+    fn metadata_event(
+        kind: EventKind,
+        plaintext_key: &str,
+        plaintext: serde_json::Value,
+    ) -> arkret_wire::Event {
+        let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [1; 32],
+        ));
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:mixed-metadata-member.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:mixed-metadata-station.example").unwrap(),
+        ));
+        let mut object = match kind {
+            EventKind::SpaceCreate => serde_json::to_value(
+                arkret_models_collaboration::objects::space::Space::create_object(
+                    realm.clone(),
+                    "kanban",
+                    "Title",
+                    actor.clone(),
+                ),
+            )
+            .unwrap(),
+            EventKind::StrandCreate => serde_json::to_value(
+                arkret_models_collaboration::objects::strand::Strand::new_create(
+                    realm.clone(),
+                    "Title",
+                    actor.clone(),
+                ),
+            )
+            .unwrap(),
+            _ => unreachable!(),
+        };
+        let fields = object.as_object_mut().unwrap();
+        for key in ["title", "summary", "labels", "avatar_blob_ref", "metadata"] {
+            fields.remove(key);
+        }
+        fields.insert(plaintext_key.to_owned(), plaintext);
+        fields.insert(
+            "encrypted_metadata".to_owned(),
+            serde_json::to_value(envelope("application/vnd.arkret.strand-metadata+json")).unwrap(),
+        );
+        arkret_wire::test_support::raw_event_for_actor_at(
+            kind.as_str(),
+            arkret_wire::ScopeRef::Realm { realm_id: realm },
+            actor,
+            serde_json::json!({"object": object}),
+            chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[derive(Debug, PartialEq, diesel::QueryableByName)]
+    struct WriteCounts {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        events: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        commits: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        groups: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        spaces: i64,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        strands: i64,
+    }
+
+    async fn write_counts(conn: &mut AsyncPgConnection) -> WriteCounts {
+        sql_query("SELECT (SELECT COUNT(*) FROM canonical_events) AS events, (SELECT COUNT(*) FROM realm_commits) AS commits, (SELECT COUNT(*) FROM mls_group_current_results) AS groups, (SELECT COUNT(*) FROM space_current_results) AS spaces, (SELECT COUNT(*) FROM strand_current_results) AS strands")
+            .get_result(conn).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn postgres_send_gate_rejects_empty_or_null_plaintext_beside_ciphertext_without_writes() {
+        let database = crate::test_database::TestDatabase::lease().await;
+        let pool = database.pool();
+        let mut conn = pool.get().await.unwrap();
+        let before = write_counts(&mut conn).await;
+        for (kind, key, plaintext) in [
+            (EventKind::SpaceCreate, "labels", serde_json::json!([])),
+            (EventKind::SpaceCreate, "title", serde_json::Value::Null),
+            (
+                EventKind::SpaceCreate,
+                "avatar_blob_ref",
+                serde_json::Value::Null,
+            ),
+            (EventKind::StrandCreate, "metadata", serde_json::Value::Null),
+        ] {
+            let event = metadata_event(kind.clone(), key, plaintext);
+            let projection = event.event_metadata_send_gate().unwrap().unwrap();
+            assert!(projection.user_metadata_present, "{kind} {key}");
+            assert_eq!(projection.encrypted_metadata.len(), 1);
+            let error = require_mls_send_gate_in_connection(&mut conn, &event)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, PersistenceError::SchemaViolation(ref detail) if detail == "metadata must not carry both plaintext fields and encrypted_metadata"),
+                "{error}"
+            );
+            assert_eq!(
+                write_counts(&mut conn).await,
+                before,
+                "{kind} {key} wrote state"
+            );
+        }
+    }
+
+    #[test]
+    fn message_projection_retains_content_before_metadata_and_exact_epoch() {
+        let projected = message_envelopes(
+            Some(envelope("application/vnd.arkret.message+json")),
+            Some(envelope("application/vnd.arkret.message-metadata+json")),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(projected.len(), 2);
+        assert_eq!(
+            projected[0].content_type,
+            "application/vnd.arkret.message+json"
+        );
+        assert_eq!(
+            projected[1].content_type,
+            "application/vnd.arkret.message-metadata+json"
+        );
+        assert!(
+            projected
+                .iter()
+                .all(|envelope| envelope.encryption_context.epoch() == 7)
+        );
+    }
+
+    #[test]
+    fn metadata_alone_cannot_make_a_plaintext_message_pass_the_send_gate() {
+        assert!(message_envelopes(None, None).unwrap().is_none());
+        assert!(
+            message_envelopes(
+                None,
+                Some(envelope("application/vnd.arkret.message-metadata+json"))
+            )
+            .is_err()
+        );
     }
 }

@@ -1,11 +1,9 @@
 //! Read-only Signal governance from covered canonical cuts, never UI mirrors.
 use std::collections::{BTreeMap, BTreeSet};
 
+use arkret_event_draft::EventPayloadExt as _;
 use arkret_models_collaboration::events_payloads::realm::{
     RealmAuthorityResetPayload, RealmOwnerTransferPayload, RealmPolicyBundlePayload,
-};
-use arkret_models_collaboration::events_payloads::{
-    CapabilityGrantPayload, CapabilityRelinquishPayload, CapabilityRevokePayload,
 };
 use arkret_models_collaboration::governance::grant_constraint::{
     AuthorityRootRef, CapabilityGrant, CapabilityGrantStatus, CapabilitySubject, IssuerAuthorityRef,
@@ -43,10 +41,6 @@ struct Row {
 struct ValueRow {
     #[diesel(sql_type=Jsonb)]
     value: serde_json::Value,
-}
-fn payload<T: serde::de::DeserializeOwned>(event: &Event) -> PersistenceResult<T> {
-    serde_json::from_value(serde_json::to_value(&event.payload).map_err(unavailable)?)
-        .map_err(unavailable)
 }
 
 struct History {
@@ -494,16 +488,11 @@ impl Cut {
                     authority_generation: 0,
                     authority_event_ref: event.event_id.clone(),
                 });
-                self.direct = event
-                    .payload
-                    .get("object")
-                    .and_then(|o| o.get("purpose"))
-                    .and_then(|v| v.as_str())
-                    == Some("direct_conversation");
+                self.direct = event.as_realm_create().map_err(unavailable)?.object.purpose
+                    == arkret_models_collaboration::events_payloads::realm::RealmPurpose::DirectConversation;
             }
             EventKind::CircleCreate => {
-                let p: arkret_models_collaboration::events_payloads::circle::CircleCreatePayload =
-                    payload(event)?;
+                let p = event.as_circle_create().map_err(unavailable)?;
                 self.circle_states.insert(
                     arkret_wire::CircleId::from_event_id(&event.event_id),
                     p.object.state,
@@ -511,7 +500,12 @@ impl Cut {
             }
             EventKind::CircleArchive | EventKind::CircleRestore | EventKind::CircleTombstone => {
                 use arkret_models_collaboration::governance::circle::CircleState;
-                let p:arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload=payload(event)?;
+                let p = match event.kind {
+                    EventKind::CircleArchive => event.as_circle_archive(),
+                    EventKind::CircleRestore => event.as_circle_restore(),
+                    _ => event.as_circle_tombstone(),
+                }
+                .map_err(unavailable)?;
                 let circle =
                     arkret_wire::CircleId::new(p.target_ref.as_str()).map_err(unavailable)?;
                 let state = self
@@ -528,7 +522,7 @@ impl Cut {
                 };
             }
             EventKind::RealmOwnerTransfer => {
-                let p: RealmOwnerTransferPayload = payload(event)?;
+                let p = event.as_realm_owner_transfer().map_err(unavailable)?;
                 if self.root.is_none() && self.snapshot_root_generation.is_some() {
                     return Ok(());
                 }
@@ -565,7 +559,7 @@ impl Cut {
                 root.authority_event_ref = event.event_id.clone();
             }
             EventKind::CircleMemberState => {
-                let p: arkret_models_collaboration::events_payloads::circle::CircleMemberStatePayload = payload(event)?;
+                let p = event.as_circle_member_state().map_err(unavailable)?;
                 p.validate().map_err(unavailable)?;
                 let key = p.member_id.to_string();
                 if let Some(revision) = p.parent_membership_revision {
@@ -577,19 +571,15 @@ impl Cut {
                     .insert(key, (p.member_id, p.membership.as_str().to_owned()));
             }
             EventKind::MemberState => {
-                let member: ActorId = serde_json::from_value(
-                    event
-                        .payload
-                        .get("member_id")
-                        .cloned()
-                        .ok_or_else(|| unavailable("membership omits actor"))?,
-                )
-                .map_err(unavailable)?;
-                let membership = event
-                    .payload
-                    .get("membership")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| unavailable("membership omits state"))?;
+                let p = event.as_member_state().map_err(unavailable)?;
+                let member = p.member_id;
+                use arkret_models_collaboration::governance::membership_invite::MembershipPayloadState;
+                let membership = match p.membership {
+                    MembershipPayloadState::Join => "join",
+                    MembershipPayloadState::Knock => "knock",
+                    MembershipPayloadState::Leave => "leave",
+                    MembershipPayloadState::Ban => "ban",
+                };
                 self.members
                     .insert(member.to_string(), (member.clone(), membership.to_owned()));
                 self.member_revisions.insert(
@@ -614,7 +604,7 @@ impl Cut {
                 );
             }
             EventKind::CapabilityGrant => {
-                let p: CapabilityGrantPayload = payload(event)?;
+                let p = event.as_capability_grant().map_err(unavailable)?;
                 let b = p.grant;
                 let mut roots = Vec::new();
                 let mut depth = 1;
@@ -672,7 +662,7 @@ impl Cut {
                 self.grants.insert(grant.id.clone(), grant);
             }
             EventKind::CapabilityRevoke => {
-                let p: CapabilityRevokePayload = payload(event)?;
+                let p = event.as_capability_revoke().map_err(unavailable)?;
                 let grant = self
                     .grants
                     .get_mut(&p.grant_id)
@@ -682,7 +672,7 @@ impl Cut {
                 grant.revoked_at = Some(event.created_at);
             }
             EventKind::CapabilityRelinquish => {
-                let p: CapabilityRelinquishPayload = payload(event)?;
+                let p = event.as_capability_relinquish().map_err(unavailable)?;
                 let grant = self
                     .grants
                     .get_mut(&p.grant_id)
@@ -692,29 +682,14 @@ impl Cut {
                 grant.updated_at = Some(event.created_at);
             }
             EventKind::RealmPolicyBundle => {
-                self.policy = Some(payload(event)?);
+                self.policy = Some(event.as_realm_policy_bundle().map_err(unavailable)?);
             }
             EventKind::RealmLink => {
-                let target: RealmId = serde_json::from_value(
-                    event
-                        .payload
-                        .get("target_realm_id")
-                        .cloned()
-                        .ok_or_else(|| unavailable("Realm link target missing"))?,
-                )
-                .map_err(unavailable)?;
-                let kind = event
-                    .payload
-                    .get("link_kind")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| unavailable("Realm link kind missing"))?;
-                let status = event
-                    .payload
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| unavailable("Realm link status missing"))?;
-                self.links
-                    .insert((target, kind.to_owned()), status.to_owned());
+                let p = event.as_realm_link().map_err(unavailable)?;
+                self.links.insert(
+                    (p.target_realm_id, p.link_kind.as_str().to_owned()),
+                    p.status.as_str().to_owned(),
+                );
             }
             EventKind::RealmArchive => self.archived = true,
             EventKind::RealmRestore => self.archived = false,
@@ -723,8 +698,7 @@ impl Cut {
             EventKind::RealmDestroy | EventKind::RealmTombstone => self.terminal = true,
             EventKind::DirectConversationBound => self.bound = true,
             EventKind::MlsGenesis => {
-                let p: arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload =
-                    payload(event)?;
+                let p = event.as_mls_genesis().map_err(unavailable)?;
                 p.validate().map_err(unavailable)?;
                 if p.effective_scope() != &event.scope_ref
                     || p.mls_group_id().map_err(unavailable)?
@@ -741,7 +715,7 @@ impl Cut {
                 self.cipher = Some(p.cipher_suite.as_str().to_owned());
             }
             EventKind::MlsCommit => {
-                let p: arkret_models_crypto::MlsCommitPayload = payload(event)?;
+                let p = event.as_mls_commit().map_err(unavailable)?;
                 if self.mls.as_ref() != Some(p.base_group_state_ref())
                     || self.mls_epoch != Some(p.base_epoch())
                 {
@@ -1199,4 +1173,109 @@ pub(crate) async fn recipient_realms(
         }
         Ok(result)
     }).await.map_err(PgTransactionError::into_persistence)
+}
+
+#[cfg(test)]
+mod typed_replay_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn realm_id() -> RealmId {
+        RealmId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x61; 32],
+        ))
+    }
+    fn at() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_800_000_000, 0).unwrap()
+    }
+    fn event(kind: EventKind, payload: serde_json::Value) -> Event {
+        arkret_wire::test_support::raw_event_for_actor_at(
+            kind.as_str(),
+            ScopeRef::Realm {
+                realm_id: realm_id(),
+            },
+            ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:signal-member.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:signal-station.example").unwrap(),
+            )),
+            payload,
+            at(),
+        )
+        .unwrap()
+    }
+    fn commit(event: &arkret_wire::Event, position: u64) -> arkret_wire::RealmCommit {
+        arkret_wire::RealmCommit {
+            producer_signer_fact_digest: None,
+            commit_id: arkret_wire::RealmCommitId::from_digest([position as u8; 32]),
+            realm_id: realm_id(),
+            stream_ref: arkret_wire::CommitStreamRef::Realm {
+                realm_id: realm_id(),
+            },
+            stream_position: position,
+            previous_commit_ref: Some(arkret_wire::RealmCommitId::from_digest([0x09; 32])),
+            event_ref: event.event_id.clone(),
+            governance_generation: 0,
+            authority_ref: arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(
+                arkret_wire::EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [0x61; 32],
+                ),
+            ),
+            committed_at: at(),
+            signature: arkret_wire::DetachedObjectSignature {
+                context: arkret_wire::DetachedSignatureContext::RealmCommit,
+                signature_algorithm: arkret_wire::DetachedSignatureAlgorithm::Ed25519,
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:mls-bump-station.example#authority",
+                )
+                .unwrap(),
+                signed_digest: arkret_wire::Hash::new(format!("sha256:{}", "3".repeat(64)))
+                    .unwrap(),
+                created_at: at(),
+                sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
+            },
+        }
+    }
+
+    #[test]
+    fn member_replay_preserves_all_closed_states_and_commit_revision() {
+        for (position, membership) in ["join", "knock", "leave", "ban"].into_iter().enumerate() {
+            let actor = event(EventKind::MemberState, json!({})).actor_id;
+            let event = event(
+                EventKind::MemberState,
+                json!({"member_id": actor, "membership": membership}),
+            );
+            let commit = commit(&event, position as u64 + 1);
+            let mut cut = Cut::default();
+            cut.apply(&commit, &event).unwrap();
+            assert_eq!(cut.members[&actor.to_string()].1, membership);
+            assert_eq!(
+                cut.member_revisions[&actor.to_string()].commit_id,
+                commit.commit_id
+            );
+            assert_eq!(
+                cut.member_revisions[&actor.to_string()].stream_position,
+                commit.stream_position
+            );
+            assert_eq!(cut.joined(&actor), membership == "join");
+        }
+    }
+
+    #[test]
+    fn malformed_member_replay_cannot_install_authority() {
+        let actor = event(EventKind::MemberState, json!({})).actor_id;
+        for payload in [
+            json!({"member_id": actor}),
+            json!({"member_id": actor, "membership": "active"}),
+            json!({"member_id": actor, "membership": "join", "unexpected": true}),
+        ] {
+            let event = event(EventKind::MemberState, payload);
+            let mut cut = Cut::default();
+            assert!(cut.apply(&commit(&event, 1), &event).is_err());
+            assert!(cut.members.is_empty());
+            assert!(cut.member_revisions.is_empty());
+        }
+    }
 }

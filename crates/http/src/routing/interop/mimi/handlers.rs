@@ -346,6 +346,14 @@ pub(super) async fn mimi_room_message(
             object.insert("encrypted_metadata".into(), metadata.clone());
         }
     }
+    let event_payload = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::message::MessageCreatePayload,
+    >(event_payload)
+    .map_err(|error| {
+        mimi_admission_error(soland_services::ServiceError::SchemaViolation(
+            error.to_string(),
+        ))
+    })?;
     let event_id = persist_mimi_canonical_message_event(
         state,
         &realm_id,
@@ -673,7 +681,7 @@ async fn verify_mimi_key_material_request_proofs(
 /// The originator is the mandatory `requester_actor_id` field, and the proof
 /// issuer is that complete Actor rather than its signing principal: the
 /// correlation is only as strong as the identity the signature froze. Ruling
-/// `tasks/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md`.
+/// `arkret-spec/spec/v1/zh/extensions/mimi-interop.md section 10`.
 async fn verify_mimi_request_consent_proofs(
     state: &AppState,
     body: &MimiRequestConsentRequestBody,
@@ -945,7 +953,7 @@ async fn verify_mimi_consent_correlation(
     // core here let the same principal's account on another Station accept a
     // consent addressed to this one; section 6.1.1.2 keys the holder dimension
     // on the complete AccountId. Ruling
-    // tasks/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md.
+    // arkret-spec/spec/v1/zh/extensions/mimi-interop.md section 10.
     let Some(body_holder_account_id) = body.actor_id.as_account_id() else {
         return Err(mimi_consent_correlation_unavailable());
     };
@@ -1194,9 +1202,16 @@ pub(super) async fn mimi_report_abuse(
                 .map_err(|e| AppError::internal(e.to_string()))?,
         );
     }
-    let event = crate::state::author_mimi_event(
+    let payload = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload,
+    >(payload)
+    .map_err(|e| {
+        mimi_admission_error(soland_services::ServiceError::SchemaViolation(
+            e.to_string(),
+        ))
+    })?;
+    let event = crate::state::author_mimi_event::<arkret_wire::event_spec::SelfModerationReport>(
         state,
-        arkret_wire::EventKind::SelfModerationReport,
         claim.scope_ref.clone(),
         payload,
     )
@@ -1534,7 +1549,7 @@ mod consent_proof_tests {
 
     /// Ruling:
     ///
-    /// tasks/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md
+    /// arkret-spec/spec/v1/zh/extensions/mimi-interop.md section 10
     ///
     /// The holder is
     /// compared as a complete AccountId. Before it, the correlation stored a principal core

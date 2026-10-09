@@ -2,6 +2,7 @@
 //! Target admission reads only signed envelopes and public Strand axes; it
 //! never decides whether a basis is the current plaintext schedule winner.
 
+use arkret_event_draft::EventPayloadExt as _;
 use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Binary, Bool, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -149,7 +150,7 @@ pub(crate) async fn commit_rsvp_current_result_in_connection(
         || basis.stream_position >= position
         || basis.stream_ref
             != serde_json::to_value(&commit.stream_ref).map_err(PersistenceError::database)?
-        || !basis_names_target(&basis, basis_id, &payload.event_ref)
+        || !basis_names_target(&basis, basis_id, &payload.event_ref)?
     {
         return Err(refused(
             "failed_precondition",
@@ -383,12 +384,144 @@ fn basis_names_target(
     basis: &BasisRow,
     basis_id: &arkret_wire::EventId,
     target: &arkret_wire::StrandId,
-) -> bool {
-    match basis.kind.as_str() {
-        "ak.strand.create" => arkret_wire::StrandId::from_event_id(basis_id) == *target,
-        "ak.strand.update" => {
-            basis.envelope["payload"]["target_ref"].as_str() == Some(target.as_str())
+) -> PersistenceResult<bool> {
+    let event: arkret_wire::Event =
+        serde_json::from_value(basis.envelope.clone()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("RSVP basis Event invalid: {error}"))
+        })?;
+    if event.event_id != *basis_id
+        || event.kind.as_str() != basis.kind
+        || event.realm_id.as_str() != basis.realm_id
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "RSVP basis row differs from its Event".to_owned(),
+        ));
+    }
+    match event.kind {
+        arkret_wire::EventKind::StrandCreate => {
+            event
+                .as_strand_create()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            Ok(arkret_wire::StrandId::from_event_id(basis_id) == *target)
         }
-        _ => false,
+        arkret_wire::EventKind::StrandUpdate => {
+            let payload = event
+                .as_strand_update()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            Ok(payload.target_ref == *target)
+        }
+        _ => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod typed_basis_tests {
+    use arkret_wire::{
+        AccountId, ActorId, DidCoreId, EventId, EventKind, RealmId, ScopeRef, StrandId,
+    };
+    use serde_json::json;
+
+    use super::*;
+
+    fn basis(kind: EventKind, payload: Value) -> (BasisRow, EventId) {
+        let realm = RealmId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [1; 32],
+        ));
+        let actor = ActorId::account(AccountId::new(
+            DidCoreId::new("ak:did_core:web:rsvp-member.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:rsvp-station.example").unwrap(),
+        ));
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
+            kind.as_str(),
+            ScopeRef::Realm {
+                realm_id: realm.clone(),
+            },
+            actor,
+            payload,
+            chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        )
+        .unwrap();
+        let id = event.event_id.clone();
+        (
+            BasisRow {
+                realm_id: realm.to_string(),
+                kind: kind.as_str().to_owned(),
+                envelope: serde_json::to_value(event).unwrap(),
+                stream_ref: json!({}),
+                stream_position: 1,
+            },
+            id,
+        )
+    }
+
+    fn target(byte: u8) -> StrandId {
+        StrandId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [byte; 32],
+        ))
+    }
+
+    #[test]
+    fn typed_update_basis_names_only_its_signed_target() {
+        let expected = target(2);
+        let (row, id) = basis(
+            EventKind::StrandUpdate,
+            json!({"target_ref": expected, "patch": {"metadata.title": {"$op": "set", "value": "Changed"}}}),
+        );
+        assert!(basis_names_target(&row, &id, &expected).unwrap());
+        assert!(!basis_names_target(&row, &id, &target(3)).unwrap());
+    }
+
+    #[test]
+    fn typed_create_basis_names_the_event_derived_strand() {
+        let realm = RealmId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [1; 32],
+        ));
+        let actor = ActorId::account(AccountId::new(
+            DidCoreId::new("ak:did_core:web:rsvp-member.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:rsvp-station.example").unwrap(),
+        ));
+        let strand = arkret_models_collaboration::objects::strand::Strand::new_create(
+            realm, "Schedule", actor,
+        );
+        let (row, id) = basis(EventKind::StrandCreate, json!({"object": strand}));
+        assert!(basis_names_target(&row, &id, &StrandId::from_event_id(&id)).unwrap());
+        assert!(!basis_names_target(&row, &id, &target(3)).unwrap());
+    }
+
+    #[test]
+    fn basis_rejects_row_identity_drift_and_malformed_payloads() {
+        let expected = target(2);
+        let (mut row, id) = basis(
+            EventKind::StrandUpdate,
+            json!({"target_ref": expected, "patch": {}}),
+        );
+        row.kind = EventKind::StrandCreate.as_str().to_owned();
+        assert!(basis_names_target(&row, &id, &expected).is_err());
+        row.kind = EventKind::StrandUpdate.as_str().to_owned();
+        assert!(
+            basis_names_target(
+                &row,
+                &EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [4; 32]),
+                &expected
+            )
+            .is_err()
+        );
+        row.realm_id = RealmId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [5; 32],
+        ))
+        .to_string();
+        assert!(basis_names_target(&row, &id, &expected).is_err());
+        for payload in [
+            json!({"target_ref": expected}),
+            json!({"strand_id": expected, "patch": {}}),
+            json!({"target_ref": expected, "patch": {}, "unexpected": true}),
+        ] {
+            let (row, id) = basis(EventKind::StrandUpdate, payload);
+            assert!(basis_names_target(&row, &id, &expected).is_err());
+        }
     }
 }

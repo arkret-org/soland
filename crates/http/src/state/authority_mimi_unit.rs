@@ -8,46 +8,29 @@ use super::authority_self_event_unit::{
     AdmittedProducer, SelfEventUnitEffects, commit_event_unit_with_idempotency,
 };
 
-pub(crate) async fn author_mimi_event(
+pub(crate) async fn author_mimi_event<K: arkret_event_draft::EventSpec>(
     state: &AppState,
-    kind: EventKind,
     scope: ScopeRef,
-    payload: serde_json::Value,
+    payload: K::Payload,
 ) -> ServiceResult<Event> {
+    if !matches!(
+        K::KIND,
+        EventKind::MessageCreate | EventKind::SelfModerationReport
+    ) {
+        return Err(ServiceError::SchemaViolation(
+            "unsupported MIMI service Event".into(),
+        ));
+    }
     let (_, method) = state
         .current_service_receipt_binding()
         .await
         .map_err(ServiceError::internal)?;
     let actor = ActorId::service(state.service_core_id());
     let created_at = chrono::Utc::now();
-    let mut draft = match kind {
-        EventKind::MessageCreate => {
-            arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::MessageCreate>::new(
-                scope,
-                actor,
-                serde_json::from_value(payload)
-                    .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?,
-            )
-            .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?
-            .author_with_digest_suite(created_at, arkret_canonical::DigestSuite::Sha256)
-        }
-        EventKind::SelfModerationReport => arkret_event_draft::TypedEventDraft::<
-            arkret_wire::event_spec::SelfModerationReport,
-        >::new(
-            scope,
-            actor,
-            serde_json::from_value(payload)
-                .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?,
-        )
+    let mut draft = arkret_event_draft::TypedEventDraft::<K>::new(scope, actor, payload)
         .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?
-        .author_with_digest_suite(created_at, arkret_canonical::DigestSuite::Sha256),
-        _ => {
-            return Err(ServiceError::SchemaViolation(
-                "unsupported MIMI service Event".into(),
-            ));
-        }
-    }
-    .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
+        .author_with_digest_suite(created_at, arkret_canonical::DigestSuite::Sha256)
+        .map_err(|e| ServiceError::SchemaViolation(e.to_string()))?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         state.service_did(),
