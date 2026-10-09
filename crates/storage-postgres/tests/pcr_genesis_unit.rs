@@ -11,7 +11,7 @@ use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput;
 use arkret_models_crypto::{
     AcceptedSecurityTransactionStep, BackupActiveSeriesPointer, BackupObjectRef,
     BackupRotationBinding, BackupRotationKind, BackupRotationPlan, PreparedEventBatchRequest,
-    PreparedEventUnit, SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+    PreparedEventUnit, SecurityRotationRevokeCommandDecision, SecurityRotationRevokeCommandOutcome,
     SecurityRotationRevokeProposal, SecurityRotationTransactionCreateRequest,
     SecurityTransactionAcceptor, SecurityTransactionCreateRequest, SecurityTransactionPreparedPlan,
     SecurityTransactionStep, SecurityTransactionTerminalOutcome,
@@ -1231,7 +1231,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: revoke.event_id.clone(),
         covering_commit_id: covering.commit_id.clone(),
-        result: SecurityRotationRevokeCommandResult::Accepted,
+        result: SecurityRotationRevokeCommandDecision::Accepted,
         decided_at: at + chrono::TimeDelta::seconds(2),
     });
     let terminal = RevokeCommandTerminalWrite {
@@ -1271,7 +1271,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             .as_ref()
             .unwrap()
             .result,
-        SecurityRotationRevokeCommandResult::Accepted
+        SecurityRotationRevokeCommandDecision::Accepted
     );
     assert_eq!(
         transactions
@@ -1395,7 +1395,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
     rejected.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: reject_event.event_id,
         covering_commit_id: reject_commit.commit_id.clone(),
-        result: SecurityRotationRevokeCommandResult::Rejected,
+        result: SecurityRotationRevokeCommandDecision::Rejected,
         decided_at: at + chrono::TimeDelta::seconds(3),
     });
     rejected.resource.terminal_outcome = Some(SecurityTransactionTerminalOutcome::Aborted {
@@ -1423,7 +1423,7 @@ async fn security_rotation_revoke_proposal_is_one_atomic_pcr_write() {
             .as_ref()
             .unwrap()
             .result,
-        SecurityRotationRevokeCommandResult::Rejected
+        SecurityRotationRevokeCommandDecision::Rejected
     );
     assert_eq!(
         transactions
@@ -2687,7 +2687,7 @@ async fn accepted_revoke_terminal_stops_only_the_target_of_two_active_devices() 
     accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: revoke.event_id.clone(),
         covering_commit_id: covering.commit_id.clone(),
-        result: SecurityRotationRevokeCommandResult::Accepted,
+        result: SecurityRotationRevokeCommandDecision::Accepted,
         decided_at,
     });
     let terminal = RevokeCommandTerminalWrite {
@@ -3248,7 +3248,7 @@ async fn security_rotation_worker_units_and_local_commit_are_atomic() {
         accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
             proposal_event_id: revoke.event_id.clone(),
             covering_commit_id: covering.commit_id.clone(),
-            result: SecurityRotationRevokeCommandResult::Accepted,
+            result: SecurityRotationRevokeCommandDecision::Accepted,
             decided_at,
         });
         let decided = transactions
@@ -4210,14 +4210,14 @@ async fn recovery_policy_publication_unit_ratchets_under_the_pcr_cut() {
         .find(|entry| {
             matches!(
                 entry,
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::Policy { policy_id },
                     ..
                 } if policy_id.as_str() == v2_id
             )
         })
         .expect("recovery policy is materialized as registered policy current");
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         revision,
         source_stream_ref,
         value,

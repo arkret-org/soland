@@ -529,7 +529,7 @@ async fn try_advance_rotation_revoke(
     transaction_id: &str,
 ) -> Result<(), soland_services::ServiceError> {
     use arkret_models_crypto::{
-        SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+        SecurityRotationRevokeCommandDecision, SecurityRotationRevokeCommandOutcome,
         SecurityRotationRevokeProposal,
     };
     use soland_services::ServiceError;
@@ -637,7 +637,7 @@ async fn try_advance_rotation_revoke(
     let outcome = SecurityRotationRevokeCommandOutcome {
         proposal_event_id: proposal.proposal_event_id,
         covering_commit_id: proposal.covering_commit_id.clone(),
-        result: SecurityRotationRevokeCommandResult::Accepted,
+        result: SecurityRotationRevokeCommandDecision::Accepted,
         decided_at,
     };
     let mut decided = proposed;
@@ -715,7 +715,7 @@ async fn expire_rotation_revoke(
     mut transaction: SecurityTransactionRecord,
 ) -> Result<(), soland_services::ServiceError> {
     use arkret_models_crypto::{
-        SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+        SecurityRotationRevokeCommandDecision, SecurityRotationRevokeCommandOutcome,
     };
     use soland_services::identity::RevokeCommandTerminalWrite;
 
@@ -730,7 +730,7 @@ async fn expire_rotation_revoke(
     transaction.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: proposal.proposal_event_id,
         covering_commit_id: proposal.covering_commit_id,
-        result: SecurityRotationRevokeCommandResult::Rejected,
+        result: SecurityRotationRevokeCommandDecision::Rejected,
         decided_at: expires_at,
     });
     state

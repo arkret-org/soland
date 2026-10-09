@@ -6,7 +6,7 @@ mod ordinary_realm;
 
 use arkret_wire::{
     CircleId, CommitStreamRef, CurrentSelector, EventKind, MessageId, ScopeRef, StrandId,
-    TypedCurrentResult,
+    TypedCurrentRow,
 };
 use diesel::sql_types::BigInt;
 use diesel_async::RunQueryDsl;
@@ -249,7 +249,7 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
             .current_state_entries
             .iter()
             .any(|row| matches!(row,
-                TypedCurrentResult::Value {
+                TypedCurrentRow::Value {
                     selector: CurrentSelector::Strand { strand_id: subject },
                     source_stream_ref,
                     ..
@@ -361,7 +361,7 @@ async fn circle_strand_and_plaintext_poll_require_exact_scope_and_current_member
             .current_state_entries
             .iter()
             .any(|row| matches!(row,
-                TypedCurrentResult::Value {
+                TypedCurrentRow::Value {
                     selector: CurrentSelector::Strand { strand_id: subject },
                     ..
                 } if subject == &strand_id

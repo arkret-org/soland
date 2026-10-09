@@ -47,7 +47,7 @@ fn bootstrap_snapshot(
     realm: &arkret_wire::RealmId,
     generation: u64,
     heads: &[arkret_wire::CommitStreamHead],
-    entries: &[arkret_wire::TypedCurrentResult],
+    entries: &[arkret_wire::TypedCurrentRow],
 ) -> arkret_wire::RealmStateSnapshot {
     let at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let mut snapshot = arkret_wire::RealmStateSnapshot {
@@ -1000,7 +1000,7 @@ fn replica(
 async fn anchor_at_join(
     store: &PgAuthorityCommitStore,
     join: &EventCommitRequest,
-    entries: Vec<arkret_wire::TypedCurrentResult>,
+    entries: Vec<arkret_wire::TypedCurrentRow>,
 ) {
     let commit = &join.authority_commit.commit;
     store
@@ -1039,9 +1039,9 @@ async fn anchor_at_join(
 fn joined_row(
     join: &EventCommitRequest,
     member: &arkret_wire::ActorId,
-) -> arkret_wire::TypedCurrentResult {
+) -> arkret_wire::TypedCurrentRow {
     let commit = &join.authority_commit.commit;
-    arkret_wire::TypedCurrentResult::Value {
+    arkret_wire::TypedCurrentRow::Value {
         selector: arkret_wire::CurrentSelector::MemberState {
             actor_id: member.clone(),
         },
@@ -2919,11 +2919,11 @@ async fn member_account_snapshot_preserves_governance_and_exact_replica_cut() {
     ));
 }
 
-fn row_selectors(entries: &[arkret_wire::TypedCurrentResult]) -> Vec<arkret_wire::CurrentSelector> {
+fn row_selectors(entries: &[arkret_wire::TypedCurrentRow]) -> Vec<arkret_wire::CurrentSelector> {
     entries
         .iter()
         .map(|entry| match entry {
-            arkret_wire::TypedCurrentResult::Value { selector, .. } => selector.clone(),
+            arkret_wire::TypedCurrentRow::Value { selector, .. } => selector.clone(),
         })
         .collect()
 }
@@ -3024,7 +3024,7 @@ async fn account_snapshot_serves_joined_member_floor() {
     assert!(founder_rows.contains(&founder_message));
     let mut expected = full.current_state_entries.clone();
     expected.retain(|entry| {
-        !matches!(entry, arkret_wire::TypedCurrentResult::Value { selector, .. } if selector == &founder_message)
+        !matches!(entry, arkret_wire::TypedCurrentRow::Value { selector, .. } if selector == &founder_message)
     });
     assert_eq!(
         bob_cut.current_state_entries, expected,

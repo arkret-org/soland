@@ -1125,9 +1125,9 @@ pub(crate) async fn commit_binding_current_result_in_connection(
 pub(crate) async fn guard_binding_snapshot_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
-    entry: &arkret_wire::TypedCurrentResult,
+    entry: &arkret_wire::TypedCurrentRow,
 ) -> PersistenceResult<()> {
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         selector,
         source_stream_ref,
         revision,
@@ -1204,11 +1204,11 @@ pub(crate) async fn guard_binding_snapshot_in_connection(
 pub(crate) async fn install_binding_snapshot_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
-    entry: &arkret_wire::TypedCurrentResult,
+    entry: &arkret_wire::TypedCurrentRow,
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
     guard_binding_snapshot_in_connection(conn, realm_id, entry).await?;
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         selector,
         revision,
         value,

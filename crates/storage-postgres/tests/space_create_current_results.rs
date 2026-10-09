@@ -605,7 +605,7 @@ async fn space_parent_attach_detach_cases() {
     .unwrap()
     .unwrap();
     assert!(visible_foreign.current_state_entries.iter().any(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value {selector: arkret_wire::CurrentSelector::Space {space_id}, revision, value, ..}
+        arkret_wire::TypedCurrentRow::Value {selector: arkret_wire::CurrentSelector::Space {space_id}, revision, value, ..}
             if space_id == &foreign_id && value == &foreign_current.value
                 && revision.commit_id.as_str() == foreign_current.current_commit_id
                 && revision.stream_position as i64 == foreign_current.current_stream_position
@@ -916,7 +916,7 @@ async fn space_create_root_and_child_have_three_sibling_results_and_exact_replay
         ] {
             assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
                 entry,
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: found,
                     revision,
                     value,

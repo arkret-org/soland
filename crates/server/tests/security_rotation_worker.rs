@@ -4,7 +4,7 @@ use arkret_models_collaboration::events_payloads::{
 use arkret_models_crypto::{
     AcceptedSecurityTransactionStep as AcceptedStep, BackupObjectRef, BackupRotationBinding,
     BackupRotationKind, BackupRotationPlan, PreparedEventBatchRequest, PreparedEventUnit,
-    SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+    SecurityRotationRevokeCommandDecision, SecurityRotationRevokeCommandOutcome,
     SecurityRotationRevokeProposal, SecurityRotationTransactionCreateRequest,
     SecurityTransactionAcceptor, SecurityTransactionCreateRequest, SecurityTransactionPreparedPlan,
     SecurityTransactionStep,
@@ -249,7 +249,7 @@ async fn erase_fixture() -> EraseFixture {
     resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: revoke.event_id,
         covering_commit_id: pointer_commit.commit_id.clone(),
-        result: SecurityRotationRevokeCommandResult::Accepted,
+        result: SecurityRotationRevokeCommandDecision::Accepted,
         decided_at: now,
     });
     resource.accepted_steps = (0..3)
@@ -472,7 +472,7 @@ async fn accept_authorizer_revocation(
     accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: proposal.proposal_event_id,
         covering_commit_id: proposal.covering_commit_id,
-        result: SecurityRotationRevokeCommandResult::Accepted,
+        result: SecurityRotationRevokeCommandDecision::Accepted,
         decided_at,
     });
     persistence

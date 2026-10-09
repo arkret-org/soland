@@ -218,7 +218,7 @@ async fn rsvp_current_accepts_encrypted_entry_and_rejects_without_partial_commit
         .expect("joined responder sees the complete RSVP current");
     assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
         entry,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::Rsvp {
                 event_ref,
                 occurrence: None,

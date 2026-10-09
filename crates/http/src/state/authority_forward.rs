@@ -378,7 +378,7 @@ async fn request_origin_controller_gate(
 ) -> ServiceResult<arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestation>
 {
     use arkret_models_identity::agent_signer_evidence::{
-        ControllerAccountGateIssuanceInput, ControllerAccountGateIssuanceResult,
+        ControllerAccountGateIssuanceInput, ControllerAccountGateIssuanceOutcome,
     };
     let channel = state
         .config()
@@ -430,7 +430,7 @@ async fn request_origin_controller_gate(
         }
         bytes.extend_from_slice(&chunk);
     }
-    let outcome: ControllerAccountGateIssuanceResult =
+    let outcome: ControllerAccountGateIssuanceOutcome =
         serde_json::from_slice(&bytes).map_err(|_| {
             temporarily_unavailable("controller gate outcome is not closed typed material")
         })?;

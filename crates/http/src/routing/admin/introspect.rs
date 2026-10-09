@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::session_grants::{
-    SessionGrantValidationByJwt, SessionGrantValidationInput, SessionGrantValidationResult,
+    SessionGrantValidationByJwt, SessionGrantValidationInput, SessionGrantValidationOutcome,
 };
 use arkret_models_identity::admin_grant::{
     SessionGrantAdminIntrospectionStatus, SessionGrantIntrospection,
@@ -117,7 +117,7 @@ fn session_grant_status_wire(status: SessionGrantAdminIntrospectionStatus) -> St
 }
 
 fn admin_grant_from_introspection_outcome(
-    outcome: SessionGrantValidationResult,
+    outcome: SessionGrantValidationOutcome,
 ) -> Result<SessionGrantIntrospection, AppError> {
     if !outcome.active || outcome.status != SessionGrantAdminIntrospectionStatus::Active {
         return Err(crate::app_error!(
@@ -287,7 +287,7 @@ pub(crate) async fn introspect_admin_scopes(
         ));
     }
     let outcome = response
-        .json::<SessionGrantValidationResult>()
+        .json::<SessionGrantValidationOutcome>()
         .await
         .map_err(|error| {
             crate::app_error!(

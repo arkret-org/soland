@@ -28,7 +28,7 @@ pub(crate) async fn read_agent_current_result(
     pool: &super::PgPool,
     realm_id: &arkret_wire::RealmId,
     selector: &arkret_wire::CurrentSelector,
-) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
+) -> PersistenceResult<Option<arkret_wire::TypedCurrentRow>> {
     let (query, current_key) = match selector {
         arkret_wire::CurrentSelector::AgentInteraction { agent_account_id } => (
             "SELECT result.current_commit_id,result.current_stream_position,result.value,COALESCE(covering.stream_ref,replica.source_stream_ref) AS source_stream_ref FROM agent_interaction_current_results result LEFT JOIN realm_commits covering ON covering.commit_id=result.current_commit_id AND covering.stream_position=result.current_stream_position AND covering.realm_id=result.realm_id LEFT JOIN replica_authorization_rows replica ON replica.realm_id=result.realm_id AND replica.selector=jsonb_build_object('kind','agent_interaction','agent_account_id',result.agent_account_id) AND replica.current_commit_id=result.current_commit_id AND replica.current_stream_position=result.current_stream_position AND replica.value=result.value WHERE result.realm_id=$1 AND result.current_key=$2",
@@ -68,7 +68,7 @@ pub(crate) async fn read_agent_current_result(
         .optional()
         .map_err(PersistenceError::database)?;
     row.map(|row| {
-        Ok(arkret_wire::TypedCurrentResult::Value {
+        Ok(arkret_wire::TypedCurrentRow::Value {
             selector: selector.clone(),
             source_stream_ref: serde_json::from_value(row.source_stream_ref.ok_or_else(|| {
                 PersistenceError::Internal(

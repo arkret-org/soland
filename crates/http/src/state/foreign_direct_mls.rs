@@ -3,7 +3,7 @@
 use arkret_models_collaboration::events_payloads::MlsGenesisPayload;
 use arkret_models_collaboration::mls_group_state_material::MlsMemberGroupStateMaterialReadRequestBody;
 use arkret_models_crypto::MlsCommitPayload;
-use arkret_wire::{ActorId, EventKind, MlsGroupCurrent, RealmId, ScopeRef, TypedCurrentResult};
+use arkret_wire::{ActorId, EventKind, MlsGroupCurrent, RealmId, ScopeRef, TypedCurrentRow};
 use soland_storage::ForeignDirectMlsInput;
 
 use super::AppState;
@@ -45,7 +45,7 @@ pub(crate) async fn refresh(
         let Some(input) = selected else {
             return Ok(false);
         };
-        let TypedCurrentResult::Value { value, .. } = &input.current;
+        let TypedCurrentRow::Value { value, .. } = &input.current;
         let current: MlsGroupCurrent =
             serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
         let (group_info, tree) = if input.base.is_none() {
@@ -235,7 +235,7 @@ fn replay(
     let scope = ScopeRef::Realm {
         realm_id: input.realm_id.clone(),
     };
-    let TypedCurrentResult::Value {
+    let TypedCurrentRow::Value {
         selector,
         source_stream_ref,
         revision,
@@ -641,7 +641,7 @@ mod tests {
                 service_id: DidCoreId::new("ak:did_core:web:governor.example").unwrap(),
                 generation: 0,
                 head: head.clone(),
-                current: TypedCurrentResult::Value {
+                current: TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::MlsGroup { scope_ref: scope },
                     source_stream_ref: head.stream_ref.clone(),
                     revision: CurrentRevision {
@@ -710,7 +710,7 @@ mod tests {
                     (bad.history[0].0.clone(), bad.history[0].1.clone())
                 }
                 _ => {
-                    let TypedCurrentResult::Value {
+                    let TypedCurrentRow::Value {
                         value,
                         source_stream_ref,
                         revision,
@@ -804,7 +804,7 @@ mod tests {
             stream_position: last.stream_position,
         };
         input.replay_head = input.head.clone();
-        let TypedCurrentResult::Value { revision, .. } = &mut input.current;
+        let TypedCurrentRow::Value { revision, .. } = &mut input.current;
         *revision = CurrentRevision {
             commit_id: last.commit_id.clone(),
             stream_position: last.stream_position,
@@ -835,7 +835,7 @@ mod tests {
             .bind::<Text,_>(&stream_key).bind::<Text,_>(input.realm_id.as_str()).bind::<Text,_>(opening.commit_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(input.caller.as_account_id().unwrap()).unwrap()).bind::<Text,_>(input.head.commit_id.as_str()).bind::<BigInt,_>(input.head.stream_position as i64).execute(&mut conn).await.unwrap();
         diesel::sql_query("INSERT INTO replica_authorization_cuts(realm_id,source_stream_ref,head_commit_id,head_stream_position,verified_at) VALUES($1,$2,$3,$4,now())")
             .bind::<Text,_>(input.realm_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(&input.head.stream_ref).unwrap()).bind::<Text,_>(input.head.commit_id.as_str()).bind::<BigInt,_>(input.head.stream_position as i64).execute(&mut conn).await.unwrap();
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             revision,

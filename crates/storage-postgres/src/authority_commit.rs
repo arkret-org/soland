@@ -158,18 +158,14 @@ fn decode_mimi_room_binding_current(
         mimi_room_uri: arkret_wire::MimiRoomUri::new(row.mimi_room_uri)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     };
-    let current =
-        arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingCurrentResult {
-            selector,
-            revision: arkret_wire::CurrentRevision {
-                commit_id: decode_text(row.current_commit_id, "MIMI current RealmCommit id")?,
-                stream_position: to_u64(
-                    row.current_stream_position,
-                    "MIMI current stream position",
-                )?,
-            },
-            value: decode_json(row.value, "MIMI current binding payload")?,
-        };
+    let current = arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingCurrentRow {
+        selector,
+        revision: arkret_wire::CurrentRevision {
+            commit_id: decode_text(row.current_commit_id, "MIMI current RealmCommit id")?,
+            stream_position: to_u64(row.current_stream_position, "MIMI current stream position")?,
+        },
+        value: decode_json(row.value, "MIMI current binding payload")?,
+    };
     current
         .validate()
         .map_err(|error| PersistenceError::Internal(error.to_string()))?;
@@ -1265,7 +1261,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
             let source_stream_ref = match row.source_stream_ref {
                 Some(source) => decode_json(source, "current source stream ref")?,
                 None => replica_evidence.iter().find_map(|entry| {
-                    let arkret_wire::TypedCurrentResult::Value {
+                    let arkret_wire::TypedCurrentRow::Value {
                         selector: proved_selector, source_stream_ref, revision: proved_revision, value,
                     } = entry;
                     (proved_selector == &selector && proved_revision == &revision && value == &row.value)
@@ -1274,7 +1270,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                     "snapshot current result has neither its covering Commit nor exact verified replica evidence".to_owned(),
                 ))?,
             };
-            Ok(arkret_wire::TypedCurrentResult::Value {
+            Ok(arkret_wire::TypedCurrentRow::Value {
                 selector, source_stream_ref, revision,
                 value: row.value,
             })
@@ -1284,7 +1280,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
     // not carry the private admission provenance required by governing tables.
     // Preserve them as read evidence without manufacturing those tables.
     for entry in replica_evidence {
-        let arkret_wire::TypedCurrentResult::Value { selector, .. } = &entry;
+        let arkret_wire::TypedCurrentRow::Value { selector, .. } = &entry;
         if matches!(
             selector,
             arkret_wire::CurrentSelector::RealmAuthorityRoot
@@ -1294,7 +1290,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
                 | arkret_wire::CurrentSelector::InviteDirectedInvitee { .. }
                 | arkret_wire::CurrentSelector::MlsGroup { .. }
         ) && !current_state_entries.iter().any(|current| {
-            let arkret_wire::TypedCurrentResult::Value {
+            let arkret_wire::TypedCurrentRow::Value {
                 selector: current_selector,
                 ..
             } = current;
@@ -1319,7 +1315,7 @@ pub(crate) async fn realm_state_snapshot_material_in_connection(
     let history_access = current_state_entries
         .iter()
         .find_map(|entry| match entry {
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::RealmHistoryAccess,
                 value,
                 ..
@@ -2614,7 +2610,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
         recipient: &arkret_wire::AccountId,
-    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryOutcome>> {
         crate::agent_producer_signer_keys::read_self_pcr(&self.pool, realm_id, selector, recipient)
             .await
     }
@@ -2623,7 +2619,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
-    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryOutcome>> {
         crate::agent_producer_signer_keys::read(&self.pool, realm_id, selector).await
     }
 
@@ -2714,9 +2710,9 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         submission: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
         exact_request_body: &[u8],
     ) -> PersistenceResult<
-        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult>,
+        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome>,
     > {
-        use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult;
+        use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome;
 
         let mut conn = pg_conn(&self.pool).await?;
         let key = submission.idempotency_key.to_string();
@@ -2740,7 +2736,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         {
             return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
         }
-        let stored: PcrGenesisAdmissionResult =
+        let stored: PcrGenesisAdmissionOutcome =
             decode_json(existing.result_json, "PCR genesis result")?;
         stored.validate_against(submission).map_err(invalid)?;
         Ok(Some(stored))
@@ -2752,7 +2748,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         queued_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<PcrGenesisCommitOutcome> {
         use arkret_models_collaboration::events_payloads::DeviceAuthorizePayload;
-        use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult;
+        use arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome;
 
         unit.validate().map_err(invalid)?;
         let submission = &unit.submission;
@@ -2772,7 +2768,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .transactions
             .clone()
             .map(|transaction| transaction.commit);
-        let result = PcrGenesisAdmissionResult {
+        let result = PcrGenesisAdmissionOutcome {
             principal_id: submission.principal_id.clone(),
             pcr_realm_id: submission.pcr_realm_id.clone(),
             accepted_device_id: authorize_payload.device_id.clone(),
@@ -2849,7 +2845,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                 if existing.realm_id != realm_id || existing.idempotency_key != key || existing.exact_request_body != unit.exact_request_body {
                     return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
                 }
-                let stored: PcrGenesisAdmissionResult = decode_json(existing.result_json, "PCR genesis result")?;
+                let stored: PcrGenesisAdmissionOutcome = decode_json(existing.result_json, "PCR genesis result")?;
                 stored.validate_against(submission).map_err(invalid)?;
                 return Ok(PcrGenesisCommitOutcome::Duplicate(stored));
             }
@@ -4264,7 +4260,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_wire::CurrentSelector,
-    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentRow>> {
         crate::agent_current_results::read_agent_current_result(&self.pool, realm_id, selector)
             .await
     }
@@ -4272,7 +4268,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
     async fn realm_default_strand_current(
         &self,
         realm_id: &arkret_wire::RealmId,
-    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentRow>> {
         crate::realm_default_strand_current_results::read_current(&self.pool, realm_id).await
     }
 

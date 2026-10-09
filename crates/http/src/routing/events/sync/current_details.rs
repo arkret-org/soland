@@ -17,7 +17,7 @@ use arkret_models_collaboration::sync_frames::account_subscribe::{
     AccountFilter, AccountSubscribeFrame, AccountSubscribeFrameKind, AccountSubscribeRealms,
     RealmSyncEntry,
 };
-use arkret_models_collaboration::sync_frames::current_results::AccountCurrentResult;
+use arkret_models_collaboration::sync_frames::current_results::AccountCurrentView;
 use arkret_models_collaboration::sync_frames::demand_sync::{
     ACCOUNT_SYNC_DEFAULT_WINDOW_LIMIT, ACCOUNT_SYNC_MAX_FRAME_BYTES, RealmDetailErrorCode,
     RealmDetailUnavailable,
@@ -158,7 +158,7 @@ fn window_entry(
         streams: Some(windows),
         streams_limited: window.streams_limited.then_some(true),
         window_snapshot_cursor: Some(cursor.to_owned()),
-        current: Some(AccountCurrentResult {
+        current: Some(AccountCurrentView {
             realm_id: realm.clone(),
             governance_generation: window.governance_generation,
             stream_heads: window.current_stream_heads,

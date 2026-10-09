@@ -350,7 +350,7 @@ async fn strand_update_current_cas_and_rejection_are_one_pg_cut() {
         .unwrap();
     assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
         entry,
-        arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::Strand { strand_id }, revision, value, .. }
+        arkret_wire::TypedCurrentRow::Value { selector: arkret_wire::CurrentSelector::Strand { strand_id }, revision, value, .. }
             if strand_id == &discussion.strand_id
                 && revision.commit_id.as_str() == after.current_commit_id
                 && revision.stream_position == after.current_stream_position as u64

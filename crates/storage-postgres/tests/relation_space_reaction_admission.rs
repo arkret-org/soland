@@ -644,7 +644,7 @@ async fn reactions_join_one_keyed_set_per_target_message() {
         .current_state_entries
         .iter()
         .find_map(|row| match row {
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::MessageReactions { target_ref },
                 source_stream_ref,
                 value,
@@ -840,7 +840,7 @@ async fn schema_subjects_are_immutable_and_policy_revisions_are_contiguous() {
         .unwrap()
         .unwrap();
     assert!(snapshot.current_state_entries.iter().any(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::SchemaDefinition { schema_id },value,.. }
+        arkret_wire::TypedCurrentRow::Value { selector: arkret_wire::CurrentSelector::SchemaDefinition { schema_id },value,.. }
             if schema_id=="ak.schema.local_test.v1" && value==&document)));
     let policy = Box::pin(ordinary_realm::source_request(&pool, next_request(
         &define.authority_commit,

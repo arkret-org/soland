@@ -691,7 +691,7 @@ fn disclose_requires_the_committed_required_members() {
     let stream = CommitStreamRef::Realm {
         realm_id: realm_id.clone(),
     };
-    let current = |selector: CurrentSelector, value: serde_json::Value| TypedCurrentResult::Value {
+    let current = |selector: CurrentSelector, value: serde_json::Value| TypedCurrentRow::Value {
         selector,
         source_stream_ref: stream.clone(),
         revision: CurrentRevision {

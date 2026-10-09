@@ -171,7 +171,7 @@ struct ExistingTerminalCurrent {
 async fn guard_snapshot_revisions(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
-    entries: &[arkret_wire::TypedCurrentResult],
+    entries: &[arkret_wire::TypedCurrentRow],
 ) -> PersistenceResult<()> {
     use arkret_wire::CurrentSelector as S;
     let terminal = diesel::sql_query(
@@ -186,7 +186,7 @@ async fn guard_snapshot_revisions(
     .map_err(PersistenceError::database)?;
     if let Some(terminal) = terminal {
         let retained = entries.iter().any(|entry| matches!(entry,
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: S::RealmTombstone, source_stream_ref, revision, value,
             } if source_stream_ref == &arkret_wire::CommitStreamRef::Realm {realm_id: realm_id.clone()}
                 && revision.commit_id.as_str() == terminal.current_commit_id
@@ -201,7 +201,7 @@ async fn guard_snapshot_revisions(
         }
     }
     for entry in entries {
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             revision,
@@ -628,7 +628,7 @@ pub(crate) async fn install_snapshot_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
     head: &arkret_wire::CommitStreamHead,
-    entries: &[arkret_wire::TypedCurrentResult],
+    entries: &[arkret_wire::TypedCurrentRow],
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
     install_snapshot_at_heads_in_connection(
@@ -647,7 +647,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
     realm_id: &arkret_wire::RealmId,
     head: &arkret_wire::CommitStreamHead,
     visible_heads: &[arkret_wire::CommitStreamHead],
-    entries: &[arkret_wire::TypedCurrentResult],
+    entries: &[arkret_wire::TypedCurrentRow],
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
     arkret_models_collaboration::exact_current_results::validate_calendar_current_pairs(
@@ -656,7 +656,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
     .map_err(malformed)?;
     let mut selectors = std::collections::BTreeSet::new();
     for entry in entries {
-        let arkret_wire::TypedCurrentResult::Value { selector, .. } = entry;
+        let arkret_wire::TypedCurrentRow::Value { selector, .. } = entry;
         let key = arkret_canonical::canonical_json_bytes(selector).map_err(malformed)?;
         if !selectors.insert(key) {
             return Err(malformed("a snapshot repeats a current selector"));
@@ -695,7 +695,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
         && !entries.iter().any(|entry| {
             matches!(
                 entry,
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::DirectConversationBinding { .. },
                     ..
                 }
@@ -729,7 +729,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
         .map_err(PersistenceError::database)?;
     }
     for entry in entries {
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             revision,
@@ -1108,7 +1108,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
         }
     }
     for entry in entries {
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             revision,
@@ -1116,7 +1116,7 @@ pub(crate) async fn install_snapshot_at_heads_in_connection(
         } = entry;
         if let arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id } = selector {
             let paired = entries.iter().find_map(|entry| {
-                let arkret_wire::TypedCurrentResult::Value { selector, source_stream_ref: stream, revision: basis, value } = entry;
+                let arkret_wire::TypedCurrentRow::Value { selector, source_stream_ref: stream, revision: basis, value } = entry;
                 matches!(selector, arkret_wire::CurrentSelector::Strand { strand_id: id } if id == strand_id)
                     .then_some((stream, basis, value))
             }).ok_or_else(|| malformed("Calendar source has no paired Strand"))?;
@@ -1199,7 +1199,7 @@ pub(crate) async fn advance_in_connection(
             crate::replica_authorization::save_row(
                 conn,
                 &event.realm_id,
-                &arkret_wire::TypedCurrentResult::Value {
+                &arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::DirectConversationBinding { pair_key },
                     source_stream_ref: commit.stream_ref.clone(),
                     revision: arkret_wire::CurrentRevision {
@@ -1250,7 +1250,7 @@ pub(crate) async fn advance_in_connection(
                 &value,
             )
             .await?;
-            let entry = arkret_wire::TypedCurrentResult::Value {
+            let entry = arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::CallState { call_id },
                 source_stream_ref: commit.stream_ref.clone(),
                 revision: arkret_wire::CurrentRevision {
@@ -1304,7 +1304,7 @@ pub(crate) async fn advance_in_connection(
                     "replica Agent Policy cannot change family or kind",
                 ));
             }
-            let entry = arkret_wire::TypedCurrentResult::Value {
+            let entry = arkret_wire::TypedCurrentRow::Value {
                 selector,
                 source_stream_ref: commit.stream_ref.clone(),
                 revision: arkret_wire::CurrentRevision {
@@ -1322,7 +1322,7 @@ pub(crate) async fn advance_in_connection(
                 {
                     return Err(malformed("Policy replica Event and covering Commit differ"));
                 }
-                let arkret_wire::TypedCurrentResult::Value { value, .. } = &entry;
+                let arkret_wire::TypedCurrentRow::Value { value, .. } = &entry;
                 crate::policy_current_results::validate_disclosed_agent_policy(
                     &event.realm_id,
                     &body.policy_id,
@@ -1680,7 +1680,7 @@ mod tests {
             stream_position: 7,
             commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
         };
-        let entry = arkret_wire::TypedCurrentResult::Value {
+        let entry = arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::Policy {
                 policy_id: id.clone(),
             },
@@ -1713,7 +1713,7 @@ mod tests {
         let mut invalid = vec![];
         for field in ["id", "realm_id", "policy_kind", "schema"] {
             let mut changed = entry.clone();
-            let arkret_wire::TypedCurrentResult::Value {
+            let arkret_wire::TypedCurrentRow::Value {
                 value, revision, ..
             } = &mut changed;
             revision.stream_position = 8;
@@ -1727,18 +1727,18 @@ mod tests {
             invalid.push(changed);
         }
         let mut fork = entry.clone();
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             value: fork_value, ..
         } = &mut fork;
         fork_value["default_effect"] = json!("deny");
         invalid.push(fork);
         let mut stale = entry.clone();
-        let arkret_wire::TypedCurrentResult::Value { revision, .. } = &mut stale;
+        let arkret_wire::TypedCurrentRow::Value { revision, .. } = &mut stale;
         revision.stream_position = 6;
         revision.commit_id = arkret_wire::RealmCommitId::from_digest([6; 32]);
         invalid.push(stale);
         let mut foreign = entry.clone();
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             source_stream_ref, ..
         } = &mut foreign;
         *source_stream_ref = arkret_wire::CommitStreamRef::Circle {
@@ -1914,7 +1914,7 @@ mod tests {
             stream_position: 7,
             commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
         };
-        let entry = arkret_wire::TypedCurrentResult::Value {
+        let entry = arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::DirectConversationBinding {
                 pair_key: payload.pair_key.clone(),
             },
@@ -1986,7 +1986,7 @@ mod tests {
             current.binding_digest().unwrap(),
             initial.binding_digest().unwrap()
         );
-        let complete = arkret_wire::TypedCurrentResult::Value {
+        let complete = arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::DirectConversationBinding {
                 pair_key: payload.pair_key.clone(),
             },
@@ -1999,7 +1999,7 @@ mod tests {
         };
         for mutation in 0..5 {
             let mut bad = complete.clone();
-            let arkret_wire::TypedCurrentResult::Value {
+            let arkret_wire::TypedCurrentRow::Value {
                 revision,
                 value,
                 selector,
@@ -2062,7 +2062,7 @@ mod tests {
         };
         use arkret_wire::{
             CommitStreamRef, CurrentRevision, CurrentSelector, EventId, PinScope, RealmCommitId,
-            RealmId, TypedCurrentResult,
+            RealmId, TypedCurrentRow,
         };
         let database = TestDatabase::lease().await;
         let mut conn = database.pool().get().await.unwrap();
@@ -2088,7 +2088,7 @@ mod tests {
             .bind::<Text,_>(realm.as_str()).bind::<Text,_>(arkret_canonical::canonical_json_string(&home).unwrap())
             .bind::<Jsonb,_>(serde_json::to_value(&home).unwrap()).bind::<Jsonb,_>(serde_json::to_value(&source).unwrap())
             .bind::<Text,_>(commit.as_str()).bind::<Jsonb,_>(&value).execute(&mut *conn).await.unwrap();
-        let entry = TypedCurrentResult::Value {
+        let entry = TypedCurrentRow::Value {
             selector: CurrentSelector::Pin { pin_scope: home },
             source_stream_ref: source,
             revision: CurrentRevision {
@@ -2102,7 +2102,7 @@ mod tests {
             .unwrap();
         for mutation in 0..4 {
             let mut changed = entry.clone();
-            let TypedCurrentResult::Value {
+            let TypedCurrentRow::Value {
                 source_stream_ref,
                 revision,
                 value,
@@ -2389,7 +2389,7 @@ mod tests {
                 Err(PersistenceError::Conflict(_))
             ));
         }
-        let entry = arkret_wire::TypedCurrentResult::Value {
+        let entry = arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::ModerationFrankingProof {
                 event_id: target.clone(),
             },
@@ -2446,7 +2446,7 @@ mod tests {
         };
         let value = json!({"reason":"migration", "successor_realm_id":
             "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW"});
-        let entry = arkret_wire::TypedCurrentResult::Value {
+        let entry = arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::RealmTombstone,
             source_stream_ref: stream,
             revision: arkret_wire::CurrentRevision {
@@ -2513,7 +2513,7 @@ mod tests {
             commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
         };
         let value = serde_json::json!({"from":null,"to":"ringing"});
-        let entries = [arkret_wire::TypedCurrentResult::Value {
+        let entries = [arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::CallState {
                 call_id: call.clone(),
             },
@@ -2611,7 +2611,7 @@ mod tests {
         });
         let parent = json!({"parent_space_id":null});
         let policy = Value::Null;
-        let entry = |selector, value| arkret_wire::TypedCurrentResult::Value {
+        let entry = |selector, value| arkret_wire::TypedCurrentRow::Value {
             selector,
             source_stream_ref: stream.clone(),
             revision: revision.clone(),
@@ -2794,7 +2794,7 @@ mod tests {
             stream_position: 7,
             commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
         };
-        let entries = [arkret_wire::TypedCurrentResult::Value {
+        let entries = [arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::Strand {
                 strand_id: strand_id.clone(),
             },
@@ -2918,7 +2918,7 @@ mod tests {
                 Strand::new(strand_id.clone(), realm_id.clone(), "Tracks", actor.clone());
             strand.created_at = at;
             strand.state = Some(state);
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::Strand {
                     strand_id: strand_id.clone(),
                 },
@@ -3098,7 +3098,7 @@ mod tests {
             stream_position: 7,
             commit_id: arkret_wire::RealmCommitId::from_digest([7; 32]),
         };
-        let entries = [arkret_wire::TypedCurrentResult::Value {
+        let entries = [arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::Strand {
                 strand_id: strand_id.clone(),
             },
@@ -3269,9 +3269,7 @@ mod tests {
     #[tokio::test]
     async fn position_snapshot_keeps_both_identity_components_null_and_transactional_rejection() {
         use arkret_models_collaboration::objects::strand::StrandPositionCurrent;
-        use arkret_wire::{
-            CurrentRevision, CurrentSelector, SpaceId, StrandId, TypedCurrentResult,
-        };
+        use arkret_wire::{CurrentRevision, CurrentSelector, SpaceId, StrandId, TypedCurrentRow};
         let database = TestDatabase::lease().await;
         let pool = database.pool();
         let mut conn = pool.get().await.unwrap();
@@ -3303,7 +3301,7 @@ mod tests {
         // The caller has verified the snapshot; this test exercises the
         // durable sink and its transaction boundary, not a signed disclosure.
         let entries = [
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector: CurrentSelector::StrandPosition {
                     board_space_id: board_a.clone(),
                     strand_id: strand.clone(),
@@ -3312,7 +3310,7 @@ mod tests {
                 revision: revision.clone(),
                 value: serde_json::to_value(&placed).unwrap(),
             },
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector: CurrentSelector::StrandPosition {
                     board_space_id: board_b.clone(),
                     strand_id: strand.clone(),
@@ -3397,7 +3395,7 @@ mod tests {
             .await
             .unwrap();
         let mut malformed = entries.to_vec();
-        let TypedCurrentResult::Value { value, .. } = &mut malformed[1];
+        let TypedCurrentRow::Value { value, .. } = &mut malformed[1];
         *value = json!({"rank":"partial"});
         diesel::sql_query("BEGIN").execute(&mut conn).await.unwrap();
         assert!(
@@ -3533,7 +3531,7 @@ mod tests {
             &mut conn,
             &realm,
             &head,
-            &[arkret_wire::TypedCurrentResult::Value {
+            &[arkret_wire::TypedCurrentRow::Value {
                 selector: selector.clone(),
                 source_stream_ref: stream.clone(),
                 revision: arkret_wire::CurrentRevision {
@@ -3652,7 +3650,7 @@ mod tests {
         };
         let policy =
             json!({"disclosure":"required","visibility":"private","scope_overrides_allowed":false});
-        let entry = arkret_wire::TypedCurrentResult::Value {
+        let entry = arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::RealmReadReceiptPolicy,
             source_stream_ref: stream.clone(),
             revision: arkret_wire::CurrentRevision {
@@ -3682,7 +3680,7 @@ mod tests {
             json!({"disclosure":"optional","extra":true}),
         ] {
             let mut malformed_entry = entry.clone();
-            let arkret_wire::TypedCurrentResult::Value {
+            let arkret_wire::TypedCurrentRow::Value {
                 value, revision, ..
             } = &mut malformed_entry;
             *value = invalid;
@@ -3710,7 +3708,7 @@ mod tests {
                 .unwrap();
         }
         let mut foreign = entry.clone();
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             source_stream_ref, ..
         } = &mut foreign;
         *source_stream_ref = arkret_wire::CommitStreamRef::Circle {

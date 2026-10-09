@@ -2,7 +2,7 @@
 //! Neither the public cache nor snapshot rows are governing admission inputs.
 use arkret_wire::{
     ActorId, CommitStreamHead, CommitStreamRef, CurrentSelector, Event, MlsGroupCurrent,
-    RealmCommit, RealmId, TypedCurrentResult,
+    RealmCommit, RealmId, TypedCurrentRow,
 };
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -23,11 +23,11 @@ struct Cut {
     service_id: arkret_wire::DidCoreId,
     generation: u64,
     head: CommitStreamHead,
-    current: TypedCurrentResult,
+    current: TypedCurrentRow,
     // Include Binding and roster evidence in the cache publication fence.
     // Legacy local cache entries must be rebound to this stronger native cut.
     #[serde(default)]
-    current_state_entries: Vec<TypedCurrentResult>,
+    current_state_entries: Vec<TypedCurrentRow>,
     participants: std::collections::BTreeSet<ActorId>,
 }
 #[derive(QueryableByName)]
@@ -141,7 +141,7 @@ async fn cut_in_connection(
         return Ok(None);
     };
     if verified_head != head || !entries.iter().any(|entry| {
-        let TypedCurrentResult::Value { selector, source_stream_ref, value, .. } = entry;
+        let TypedCurrentRow::Value { selector, source_stream_ref, value, .. } = entry;
         matches!(selector, CurrentSelector::DirectConversationBinding { pair_key: found } if found == pair_key)
             && source_stream_ref == &stream
             && serde_json::to_value(&binding).is_ok_and(|expected| expected == *value)
@@ -156,7 +156,7 @@ async fn cut_in_connection(
             return Ok(None);
         }
     }
-    let Some(current) = entries.iter().find(|entry| matches!(entry, TypedCurrentResult::Value { selector: CurrentSelector::MlsGroup { scope_ref }, source_stream_ref, .. } if scope_ref == &arkret_wire::ScopeRef::Realm { realm_id: realm.clone() } && source_stream_ref == &stream)).cloned() else { return Ok(None) };
+    let Some(current) = entries.iter().find(|entry| matches!(entry, TypedCurrentRow::Value { selector: CurrentSelector::MlsGroup { scope_ref }, source_stream_ref, .. } if scope_ref == &arkret_wire::ScopeRef::Realm { realm_id: realm.clone() } && source_stream_ref == &stream)).cloned() else { return Ok(None) };
     Ok(Some(Cut {
         service_id,
         generation: u64::try_from(authority.generation).map_err(invalid)?,
@@ -180,7 +180,7 @@ pub(crate) async fn input_in_connection(
     else {
         return Ok(None);
     };
-    let TypedCurrentResult::Value { value, .. } = &cut.current;
+    let TypedCurrentRow::Value { value, .. } = &cut.current;
     let group: MlsGroupCurrent = serde_json::from_value(value.clone()).map_err(invalid)?;
     let binding =
         crate::direct_conversation_admission::binding_current_snapshot_in_connection(conn, realm)
@@ -195,7 +195,7 @@ pub(crate) async fn input_in_connection(
         let cached: Cut = serde_json::from_value(cache.cut).map_err(invalid)?;
         let candidate: soland_storage::ForeignDirectMlsBase =
             serde_json::from_value(cache.replay_base).map_err(invalid)?;
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             value: cached_value,
             ..
         } = &cached.current;
@@ -384,14 +384,14 @@ pub(crate) async fn apply_in_connection(
     let Some(cut) = cut_in_connection(conn, &realm, None).await? else {
         return Ok(());
     };
-    let TypedCurrentResult::Value { value, .. } = &cut.current;
+    let TypedCurrentRow::Value { value, .. } = &cut.current;
     let group: MlsGroupCurrent = serde_json::from_value(value.clone()).map_err(invalid)?;
     facts.group_state_ref = Some(group.current_mls_commit_event_ref.clone());
     let cache = cache_in_connection(conn, &realm).await?;
     if let Some(cache) = cache {
         let cached: Cut = serde_json::from_value(cache.cut).map_err(invalid)?;
         if cache.complete && cached == cut {
-            let TypedCurrentResult::Value { value, .. } = &cut.current;
+            let TypedCurrentRow::Value { value, .. } = &cut.current;
             let group: MlsGroupCurrent = serde_json::from_value(value.clone()).map_err(invalid)?;
             let base: soland_storage::ForeignDirectMlsBase =
                 serde_json::from_value(cache.replay_base).map_err(invalid)?;

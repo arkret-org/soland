@@ -464,7 +464,7 @@ use diesel::OptionalExtension as _;
 #[cfg(test)]
 mod tests {
     use arkret_wire::{
-        CommitStreamHead, CurrentRevision, CurrentSelector, RealmCommitId, TypedCurrentResult,
+        CommitStreamHead, CurrentRevision, CurrentSelector, RealmCommitId, TypedCurrentRow,
     };
     use diesel::sql_types::{BigInt, Timestamptz};
 
@@ -511,7 +511,7 @@ mod tests {
             store.snapshot().await.is_err(),
             "a head alone does not prove the current value"
         );
-        let entry = TypedCurrentResult::Value {
+        let entry = TypedCurrentRow::Value {
             selector: CurrentSelector::Strand {
                 strand_id: id.clone(),
             },

@@ -356,7 +356,7 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
     assert_eq!(material.current_state_entries.len(), 9);
     assert!(material.current_state_entries.iter().any(|entry| matches!(
         entry,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::RealmPlaintextVisibleServices,
             ..
         }
@@ -457,7 +457,7 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
     assert_eq!(material.current_state_entries.len(), 11);
     let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
     assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id: id },
             source_stream_ref, revision, ..
         } if id == &strand_id
@@ -494,7 +494,7 @@ async fn founder_disclosure_covers_every_accepted_cut_of_disclosed_kinds() {
         let commit = &request.authority_commit.commit;
         assert!(material.current_state_entries.iter().any(|entry| matches!(
             entry,
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
                 revision,
                 ..
@@ -709,7 +709,7 @@ async fn account_snapshot_issuance_is_same_cut_and_by_ref_rechecks_disclosure() 
         .current_state_entries
         .iter()
         .find_map(|entry| match entry {
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id: id },
                 source_stream_ref,
                 revision,
@@ -1495,7 +1495,7 @@ async fn ordinary_bootstrap_failure_rolls_back_every_event_then_exact_replay_ret
         },
     ] {
         assert!(snapshot.current_state_entries.iter().any(|entry| {
-            matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: found, .. } if found == &selector)
+            matches!(entry, arkret_wire::TypedCurrentRow::Value { selector: found, .. } if found == &selector)
         }));
     }
     assert!(
@@ -1642,7 +1642,7 @@ async fn strand_create_writes_registered_current_result_and_rejects_remote_unpla
         .unwrap()
         .unwrap();
     assert!(snapshot.current_state_entries.iter().any(|entry| {
-        matches!(entry, arkret_wire::TypedCurrentResult::Value {
+        matches!(entry, arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::Strand { strand_id: found },
             source_stream_ref,
             revision,
@@ -1757,7 +1757,7 @@ async fn strand_create_writes_registered_current_result_and_rejects_remote_unpla
             .filter(|entry| {
                 matches!(
                     entry,
-                    arkret_wire::TypedCurrentResult::Value {
+                    arkret_wire::TypedCurrentRow::Value {
                         selector: arkret_wire::CurrentSelector::Strand { .. },
                         ..
                     }
@@ -1811,7 +1811,7 @@ async fn default_strand_writes_exact_current_at_commit_and_rejects_dangling_and_
         .unwrap()
         .unwrap();
     assert!(snapshot.current_state_entries.iter().any(|entry| {
-        matches!(entry, arkret_wire::TypedCurrentResult::Value {
+        matches!(entry, arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::RealmSetDefaultStrand,
             source_stream_ref,
             revision,
@@ -2115,7 +2115,7 @@ async fn local_markdown_text_message_writes_exact_revision_and_rejects_missing_s
         .unwrap()
         .unwrap();
     assert!(snapshot.current_state_entries.iter().any(|entry| {
-        matches!(entry, arkret_wire::TypedCurrentResult::Value {
+        matches!(entry, arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
             source_stream_ref,
             revision,
@@ -2186,7 +2186,7 @@ async fn local_markdown_text_message_writes_exact_revision_and_rejects_missing_s
             .iter()
             .filter(|entry| matches!(
                 entry,
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::MessageRevision { .. },
                     ..
                 }
@@ -3087,7 +3087,7 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
         .current_state_entries
         .iter()
         .find_map(|entry| match entry {
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id: id },
                 source_stream_ref,
                 revision,
@@ -3113,7 +3113,7 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
             .iter()
             .filter(|entry| matches!(
                 entry,
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::MessageRevision { .. },
                     ..
                 }
@@ -4200,7 +4200,7 @@ async fn moderation_report_row_is_disclosed_to_the_realm_root_controller() {
         .unwrap();
     assert_eq!(material.current_state_entries.len(), 12);
     assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::CalendarScheduleSource { strand_id: id },
             source_stream_ref, revision, ..
         } if id == &strand_id
@@ -4209,7 +4209,7 @@ async fn moderation_report_row_is_disclosed_to_the_realm_root_controller() {
             && revision.stream_position == strand.authority_commit.commit.stream_position
     )));
     assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::ModerationReport { event_id },
             source_stream_ref, revision, value,
         } if event_id == &report.authority_commit.event.event_id
@@ -4459,10 +4459,10 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
             .current_state_entries
             .iter()
             .find(|entry| {
-                matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: found, .. } if found == &selector)
+                matches!(entry, arkret_wire::TypedCurrentRow::Value { selector: found, .. } if found == &selector)
             })
             .expect("snapshot material carries the report row");
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             source_stream_ref,
             revision,
             value,
@@ -4592,10 +4592,10 @@ async fn moderation_queue_view_derives_from_the_report_family_at_one_cut() {
     let selector = arkret_wire::CurrentSelector::ModerationState {
         target_ref: realm_id.to_string(),
     };
-    let Some(arkret_wire::TypedCurrentResult::Value {
+    let Some(arkret_wire::TypedCurrentRow::Value {
         revision, value, ..
     }) = material.current_state_entries.iter().find(|entry| {
-        matches!(entry, arkret_wire::TypedCurrentResult::Value { selector: found, .. } if found == &selector)
+        matches!(entry, arkret_wire::TypedCurrentRow::Value { selector: found, .. } if found == &selector)
     })
     else {
         panic!("snapshot material carries the moderation_state row");
@@ -5467,7 +5467,7 @@ async fn invite_create_writes_three_families_and_rejects_occupied_live_target() 
         assert!(
             material.current_state_entries.iter().any(|entry| matches!(
                 entry,
-                arkret_wire::TypedCurrentResult::Value { selector: found, revision, source_stream_ref, .. }
+                arkret_wire::TypedCurrentRow::Value { selector: found, revision, source_stream_ref, .. }
                     if found == &selector
                         && revision.commit_id == create.authority_commit.commit.commit_id
                         && source_stream_ref == &create.authority_commit.commit.stream_ref
@@ -5918,7 +5918,7 @@ fn relation_snapshot_rows(material: &soland_storage::RealmStateSnapshotMaterial)
         .filter(|row| {
             matches!(
                 row,
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::Relation { .. },
                     ..
                 }
@@ -5932,7 +5932,7 @@ fn assert_circle_relation_snapshot_disclosure<'a>(
     fixture: &'a RelationSnapshotFixture,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>> {
     Box::pin(async move {
-        use arkret_wire::{CurrentSelector, RelationId, TypedCurrentResult};
+        use arkret_wire::{CurrentSelector, RelationId, TypedCurrentRow};
         let RelationSnapshotFixture {
             unit,
             bob,
@@ -5958,14 +5958,14 @@ fn assert_circle_relation_snapshot_disclosure<'a>(
             .find(|row| {
                 matches!(
                     row,
-                    TypedCurrentResult::Value {
+                    TypedCurrentRow::Value {
                         selector: CurrentSelector::Relation { .. },
                         ..
                     }
                 )
             })
             .unwrap();
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             revision,
@@ -6372,7 +6372,7 @@ async fn circle_create_and_self_join_write_same_cut_current() {
     )));
     assert!(frozen.current_state_entries.iter().any(|row| matches!(
         row,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::CircleMemberState { .. },
             ..
         }
@@ -7232,7 +7232,7 @@ fn assert_message_revision_carriers<'a>(
             .unwrap();
         assert!(snapshot.current_state_entries.iter().any(|entry| matches!(
             entry,
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::MessageRevision { message_id: found },
                 revision,
                 value,
@@ -7664,7 +7664,7 @@ async fn message_redact_writes_object_redaction_and_withholds_on_scan() {
         .current_state_entries
         .iter()
         .filter_map(|entry| match entry {
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::MessageRevision { message_id },
                 ..
             } => Some(message_id.clone()),
@@ -7674,7 +7674,7 @@ async fn message_redact_writes_object_redaction_and_withholds_on_scan() {
     assert_eq!(messages, vec![kept_id.clone()]);
     assert!(after.current_state_entries.iter().any(|entry| matches!(
         entry,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::ObjectRedaction { target_ref },
             revision,
             ..
@@ -7827,7 +7827,7 @@ async fn poll_responses_keep_accepted_history_and_reject_invalid_partition_heads
     ] {
         let response_id = arkret_wire::MessageId::from_event_id(response_event);
         assert!(!material.current_state_entries.iter().any(|entry| matches!(entry,
-            arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::MessageRevision { message_id }, .. }
+            arkret_wire::TypedCurrentRow::Value { selector: arkret_wire::CurrentSelector::MessageRevision { message_id }, .. }
                 if message_id == &response_id)));
     }
     let before = message_families(&pool, &head.authority_commit.event.realm_id).await;
@@ -8179,8 +8179,8 @@ async fn member_identity_accepted_assertions_keep_bad_proofs_edges_and_restart_e
         .await
         .unwrap()
         .unwrap();
-    let entry = material.current_state_entries.iter().find(|entry| matches!(entry,arkret_wire::TypedCurrentResult::Value{selector:found,..} if found == &selector)).unwrap();
-    let arkret_wire::TypedCurrentResult::Value {
+    let entry = material.current_state_entries.iter().find(|entry| matches!(entry,arkret_wire::TypedCurrentRow::Value{selector:found,..} if found == &selector)).unwrap();
+    let arkret_wire::TypedCurrentRow::Value {
         revision, value, ..
     } = entry;
     assert_eq!(revision.commit_id, third.authority_commit.commit.commit_id);

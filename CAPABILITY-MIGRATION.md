@@ -54,7 +54,7 @@ Each line names the successor that already carries the capability.
 
 | group | lines | successor already in the tree |
 |---|---|---|
-| `current_data` (5 files) | 1,813 | `RealmStateSnapshot.current_state_entries: Vec<TypedCurrentResult>` (SDK `wire/src/authority_commit.rs:479`). The orphan imports `arkret_wire::cbs::{ProjectedCellWrite, ProjectedOp}`, which the SDK no longer defines, and resolves conflicts by "greater causal depth wins". |
+| `current_data` (5 files) | 1,813 | `RealmStateSnapshot.current_state_entries: Vec<TypedCurrentRow>` (SDK `wire/src/authority_commit.rs:479`). The orphan imports `arkret_wire::cbs::{ProjectedCellWrite, ProjectedOp}`, which the SDK no longer defines, and resolves conflicts by "greater causal depth wins". |
 | `current_results` (2) | 345 | `sync_cursor.rs:168-256`, where `current_detail_page` is already rewired. `CurrentResultEntry` is gone from the SDK. |
 | `mls_public_state` (4) | 1,560 | `MlsStateInstallation`, which is **soland's own** type at `crates/storage/src/authority_commit.rs:53`, carried by `AuthorityCommitTransaction.mls_state` (`:48`). It has zero hits in the SDK; an earlier draft of this table cited `wire/src/authority_commit.rs:355-390` for it, which is `RealmAuthorityBundle`. `EventCommitRequest` no longer carries `mls_public_genesis` / `mls_public_producer`. |
 | `devices/confirmed_history` (2) | 707 | `devices.rs`, which writes `devices.verification_state` directly. The orphan's input type `ConfirmedDeviceControlProjection` was deleted from the trait crate in `c30ce6384`. |
@@ -294,7 +294,7 @@ peer-merge graph.
   The module is gone from the SDK (`crates/wire/src/lib.rs` has no `pub mod
   cbs`; `ProjectedCellWrite` / `ProjectedOp` / `LatticeOp` have zero hits
   anywhere in the SDK). Its successors are `arkret_wire::patch::Patch` plus
-  `arkret_models_collaboration`'s `TypedCurrentResult`, which have a **different
+  `arkret_models_collaboration`'s `TypedCurrentRow`, which have a **different
   shape**, so this is a port, not a deletion. The four compile errors the
   triage counted are only the ones Cargo reaches before it aborts at
   `soland-services`; they are not the size of the job.
@@ -395,7 +395,7 @@ peer-merge graph.
   | missing module | http files / refs | verdict |
   |---|---|---|
   | `arkret_models_collaboration::governance_dependencies` | 19 / 36 | **port, but not the one it looks like.** See the note below: the evidence type survives, the lookup-by-digest store does not. |
-  | `arkret_wire::cbs` | 12 / 40 | **port.** Successors are `arkret_wire::patch::Patch` and `TypedCurrentResult`, different shape. |
+  | `arkret_wire::cbs` | 12 / 40 | **port.** Successors are `arkret_wire::patch::Patch` and `TypedCurrentRow`, different shape. |
   | `arkret_wire::cbs_proof_bundle` | 10 / 31 | **delete.** The SDK ledger adjudicates `EventFederationSubmission` and `CbsProofBundle` as removed: "CBS is a removed unit". |
   | `arkret_models_collaboration::direct_conversation_ops` | 8 / 19 | **mixed.** `DirectConversationFoundingAuthorityEvidence` (11 refs) is a port onto `models-collaboration/src/objects/direct_conversation.rs:330` -- another stale SDK gap line, corrected in `bbca85ef`. `DirectConversationFoundingFederationSubmission` (2) goes with CBS. `DirectConversationFoundingPlan` (2) has zero hits in the SDK and zero `founding_plan` hits in `direct-conversation-operations.schema.json`; it is a local name with no protocol object. |
   | `arkret_models_collaboration::history_key` | 6 / 13 | **delete, except one.** RHRK is an adjudicated removal. `DirectorySourceRefAccess` only moved house, to `arkret_models_discovery::directory`. |
@@ -648,7 +648,7 @@ Reference implementation: `e309b047^:crates/signatures/src/agent_evidence.rs`
 - `AgentKeyCellEntry` and `agent_authorization_cell_ref` carry `Cell`, which is
   removed vocabulary under the authority-commit clean break. Rebuild them under
   the typed current result naming, do not copy the old names back.
-- `SignerKeyQueryResult`, `AccountSubscribeSnapshotResult` and
+- `SignerKeyQueryOutcome`, `AccountSubscribeSnapshotResult` and
   `ModerationQueueItem` are NC-TYPE-001 violations in the same area (`Result` is
   not in the closed wrapper-word table; `Outcome` and `Row` are). Fix them in
   the same pass rather than propagating them.

@@ -16,12 +16,11 @@
 use arkret_models_collaboration::exact_current_results::{
     ExactCurrentResultEntry, ExactCurrentResultSelector, ExactCurrentResultsReadOutcome,
     ExactCurrentResultsReadRequestBody, ModerationStateCurrentValue,
-    ModerationStateExactCurrentResult, ModerationStateExactCurrentSelector,
-    RelationExactCurrentResult,
+    ModerationStateExactCurrentRow, ModerationStateExactCurrentSelector, RelationExactCurrentRow,
 };
 use arkret_models_collaboration::objects::relation::Relation;
 use arkret_models_collaboration::strand_watch_operations::{
-    StrandWatchCurrentOutcome, StrandWatchCurrentRequestBody, StrandWatchCurrentResult,
+    StrandWatchCurrentOutcome, StrandWatchCurrentRequestBody, StrandWatchCurrentRow,
     StrandWatchCurrentSelector, StrandWatchSelectorKind,
 };
 use arkret_wire::{
@@ -428,7 +427,7 @@ pub(crate) async fn exact_current_result_for_account(
         };
         let selector = match &request.selector {
             ExactCurrentResultSelector::CalendarScheduleSource(selector) => {
-                use arkret_models_collaboration::exact_current_results::CalendarScheduleSourceExactResult;
+                use arkret_models_collaboration::exact_current_results::CalendarScheduleSourceExactRow;
                 #[derive(QueryableByName)]
                 struct CalendarRow {
                     #[diesel(sql_type = Text)]
@@ -462,13 +461,13 @@ pub(crate) async fn exact_current_result_for_account(
                 return Ok(SelfExactCurrentRead::Answer(ExactCurrentResultsReadOutcome::Present {
                     realm_id: request.realm_id.clone(), governance_generation: generation,
                     effective_stream_head: CommitStreamHead { stream_ref: stream.clone(), commit_id: stream_head.commit_id.parse().map_err(PersistenceError::database)?, stream_position: to_u64(stream_head.stream_position,"Calendar scope head")? },
-                    entry: ExactCurrentResultEntry::CalendarScheduleSource(CalendarScheduleSourceExactResult { selector: selector.clone(), source_stream_ref: stream, revision, value }),
+                    entry: ExactCurrentResultEntry::CalendarScheduleSource(CalendarScheduleSourceExactRow { selector: selector.clone(), source_stream_ref: stream, revision, value }),
                 }));
             }
             ExactCurrentResultSelector::CapabilityGrant(_) => unreachable!("handled before membership gate"),
             ExactCurrentResultSelector::Policy(_) => return Ok(SelfExactCurrentRead::Unresolved("management Policy exact-current authorization is not established")),
             ExactCurrentResultSelector::AgentInteraction(selector) => {
-                use arkret_models_collaboration::agent_interaction::AgentInteractionExactCurrentResult;
+                use arkret_models_collaboration::agent_interaction::AgentInteractionExactCurrentRow;
                 use arkret_models_collaboration::exact_current_results::NeverWrittenExactCurrentSelector;
                 if !sql_query("SELECT EXISTS(SELECT 1 FROM member_state_current_results m JOIN realm_commits c ON c.realm_id=m.realm_id AND c.commit_id=m.current_commit_id AND c.stream_position=m.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' WHERE m.realm_id=$1 AND m.member_id=$2 AND m.membership='join' AND e.envelope->'payload' ? 'agent_controller_binding') AS present")
                     .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(ActorId::account(selector.agent_account_id.clone()).to_string()).get_result::<ExistsRow>(&mut *conn).await?.present { return Ok(SelfExactCurrentRead::NotFound); }
@@ -476,7 +475,7 @@ pub(crate) async fn exact_current_result_for_account(
                 let outcome = match result {
                     Some(row) => ExactCurrentResultsReadOutcome::Present {
                         realm_id: request.realm_id.clone(), governance_generation: generation, effective_stream_head: head.clone(),
-                        entry: ExactCurrentResultEntry::AgentInteraction(AgentInteractionExactCurrentResult {
+                        entry: ExactCurrentResultEntry::AgentInteraction(AgentInteractionExactCurrentRow {
                             selector: selector.clone(), source_stream_ref: head.stream_ref.clone(),
                             revision: CurrentRevision { commit_id: arkret_wire::RealmCommitId::new(row.current_commit_id).map_err(|error| corrupt(error.to_string()))?, stream_position: to_u64(row.current_stream_position, "Agent interaction position")? },
                             value: serde_json::from_value(row.value).map_err(|error| corrupt(error.to_string()))?,
@@ -548,7 +547,7 @@ pub(crate) async fn exact_current_result_for_account(
                 realm_id: request.realm_id.clone(),
                 governance_generation: generation,
                 effective_stream_head: head,
-                entry: ExactCurrentResultEntry::Relation(RelationExactCurrentResult {
+                entry: ExactCurrentResultEntry::Relation(RelationExactCurrentRow {
                     selector: selector.clone(),
                     source_stream_ref,
                     revision,
@@ -568,7 +567,7 @@ async fn owned_agent_grant_read(
     account: &AccountId,
     issuer: &DidCoreId,
 ) -> Result<SelfExactCurrentRead<ExactCurrentResultsReadOutcome>, PgTransactionError> {
-    use arkret_models_collaboration::exact_current_results::CapabilityGrantExactCurrentResult;
+    use arkret_models_collaboration::exact_current_results::CapabilityGrantExactCurrentRow;
 
     use crate::capability_grant_current_results::{
         CapabilityGrantCurrentResultReadRow, decode_row,
@@ -614,7 +613,7 @@ async fn owned_agent_grant_read(
             commit_id: head.commit_id.parse().map_err(PersistenceError::database)?,
             stream_position: to_u64(head.stream_position, "Realm stream position")?,
         },
-        entry: ExactCurrentResultEntry::CapabilityGrant(CapabilityGrantExactCurrentResult {
+        entry: ExactCurrentResultEntry::CapabilityGrant(CapabilityGrantExactCurrentRow {
             selector: selector.clone(),
             source_stream_ref: current.source.stream_ref,
             revision: current.revision,
@@ -720,7 +719,7 @@ async fn moderation_state_read(
             realm_id: realm_id.clone(),
             governance_generation: generation,
             effective_stream_head: head,
-            entry: ExactCurrentResultEntry::ModerationState(ModerationStateExactCurrentResult {
+            entry: ExactCurrentResultEntry::ModerationState(ModerationStateExactCurrentRow {
                 selector: selector.clone(),
                 source_stream_ref,
                 revision,
@@ -784,7 +783,7 @@ pub(crate) async fn strand_watch_current_for_account(
                 return Ok(SelfExactCurrentRead::Unresolved("watch current does not belong to the confirmed stream prefix"));
             }
             StrandWatchCurrentOutcome::Current { realm_id: request.realm_id.clone(), governance_generation: generation, stream_head: head,
-                result: StrandWatchCurrentResult { selector,source_stream_ref,revision,
+                result: StrandWatchCurrentRow { selector,source_stream_ref,revision,
                     value: serde_json::from_value(row.value).map_err(PersistenceError::database)? } }
         } else {
             let previously_written = sql_query(crate::strand_watch_current_results::WATCH_HISTORY_SQL)

@@ -4,7 +4,7 @@ use arkret_models_collaboration::agent_sidecar::AgentSidecarExchangeControlsCurr
 use arkret_models_crypto::EncryptedEnvelope;
 use arkret_wire::{
     ActorId, CommitStreamRef, CurrentSelector, EncryptedPayloadScheme, EventKind, ScopeRef,
-    SemanticRef, SidecarId, TypedCurrentResult,
+    SemanticRef, SidecarId, TypedCurrentRow,
 };
 use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork, MlsGroupCurrentStore};
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
@@ -36,7 +36,7 @@ pub(super) async fn assert_current(
         .current_state_entries
         .iter()
         .find_map(|row| match row {
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector:
                     CurrentSelector::SidecarContext {
                         sidecar_id,
@@ -165,7 +165,7 @@ pub(super) async fn assert_current(
         .unwrap()
         .unwrap();
     assert!(messages.current_state_entries.iter().any(|row| matches!(row,
-        TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, source_stream_ref, revision, .. }
+        TypedCurrentRow::Value { selector: CurrentSelector::MessageRevision { message_id }, source_stream_ref, revision, .. }
         if message_id == &arkret_wire::MessageId::from_event_id(&request.authority_commit.event.event_id)
             && source_stream_ref == &stream && revision.commit_id == request.authority_commit.commit.commit_id
     )));
@@ -209,8 +209,8 @@ pub(super) async fn assert_current(
         .await
         .unwrap()
         .unwrap();
-    let row = material.current_state_entries.iter().find(|row| matches!(row, TypedCurrentResult::Value {selector:CurrentSelector::AgentSidecarExchangeControls {sidecar_id,source_context_ref},..} if sidecar_id == sidecar && source_context_ref == &context)).unwrap();
-    let TypedCurrentResult::Value {
+    let row = material.current_state_entries.iter().find(|row| matches!(row, TypedCurrentRow::Value {selector:CurrentSelector::AgentSidecarExchangeControls {sidecar_id,source_context_ref},..} if sidecar_id == sidecar && source_context_ref == &context)).unwrap();
+    let TypedCurrentRow::Value {
         source_stream_ref,
         revision,
         value,

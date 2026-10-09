@@ -63,7 +63,7 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
     conn: &mut AsyncPgConnection,
     write: RevokeCommandTerminalWrite,
 ) -> Result<SecurityTransactionRecord, PgTransactionError> {
-    use arkret_models_crypto::{SecurityRotationRevokeCommandResult, SecurityTransactionStep};
+    use arkret_models_crypto::{SecurityRotationRevokeCommandDecision, SecurityTransactionStep};
 
     write.validate()?;
     let resource = &write.transaction.resource;
@@ -133,11 +133,11 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
             write.step_outcome.as_ref(),
             durable.as_ref(),
         ) {
-            (SecurityRotationRevokeCommandResult::Accepted, Some(presented), Some(stored))
+            (SecurityRotationRevokeCommandDecision::Accepted, Some(presented), Some(stored))
                 if presented.canonical_request == stored.canonical_request
                     && presented.response == stored.response
                     && presented.participant_outcome == stored.participant_outcome => {}
-            (SecurityRotationRevokeCommandResult::Rejected, None, None) => {}
+            (SecurityRotationRevokeCommandDecision::Rejected, None, None) => {}
             _ => {
                 return Err(rejected(
                     ConflictCode::DuplicateConflict,
@@ -158,7 +158,7 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
         ));
     }
     match outcome.result {
-        SecurityRotationRevokeCommandResult::Accepted => {
+        SecurityRotationRevokeCommandDecision::Accepted => {
             accept_step_in_transaction(
                 conn,
                 write.transaction.clone(),
@@ -172,7 +172,7 @@ pub(super) async fn commit_revoke_command_terminal_in_connection(
             )
             .await?;
         }
-        SecurityRotationRevokeCommandResult::Rejected => {
+        SecurityRotationRevokeCommandDecision::Rejected => {
             soland_storage::validate_security_transaction_update(&existing, &write.transaction)?;
             update_mutable_fields(conn, &write.transaction).await?;
         }

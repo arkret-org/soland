@@ -83,7 +83,7 @@ async fn three_initial_states_derive_call_ids_and_exact_replay_preserves_current
             .unwrap()
             .expect("joined caller sees the accepted Call current");
         assert!(snapshot.current_state_entries.iter().any(|entry| matches!(entry,
-            arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::CallState {call_id}, value, .. }
+            arkret_wire::TypedCurrentRow::Value { selector: arkret_wire::CurrentSelector::CallState {call_id}, value, .. }
             if call_id == &arkret_wire::CallId::from_event_id(&request.authority_commit.event.event_id)
                 && value == &json!({"from":null,"to":state}))));
         head = request;

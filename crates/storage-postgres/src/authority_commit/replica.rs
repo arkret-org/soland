@@ -342,7 +342,7 @@ pub(crate) async fn materialize_founding_in_connection(
         return Err(invalid("founding reducer cut differs from the accepted unit").into());
     }
     for entry in &material.current_state_entries {
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             source_stream_ref,
             revision,
             ..
@@ -1229,7 +1229,7 @@ pub(super) async fn install_replica_anchor_in_connection(
         }
         _ => return Err(invalid("bootstrap has no supported stream").into()),
     };
-    let current_opening = install.current_state_entries.iter().any(|entry| matches!(entry, arkret_wire::TypedCurrentResult::Value { selector, source_stream_ref, revision, value } if selector == &opening_selector && source_stream_ref == &realm_stream && revision.commit_id == join.commit_id && revision.stream_position == join.stream_position && value.get("membership").and_then(Value::as_str) == Some("join")));
+    let current_opening = install.current_state_entries.iter().any(|entry| matches!(entry, arkret_wire::TypedCurrentRow::Value { selector, source_stream_ref, revision, value } if selector == &opening_selector && source_stream_ref == &realm_stream && revision.commit_id == join.commit_id && revision.stream_position == join.stream_position && value.get("membership").and_then(Value::as_str) == Some("join")));
     if !current_opening {
         return Err(conflict(
             ConflictCode::CapabilityDenied,
@@ -1244,7 +1244,7 @@ pub(super) async fn install_replica_anchor_in_connection(
             .current_state_entries
             .iter()
             .find_map(|entry| match entry {
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector, value, ..
                 } if selector == &opening_selector => Some(value),
                 _ => None,
@@ -1259,7 +1259,7 @@ pub(super) async fn install_replica_anchor_in_connection(
                 .current_state_entries
                 .iter()
                 .any(|entry| match entry {
-                    arkret_wire::TypedCurrentResult::Value {
+                    arkret_wire::TypedCurrentRow::Value {
                         selector: arkret_wire::CurrentSelector::MemberState { actor_id },
                         source_stream_ref,
                         revision,

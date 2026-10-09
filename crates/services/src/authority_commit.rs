@@ -85,7 +85,7 @@ struct RealmSnapshotIdentityBody<'a> {
     realm_id: &'a arkret_wire::RealmId,
     governance_generation: u64,
     visible_stream_heads: &'a [CommitStreamHead],
-    current_state_entries: &'a [arkret_wire::TypedCurrentResult],
+    current_state_entries: &'a [arkret_wire::TypedCurrentRow],
     retention_and_history_floor: &'a arkret_wire::RetentionAndHistoryFloor,
     #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
@@ -97,7 +97,7 @@ struct RealmSnapshotUnsignedBody<'a> {
     realm_id: &'a arkret_wire::RealmId,
     governance_generation: u64,
     visible_stream_heads: &'a [CommitStreamHead],
-    current_state_entries: &'a [arkret_wire::TypedCurrentResult],
+    current_state_entries: &'a [arkret_wire::TypedCurrentRow],
     retention_and_history_floor: &'a arkret_wire::RetentionAndHistoryFloor,
     #[serde(serialize_with = "arkret_wire::serde_helpers::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
@@ -814,7 +814,7 @@ impl AuthorityCommitApplication {
         submission: &PcrGenesisAdmissionInput,
         exact_request_body: &[u8],
     ) -> ServiceResult<
-        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult>,
+        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome>,
     > {
         submission
             .validate()
@@ -1667,7 +1667,7 @@ impl AuthorityCommitApplication {
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
         recipient: &arkret_wire::AccountId,
-    ) -> ServiceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+    ) -> ServiceResult<Option<arkret_models_identity::SignerKeyQueryOutcome>> {
         Ok(self
             .store()
             .historical_self_pcr_producer_signer_key(realm_id, selector, recipient)
@@ -1678,7 +1678,7 @@ impl AuthorityCommitApplication {
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
-    ) -> crate::ServiceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+    ) -> crate::ServiceResult<Option<arkret_models_identity::SignerKeyQueryOutcome>> {
         Ok(self
             .store()
             .historical_producer_signer_key(realm_id, selector)
@@ -1746,7 +1746,7 @@ impl AuthorityCommitApplication {
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_wire::CurrentSelector,
-    ) -> ServiceResult<Option<arkret_wire::TypedCurrentResult>> {
+    ) -> ServiceResult<Option<arkret_wire::TypedCurrentRow>> {
         Ok(self
             .store()
             .current_agent_result(realm_id, selector)
@@ -2824,7 +2824,7 @@ mod tests {
                 stream_position: 7,
                 commit_id: arkret_wire::RealmCommitId::from_digest([0x22; 32]),
             }],
-            current_state_entries: vec![arkret_wire::TypedCurrentResult::Value {
+            current_state_entries: vec![arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::RealmPolicyBundle,
                 source_stream_ref: stream_ref.clone(),
                 revision: arkret_wire::CurrentRevision {

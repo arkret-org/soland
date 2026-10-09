@@ -439,10 +439,10 @@ async fn pending_agent_handshake_reads(
                     .any(|head| head.stream_ref == stream)
             );
             let public_rows: Vec<_> = snapshot.current_state_entries.iter().filter(|row| matches!(row,
-                arkret_wire::TypedCurrentResult::Value {source_stream_ref,..} if source_stream_ref == &stream)).collect();
+                arkret_wire::TypedCurrentRow::Value {source_stream_ref,..} if source_stream_ref == &stream)).collect();
             assert_eq!(public_rows.len(), 1);
             assert!(
-                matches!(public_rows[0], arkret_wire::TypedCurrentResult::Value {
+                matches!(public_rows[0], arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::MlsGroup {scope_ref}, value, ..
             } if scope_ref == &material.effective_scope
                 && value["genesis_event_ref"] == serde_json::to_value(&genesis.authority_commit.event.event_id).unwrap()
@@ -453,7 +453,7 @@ async fn pending_agent_handshake_reads(
                     .current_state_entries
                     .iter()
                     .any(|row| matches!(row,
-                arkret_wire::TypedCurrentResult::Value {selector:
+                arkret_wire::TypedCurrentRow::Value {selector:
                     arkret_wire::CurrentSelector::Sidecar {sidecar_id}
                     | arkret_wire::CurrentSelector::SidecarContext {sidecar_id,..}, ..}
                     if sidecar_id == sidecar))
@@ -555,7 +555,7 @@ async fn sidecar_cut_requires_exact_controller_and_current_parent_join() {
         .unwrap()
         .unwrap();
     assert!(snapshot.current_state_entries.iter().any(
-        |row| matches!(row, arkret_wire::TypedCurrentResult::Value {
+        |row| matches!(row, arkret_wire::TypedCurrentRow::Value {
         selector: arkret_wire::CurrentSelector::Sidecar { sidecar_id }, ..
     } if sidecar_id == &sidecar)
     ));
@@ -1052,7 +1052,7 @@ async fn pending_sidecar_handshake_scenario() {
             .current_state_entries
             .iter()
             .any(|row| matches!(row,
-        arkret_wire::TypedCurrentResult::Value {source_stream_ref,..}
+        arkret_wire::TypedCurrentRow::Value {source_stream_ref,..}
         if source_stream_ref == &stale.stream_ref))
     );
 }
@@ -1948,7 +1948,7 @@ async fn sidecar_snapshot_lists_and_scans_keep_private_stream_coordinates() {
             .iter()
             .any(|floor| floor.stream_ref == stream && floor.oldest_position == 0)
     );
-    assert!(snapshot.current_state_entries.iter().any(|row| matches!(row, arkret_wire::TypedCurrentResult::Value {selector:arkret_wire::CurrentSelector::SidecarContext {sidecar_id,..},source_stream_ref,revision,..} if sidecar_id == &sidecar && source_stream_ref == &stream && revision.stream_position == 0)));
+    assert!(snapshot.current_state_entries.iter().any(|row| matches!(row, arkret_wire::TypedCurrentRow::Value {selector:arkret_wire::CurrentSelector::SidecarContext {sidecar_id,..},source_stream_ref,revision,..} if sidecar_id == &sidecar && source_stream_ref == &stream && revision.stream_position == 0)));
     assert!(
         !foreign_snapshot
             .visible_stream_heads
@@ -1961,7 +1961,7 @@ async fn sidecar_snapshot_lists_and_scans_keep_private_stream_coordinates() {
             .iter()
             .any(|row| matches!(
                 row,
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::Sidecar { .. }
                         | arkret_wire::CurrentSelector::SidecarContext { .. },
                     ..
@@ -2772,7 +2772,7 @@ async fn agent_mode_controller_cas_scenario() {
         .await
         .unwrap()
         .unwrap();
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         revision, value, ..
     } = row;
     assert_eq!(value["interaction_mode"], "public");
@@ -2798,7 +2798,7 @@ async fn agent_mode_controller_cas_scenario() {
     source_candidate(&pool, &mut private).await;
     let mut private = ordinary_realm::source_request(&pool, private).await;
     uow.commit_event(private.clone()).await.unwrap();
-    let arkret_wire::TypedCurrentResult::Value { value, .. } = store
+    let arkret_wire::TypedCurrentRow::Value { value, .. } = store
         .current_agent_result(realm_id, &selector)
         .await
         .unwrap()
@@ -2940,7 +2940,7 @@ async fn agent_mode_controller_cas_scenario() {
             .contains("shared Agent authority is unavailable")
     );
     assert_eq!(footprint(&pool, realm_id).await, private_write_before);
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         revision: private_revision,
         ..
     } = store
@@ -2956,7 +2956,7 @@ async fn agent_mode_controller_cas_scenario() {
     source_candidate(&pool, &mut same_value).await;
     let mut same_value = ordinary_realm::source_request(&pool, same_value).await;
     uow.commit_event(same_value.clone()).await.unwrap();
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         revision: advanced, ..
     } = store
         .current_agent_result(realm_id, &selector)
@@ -2976,7 +2976,7 @@ async fn agent_mode_controller_cas_scenario() {
         .await
         .unwrap()
         .unwrap();
-    assert!(snapshot.current_state_entries.iter().any(|row| matches!(row, arkret_wire::TypedCurrentResult::Value { selector: arkret_wire::CurrentSelector::AgentInteraction { agent_account_id }, value, .. } if agent_account_id == &agent && value["interaction_mode"] == "private")));
+    assert!(snapshot.current_state_entries.iter().any(|row| matches!(row, arkret_wire::TypedCurrentRow::Value { selector: arkret_wire::CurrentSelector::AgentInteraction { agent_account_id }, value, .. } if agent_account_id == &agent && value["interaction_mode"] == "private")));
 }
 
 /// Real RFC transitions, accepted ownership/key/membership and real PostgreSQL

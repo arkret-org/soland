@@ -715,7 +715,7 @@ pub(super) async fn agent_view_from_record(
             AppError::internal(format!("accepted Agent lifecycle is unavailable: {error}"))
         })?
         .map(|entry| match entry {
-            arkret_wire::TypedCurrentResult::Value { value, .. } => {
+            arkret_wire::TypedCurrentRow::Value { value, .. } => {
                 serde_json::from_value::<AgentLifecycleState>(value).map_err(|error| {
                     AppError::internal(format!("accepted Agent lifecycle is invalid: {error}"))
                 })

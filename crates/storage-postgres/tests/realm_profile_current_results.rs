@@ -174,7 +174,7 @@ async fn read_receipt_policy_replacement_snapshot_replay_and_denial_share_the_pg
             .filter(|entry| {
                 matches!(
                     entry,
-                    arkret_wire::TypedCurrentResult::Value {
+                    arkret_wire::TypedCurrentRow::Value {
                         selector: arkret_wire::CurrentSelector::RealmReadReceiptPolicy,
                         ..
                     }
@@ -183,7 +183,7 @@ async fn read_receipt_policy_replacement_snapshot_replay_and_denial_share_the_pg
             .collect::<Vec<_>>();
         assert_eq!(policies.len(), 1);
         assert!(
-            matches!(policies[0], arkret_wire::TypedCurrentResult::Value {source_stream_ref,revision,value,..}
+            matches!(policies[0], arkret_wire::TypedCurrentRow::Value {source_stream_ref,revision,value,..}
             if *source_stream_ref == request.authority_commit.commit.stream_ref && revision.commit_id == request.authority_commit.commit.commit_id && revision.stream_position == request.authority_commit.commit.stream_position && *value == payload)
         );
         let count = commits(&pool, &realm).await;

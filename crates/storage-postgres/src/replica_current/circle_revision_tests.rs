@@ -1,6 +1,6 @@
 use arkret_wire::{
     AccountId, ActorId, CircleId, CommitStreamHead, CommitStreamRef, CurrentRevision,
-    CurrentSelector, DidCoreId, EventId, RealmCommitId, RealmId, TypedCurrentResult,
+    CurrentSelector, DidCoreId, EventId, RealmCommitId, RealmId, TypedCurrentRow,
 };
 use diesel::sql_types::Jsonb;
 use serde_json::json;
@@ -28,8 +28,8 @@ fn entry(
     stream_position: u64,
     digest: u8,
     value: Value,
-) -> TypedCurrentResult {
-    TypedCurrentResult::Value {
+) -> TypedCurrentRow {
+    TypedCurrentRow::Value {
         selector,
         source_stream_ref,
         revision: CurrentRevision {
@@ -44,7 +44,7 @@ async fn install(
     conn: &mut AsyncPgConnection,
     realm: &RealmId,
     heads: &[CommitStreamHead],
-    entries: &[TypedCurrentResult],
+    entries: &[TypedCurrentRow],
 ) -> PersistenceResult<()> {
     install_snapshot_at_heads_in_connection(
         conn,

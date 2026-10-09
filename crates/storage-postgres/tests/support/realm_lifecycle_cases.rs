@@ -134,7 +134,7 @@ async fn archive_and_freeze_are_reversible_without_reopening_a_terminal_realm() 
             .unwrap()
             .unwrap();
         assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
-            arkret_wire::TypedCurrentResult::Value { selector: actual, revision, value, .. }
+            arkret_wire::TypedCurrentRow::Value { selector: actual, revision, value, .. }
             if actual == &selector && revision.commit_id == head.authority_commit.commit.commit_id
                 && value.get(field) == Some(&serde_json::Value::Bool(false))
         )));
@@ -257,7 +257,7 @@ async fn tombstone_commits_current_and_fences_fresh_writes_without_destroy_bypas
         .unwrap()
         .unwrap();
     assert!(material.current_state_entries.iter().any(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value {selector: arkret_wire::CurrentSelector::RealmTombstone, revision, value, ..}
+        arkret_wire::TypedCurrentRow::Value {selector: arkret_wire::CurrentSelector::RealmTombstone, revision, value, ..}
         if revision.commit_id == terminal.authority_commit.commit.commit_id && value == &payload
     )));
     let navigation = store
@@ -273,7 +273,7 @@ async fn tombstone_commits_current_and_fences_fresh_writes_without_destroy_bypas
     assert!(navigation.1.strands.is_empty());
     assert!(material.current_state_entries.iter().any(|entry| matches!(
         entry,
-        arkret_wire::TypedCurrentResult::Value {
+        arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::Strand { .. },
             ..
         }

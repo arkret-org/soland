@@ -57,7 +57,7 @@ struct ProvedCurrentRow {
 pub(crate) async fn read_current(
     pool: &crate::PgPool,
     realm_id: &arkret_wire::RealmId,
-) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>> {
+) -> PersistenceResult<Option<arkret_wire::TypedCurrentRow>> {
     let mut conn = crate::pg_conn(pool).await?;
     let source = crate::object_projection_reads::current_source_sql(
         "r",
@@ -79,7 +79,7 @@ pub(crate) async fn read_current(
                 "default Strand current has no accepted source cut".to_owned(),
             ));
         }
-        Ok(arkret_wire::TypedCurrentResult::Value {
+        Ok(arkret_wire::TypedCurrentRow::Value {
             selector: arkret_wire::CurrentSelector::RealmSetDefaultStrand,
             source_stream_ref: arkret_wire::CommitStreamRef::Realm {
                 realm_id: realm_id.clone(),

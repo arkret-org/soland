@@ -376,7 +376,7 @@ async fn mention_passes_agent_gate(
             },
         )
         .await;
-    let public = matches!(mode, Ok(Some(arkret_wire::TypedCurrentResult::Value { source_stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id }, value, .. })) if realm_id == *source.realm_id && serde_json::from_value::<arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue>(value.clone()).is_ok_and(|v| v.controller_account_id == controller && v.interaction_mode == arkret_models_collaboration::agent_interaction::AgentInteractionMode::Public));
+    let public = matches!(mode, Ok(Some(arkret_wire::TypedCurrentRow::Value { source_stream_ref: arkret_wire::CommitStreamRef::Realm { realm_id }, value, .. })) if realm_id == *source.realm_id && serde_json::from_value::<arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue>(value.clone()).is_ok_and(|v| v.controller_account_id == controller && v.interaction_mode == arkret_models_collaboration::agent_interaction::AgentInteractionMode::Public));
     if !public {
         return false;
     }

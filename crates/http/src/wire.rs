@@ -8,7 +8,7 @@ pub use arkret_models_collaboration::device_messages::{
 };
 pub use arkret_models_collaboration::session_grants::{
     SessionGrantHolderProof, SessionGrantValidationInput, SessionGrantValidationMetadata,
-    SessionGrantValidationResult,
+    SessionGrantValidationOutcome,
 };
 pub use arkret_models_crypto::{
     DeviceStatus, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,

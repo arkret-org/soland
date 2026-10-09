@@ -1,7 +1,7 @@
 //! One repeatable-read PCR cut for the device lifecycle inputs. No caller may
 //! infer `active` from an absent transaction result.
 
-use arkret_models_crypto::{SecurityRotationRevokeCommandResult, SecurityTransactionStep};
+use arkret_models_crypto::{SecurityRotationRevokeCommandDecision, SecurityTransactionStep};
 use arkret_wire::{AccountId, DeviceId};
 use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
@@ -170,7 +170,7 @@ pub(crate) async fn confirmed_pcr_device_status_cut_in_connection(
             return Err(incomplete("PCR revoke typed transaction changed its proposal").into());
         }
         let decision = match resource.revoke_command_outcome.as_ref() {
-            Some(outcome) if outcome.result == SecurityRotationRevokeCommandResult::Accepted => {
+            Some(outcome) if outcome.result == SecurityRotationRevokeCommandDecision::Accepted => {
                 if durable_step.is_none() || resource.accepted_steps.is_empty() {
                     return Err(incomplete(
                         "PCR revoke accepted step is absent from the durable terminal outcome",
@@ -179,7 +179,7 @@ pub(crate) async fn confirmed_pcr_device_status_cut_in_connection(
                 }
                 RevokeCommandDecision::Accepted
             }
-            Some(outcome) if outcome.result == SecurityRotationRevokeCommandResult::Rejected => {
+            Some(outcome) if outcome.result == SecurityRotationRevokeCommandDecision::Rejected => {
                 if durable_step.is_some() {
                     return Err(
                         incomplete("PCR rejected revoke has an accepted step outcome").into(),

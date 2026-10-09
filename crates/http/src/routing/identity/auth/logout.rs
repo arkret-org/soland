@@ -1,4 +1,4 @@
-use arkret_models_collaboration::session_grants::AuthSessionTerminationResult;
+use arkret_models_collaboration::session_grants::AuthSessionTerminationOutcome;
 
 use super::*;
 
@@ -264,7 +264,7 @@ async fn introspect_session_grant_for_logout(
 /// A metadata-free `not_found` may continue only through an exact durable
 /// journal binding whose DPoP holder is still verified by the caller.
 fn classify_logout_introspection(
-    outcome: crate::wire::SessionGrantValidationResult,
+    outcome: crate::wire::SessionGrantValidationOutcome,
 ) -> Result<Option<crate::wire::SessionGrantValidationMetadata>, AppError> {
     use crate::wire::SessionGrantAdminIntrospectionStatus;
 
@@ -319,7 +319,7 @@ async fn trigger_auth_side_auth_session_logout(
     confirm_auth_side_logout(body)
 }
 
-fn confirm_auth_side_logout(body: AuthSessionTerminationResult) -> Result<(), AppError> {
+fn confirm_auth_side_logout(body: AuthSessionTerminationOutcome) -> Result<(), AppError> {
     if body.grant_chain_terminated && body.auth_session_logged_out {
         return Ok(());
     }
@@ -353,8 +353,8 @@ mod logout_introspection_tests {
     fn outcome(
         active: bool,
         status: SessionGrantAdminIntrospectionStatus,
-    ) -> crate::wire::SessionGrantValidationResult {
-        crate::wire::SessionGrantValidationResult {
+    ) -> crate::wire::SessionGrantValidationOutcome {
+        crate::wire::SessionGrantValidationOutcome {
             active,
             status,
             proof_required: false,
@@ -416,7 +416,7 @@ mod logout_introspection_tests {
     #[test]
     fn auth_side_must_confirm_both_terminal_states() {
         assert!(
-            confirm_auth_side_logout(AuthSessionTerminationResult {
+            confirm_auth_side_logout(AuthSessionTerminationOutcome {
                 grant_chain_terminated: true,
                 auth_session_logged_out: true,
             })
@@ -424,15 +424,15 @@ mod logout_introspection_tests {
         );
 
         for body in [
-            AuthSessionTerminationResult {
+            AuthSessionTerminationOutcome {
                 grant_chain_terminated: false,
                 auth_session_logged_out: true,
             },
-            AuthSessionTerminationResult {
+            AuthSessionTerminationOutcome {
                 grant_chain_terminated: true,
                 auth_session_logged_out: false,
             },
-            AuthSessionTerminationResult {
+            AuthSessionTerminationOutcome {
                 grant_chain_terminated: false,
                 auth_session_logged_out: false,
             },

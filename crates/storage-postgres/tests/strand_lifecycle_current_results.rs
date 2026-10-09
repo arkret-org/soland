@@ -454,7 +454,7 @@ async fn stage_initial_cas_concurrent_winner_and_noop_revision_are_durable() {
             .await
             .unwrap()
             .unwrap();
-    assert!(snapshot.current_state_entries.iter().any(|entry| matches!(entry, arkret_wire::TypedCurrentResult::Value {selector:arkret_wire::CurrentSelector::Strand {strand_id}, revision, value,..} if strand_id == &discussion.strand_id && revision.commit_id == noop.authority_commit.commit.commit_id && value == &settled.value)));
+    assert!(snapshot.current_state_entries.iter().any(|entry| matches!(entry, arkret_wire::TypedCurrentRow::Value {selector:arkret_wire::CurrentSelector::Strand {strand_id}, revision, value,..} if strand_id == &discussion.strand_id && revision.commit_id == noop.authority_commit.commit.commit_id && value == &settled.value)));
 }
 
 #[tokio::test]

@@ -9,7 +9,7 @@ mod pcr_genesis;
 
 use arkret_wire::{
     ActorId, CommitStreamRef, CurrentSelector, EventKind, StreamScanDirection, StreamScanRequest,
-    TypedCurrentResult,
+    TypedCurrentRow,
 };
 use soland_storage::{
     AccountStreamScan, AuthorityCommitStore, AuthorityCommitTransaction, EventCommitUnitOfWork,
@@ -146,7 +146,7 @@ async fn check_circle_reads(history: &str) {
         .unwrap();
     assert!(!hidden.current_state_entries.iter().any(|row| matches!(
         row,
-        TypedCurrentResult::Value {
+        TypedCurrentRow::Value {
             selector: CurrentSelector::Circle { .. },
             ..
         }

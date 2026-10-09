@@ -159,7 +159,7 @@ pub(crate) async fn refresh_account_snapshot(
     realm_id: &RealmId,
     account: &arkret_wire::AccountId,
 ) -> Result<arkret_wire::RealmStateSnapshot, String> {
-    use arkret_wire::{CurrentSelector, TypedCurrentResult};
+    use arkret_wire::{CurrentSelector, TypedCurrentRow};
 
     if account.station_id != state.service_core_id() {
         return Err("the Account is not hosted by this member Station".to_owned());
@@ -175,13 +175,13 @@ pub(crate) async fn refresh_account_snapshot(
         realm_id: realm_id.clone(),
     };
     let own_join = material.current_state_entries.iter().find(|row| matches!(row,
-        TypedCurrentResult::Value {
+        TypedCurrentRow::Value {
             selector: CurrentSelector::MemberState { actor_id }, source_stream_ref, value, ..
         } if actor_id == &actor && source_stream_ref == &realm_stream
             && serde_json::from_value::<arkret_wire::MemberStateCurrent>(value.clone())
                 .is_ok_and(|member| member.membership == arkret_wire::MembershipState::Join)
     )).ok_or("the hosted Account has no accepted current opening join")?;
-    let TypedCurrentResult::Value { revision, .. } = own_join;
+    let TypedCurrentRow::Value { revision, .. } = own_join;
     let governance = commits
         .current_authority(realm_id)
         .await

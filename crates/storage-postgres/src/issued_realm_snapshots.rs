@@ -595,7 +595,7 @@ async fn recheck_disclosure_in_connection(
     issuer: &arkret_wire::DidCoreId,
     snapshot: &arkret_wire::RealmStateSnapshot,
 ) -> PersistenceResult<()> {
-    use arkret_wire::{CommitStreamRef, CurrentSelector, TypedCurrentResult};
+    use arkret_wire::{CommitStreamRef, CurrentSelector, TypedCurrentRow};
 
     let tenure =
         sql_query("SELECT service_id, generation FROM realm_authorities WHERE realm_id=$1")
@@ -687,7 +687,7 @@ async fn recheck_disclosure_in_connection(
     let mut own_membership = None;
     let mut message_targets = Vec::new();
     for row in &snapshot.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             revision,
@@ -1648,7 +1648,7 @@ mod tests {
                 realm_id: base.realm_id.clone(),
                 governance_generation: 0,
                 visible_stream_heads: base.visible_stream_heads.clone(),
-                current_state_entries: vec![arkret_wire::TypedCurrentResult::Value {
+                current_state_entries: vec![arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::RealmProfile,
                     source_stream_ref: base.visible_stream_heads[0].stream_ref.clone(),
                     revision: arkret_wire::CurrentRevision {

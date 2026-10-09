@@ -819,7 +819,7 @@ impl CommittedAgent {
             .await
             .unwrap()
             .expect("committed Agent PCR genesis projects agent_status");
-        let arkret_wire::TypedCurrentResult::Value { value, .. } = result;
+        let arkret_wire::TypedCurrentRow::Value { value, .. } = result;
         value
     }
 }

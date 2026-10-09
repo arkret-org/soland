@@ -15,7 +15,7 @@
 
 use arkret_wire::{
     AccountId, ActorId, CircleId, CommitStreamRef, CurrentSelector, EventKind, ReadableFloor,
-    RealmId, StreamHistoryFloor, TypedCurrentResult,
+    RealmId, StreamHistoryFloor, TypedCurrentRow,
 };
 use diesel::sql_types::Text as SqlText;
 
@@ -510,7 +510,7 @@ fn anchor_bootstrap_join(
     }
     floor.oldest_position = floor_position;
     material.current_state_entries.retain(|row| !matches!(row,
-        TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { .. }, source_stream_ref, revision, .. }
+        TypedCurrentRow::Value { selector: CurrentSelector::MessageRevision { .. }, source_stream_ref, revision, .. }
         if source_stream_ref == stream && revision.stream_position < floor_position
     ));
     Ok(())
@@ -603,7 +603,7 @@ async fn disclosure_facts_in_connection(
     .await?;
     let mut message_streams = std::collections::BTreeMap::new();
     for entry in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector: CurrentSelector::MessageRevision { message_id },
             ..
         } = entry
@@ -619,7 +619,7 @@ async fn disclosure_facts_in_connection(
     // (`models/strand-and-message.md` section 9.8.2), so its disclosure
     // follows that Message's accepted creation stream.
     for entry in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector: CurrentSelector::MessageReactions { target_ref },
             ..
         } = entry
@@ -635,7 +635,7 @@ async fn disclosure_facts_in_connection(
     }
     let mut call_creations = std::collections::BTreeMap::new();
     for entry in &material.current_state_entries {
-        if let TypedCurrentResult::Value {
+        if let TypedCurrentRow::Value {
             selector: CurrentSelector::CallState { call_id },
             ..
         } = entry
@@ -654,7 +654,7 @@ async fn disclosure_facts_in_connection(
         .current_state_entries
         .iter()
         .find_map(|entry| match entry {
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector: CurrentSelector::MemberState { actor_id },
                 source_stream_ref,
                 revision,
@@ -670,7 +670,7 @@ async fn disclosure_facts_in_connection(
         .map_err(PersistenceError::database)?;
     let mut circle_floors = std::collections::BTreeMap::new();
     for entry in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector:
                 CurrentSelector::CircleMemberState {
                     circle_id,
@@ -711,7 +711,7 @@ async fn disclosure_facts_in_connection(
             .current_state_entries
             .iter()
             .find_map(|entry| match entry {
-                TypedCurrentResult::Value {
+                TypedCurrentRow::Value {
                     selector: CurrentSelector::Circle { circle_id: subject },
                     value,
                     ..
@@ -749,7 +749,7 @@ async fn disclosure_facts_in_connection(
     let mut report_subjects = std::collections::BTreeSet::new();
     let at = chrono::Utc::now();
     for entry in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector: CurrentSelector::ModerationReport { event_id },
             source_stream_ref,
             ..
@@ -792,7 +792,7 @@ async fn disclosure_facts_in_connection(
     }
     let mut franking_subjects = std::collections::BTreeSet::new();
     for entry in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector: CurrentSelector::ModerationFrankingProof { event_id },
             ..
         } = entry
@@ -825,7 +825,7 @@ async fn disclosure_facts_in_connection(
     let mut owned_sidecars = std::collections::BTreeSet::new();
     if caller_floor.is_some() {
         for row in &material.current_state_entries {
-            if let TypedCurrentResult::Value {
+            if let TypedCurrentRow::Value {
                 selector: CurrentSelector::Sidecar { sidecar_id },
                 value,
                 ..
@@ -860,7 +860,7 @@ async fn disclosure_facts_in_connection(
     }
     let mut relation_subjects = std::collections::BTreeSet::new();
     for entry in &material.current_state_entries {
-        if let TypedCurrentResult::Value {
+        if let TypedCurrentRow::Value {
             selector:
                 CurrentSelector::Relation {
                     primary_conflict_domain,
@@ -1080,7 +1080,7 @@ pub(crate) fn disclose_to_account(
         .current_state_entries
         .iter()
         .filter_map(|row| match row {
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector: CurrentSelector::Strand { strand_id },
                 value,
                 ..
@@ -1089,7 +1089,7 @@ pub(crate) fn disclose_to_account(
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     for row in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             value,
@@ -1129,7 +1129,7 @@ pub(crate) fn disclose_to_account(
                         .current_state_entries
                         .iter()
                         .find_map(|row| match row {
-                            TypedCurrentResult::Value {
+                            TypedCurrentRow::Value {
                                 selector: CurrentSelector::Space { space_id },
                                 value,
                                 ..
@@ -1206,7 +1206,7 @@ pub(crate) fn disclose_to_account(
         }
     }
     material.current_state_entries.retain(|row| match row {
-        TypedCurrentResult::Value {
+        TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             value,
@@ -1281,7 +1281,7 @@ pub(crate) fn disclose_to_account(
     let mut space_families = std::collections::BTreeMap::new();
     let mut position_subjects = Vec::new();
     for row in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector,
             source_stream_ref,
             revision,
@@ -1719,7 +1719,7 @@ pub(crate) fn disclose_to_account(
                 .current_state_entries
                 .iter()
                 .find_map(|row| match row {
-                    TypedCurrentResult::Value {
+                    TypedCurrentRow::Value {
                         selector, value, ..
                     } if selector == &wanted => Some(value.clone()),
                     _ => None,
@@ -1774,7 +1774,7 @@ pub(crate) fn disclose_to_account(
         })
         .collect::<std::collections::BTreeSet<_>>();
     material.current_state_entries.retain(|row| {
-        if let TypedCurrentResult::Value {
+        if let TypedCurrentRow::Value {
             selector:
                 CurrentSelector::StrandWatch {
                     watcher_actor_id, ..
@@ -1792,7 +1792,7 @@ pub(crate) fn disclose_to_account(
                         Some("all" | "participating")
                     ));
         }
-        if matches!(row, TypedCurrentResult::Value {
+        if matches!(row, TypedCurrentRow::Value {
             selector: CurrentSelector::Rsvp { event_ref, .. },
             ..
         } if redacted_strands.contains(event_ref))
@@ -1801,7 +1801,7 @@ pub(crate) fn disclose_to_account(
         }
         !matches!(
             row,
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector: CurrentSelector::MessageRevision { message_id },
                 ..
             } if redacted.contains(message_id.as_str()) || below_floor.contains(message_id)
@@ -1869,8 +1869,8 @@ mod tests {
         RealmId::from_event_id(&event_id(0x11))
     }
 
-    fn row(selector: CurrentSelector, position: u64, value: Value) -> TypedCurrentResult {
-        TypedCurrentResult::Value {
+    fn row(selector: CurrentSelector, position: u64, value: Value) -> TypedCurrentRow {
+        TypedCurrentRow::Value {
             selector,
             source_stream_ref: CommitStreamRef::Realm {
                 realm_id: realm_id(),
@@ -1920,7 +1920,7 @@ mod tests {
                 .current_state_entries
                 .iter()
                 .find_map(|entry| match entry {
-                    TypedCurrentResult::Value {
+                    TypedCurrentRow::Value {
                         selector: CurrentSelector::Strand { strand_id },
                         ..
                     } => Some(strand_id.clone()),
@@ -1951,7 +1951,7 @@ mod tests {
                 .filter(|entry| {
                     matches!(
                         entry,
-                        TypedCurrentResult::Value {
+                        TypedCurrentRow::Value {
                             selector: CurrentSelector::StrandWatch { .. },
                             ..
                         }
@@ -2217,7 +2217,7 @@ mod tests {
         facts
             .message_streams
             .insert(hidden.clone(), circle_stream.clone());
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector,
             revision,
             value,
@@ -2230,14 +2230,12 @@ mod tests {
             reaction_set(&hidden, 0x58),
         );
         material.current_state_entries.push(reactions.clone());
-        material
-            .current_state_entries
-            .push(TypedCurrentResult::Value {
-                selector,
-                source_stream_ref: circle_stream,
-                revision,
-                value,
-            });
+        material.current_state_entries.push(TypedCurrentRow::Value {
+            selector,
+            source_stream_ref: circle_stream,
+            revision,
+            value,
+        });
         let disclosed = disclose_to_account(material.clone(), &bob, &facts).unwrap();
         // The target Message sits below Bob's floor, but the reaction set is
         // state: it is disclosed whole, while the hidden Circle's is omitted.
@@ -2247,7 +2245,7 @@ mod tests {
             .filter(|row| {
                 matches!(
                     row,
-                    TypedCurrentResult::Value {
+                    TypedCurrentRow::Value {
                         selector: CurrentSelector::MessageReactions { .. },
                         ..
                     }
@@ -2262,7 +2260,7 @@ mod tests {
             json!({"reactions": [{"actor_id": ActorId::account(bob.clone()), "key": "+1"}]}),
         ] {
             let mut drifted = material.clone();
-            let TypedCurrentResult::Value { value, .. } = drifted
+            let TypedCurrentRow::Value { value, .. } = drifted
                 .current_state_entries
                 .iter_mut()
                 .find(|row| **row == reactions)
@@ -2373,7 +2371,7 @@ mod tests {
             material.current_state_entries
         );
         let mut null_position = material.clone();
-        if let Some(TypedCurrentResult::Value { value, .. }) =
+        if let Some(TypedCurrentRow::Value { value, .. }) =
             null_position.current_state_entries.last_mut()
         {
             *value = Value::Null;
@@ -2389,12 +2387,12 @@ mod tests {
             let mut incomplete = material.clone();
             incomplete.current_state_entries.retain(|entry| {
                 !matches!(entry,
-                TypedCurrentResult::Value { selector, .. } if selector == &missing)
+                TypedCurrentRow::Value { selector, .. } if selector == &missing)
             });
             assert!(disclose_to_account(incomplete, &founder, &facts).is_err());
         }
         let mut foreign = material;
-        let TypedCurrentResult::Value { value, .. } = &mut foreign.current_state_entries[8];
+        let TypedCurrentRow::Value { value, .. } = &mut foreign.current_state_entries[8];
         value["realm_id"] = json!(RealmId::from_event_id(&event_id(0x68)));
         assert!(disclose_to_account(foreign, &founder, &facts).is_err());
     }
@@ -2453,7 +2451,7 @@ mod tests {
         assert!(disclose_to_account(material, &founder, &facts).is_err());
     }
 
-    fn redaction_row(target: &str, redacted: &MessageId, position: u64) -> TypedCurrentResult {
+    fn redaction_row(target: &str, redacted: &MessageId, position: u64) -> TypedCurrentRow {
         row(
             CurrentSelector::ObjectRedaction {
                 target_ref: target.to_owned(),
@@ -2483,7 +2481,7 @@ mod tests {
         assert!(
             !disclosed.current_state_entries.iter().any(|entry| matches!(
                 entry,
-                TypedCurrentResult::Value {
+                TypedCurrentRow::Value {
                     selector: CurrentSelector::MessageRevision { .. },
                     ..
                 }
@@ -2524,7 +2522,7 @@ mod tests {
         facts.caller_floor = None;
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         let (founder, mut material, facts) = fixture();
-        let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[7];
+        let TypedCurrentRow::Value { value, .. } = &mut material.current_state_entries[7];
         *value = json!({"membership":"leave"});
         assert!(disclose_to_account(material, &founder, &facts).is_err());
     }
@@ -2544,7 +2542,7 @@ mod tests {
         let disclosed = disclose_to_account(material, &caller, &facts).unwrap();
         assert!(disclosed.current_state_entries.contains(&policy));
         // Governance current remains available below the caller's content floor.
-        let TypedCurrentResult::Value { revision, .. } = &policy;
+        let TypedCurrentRow::Value { revision, .. } = &policy;
         assert!(revision.stream_position < facts.caller_floor.as_ref().unwrap().oldest_position);
     }
 
@@ -2582,7 +2580,7 @@ mod tests {
         }
         let mut material = base;
         let mut policy = row(CurrentSelector::Policy { policy_id: id }, 1, value);
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             source_stream_ref, ..
         } = &mut policy;
         *source_stream_ref = CommitStreamRef::Circle {
@@ -2613,7 +2611,7 @@ mod tests {
         let disclosed = disclose_to_account(material, &founder, &facts).unwrap();
         assert!(!disclosed.current_state_entries.iter().any(|row| matches!(
             row,
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector: CurrentSelector::ModerationReport { .. },
                 ..
             }
@@ -2636,7 +2634,7 @@ mod tests {
         assert!(
             !disclosed.current_state_entries.iter().any(|entry| matches!(
                 entry,
-                TypedCurrentResult::Value {
+                TypedCurrentRow::Value {
                     selector: CurrentSelector::AgentActionApproval { .. },
                     ..
                 }
@@ -2706,7 +2704,7 @@ mod tests {
         let error = disclose_to_account(joined_outsider, &carol, &facts).unwrap_err();
         assert!(error.to_string().contains("exact participant"));
         let binding = material.current_state_entries.last_mut().unwrap();
-        let TypedCurrentResult::Value { selector, .. } = binding;
+        let TypedCurrentRow::Value { selector, .. } = binding;
         *selector = CurrentSelector::DirectConversationBinding {
             pair_key: arkret_wire::Hash::new(format!("sha256:{}", "78".repeat(32))).unwrap(),
         };
@@ -2729,13 +2727,13 @@ mod tests {
         assert_eq!(disclosed.visible_stream_heads.len(), 1);
         assert_eq!(disclosed.retention_and_history_floor.stream_floors.len(), 1);
         let (founder, mut material, facts) = fixture();
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             source_stream_ref, ..
         } = &mut material.current_state_entries[10];
         *source_stream_ref = circle;
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         let (founder, mut material, facts) = fixture();
-        let TypedCurrentResult::Value { revision, .. } = &mut material.current_state_entries[10];
+        let TypedCurrentRow::Value { revision, .. } = &mut material.current_state_entries[10];
         revision.stream_position = 10;
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         let (founder, mut material, facts) = fixture();
@@ -2746,7 +2744,7 @@ mod tests {
     #[test]
     fn circle_strands_and_missing_anchor_rows_are_refused() {
         let (founder, mut material, facts) = fixture();
-        let TypedCurrentResult::Value { value, .. } = &mut material.current_state_entries[8];
+        let TypedCurrentRow::Value { value, .. } = &mut material.current_state_entries[8];
         value["scope_circle_id"] = json!("ak:circle:x");
         assert!(disclose_to_account(material, &founder, &facts).is_err());
         for missing in [0, 1, 5, 7] {
@@ -2778,7 +2776,7 @@ mod tests {
                 "state":"active","created_by":ActorId::account(caller.clone()),"created_at":"2026-09-28T00:00:00.000Z"})));
         let mut circle_row = |selector, position, value| {
             let mut result = row(selector, position, value);
-            let TypedCurrentResult::Value {
+            let TypedCurrentRow::Value {
                 source_stream_ref, ..
             } = &mut result;
             *source_stream_ref = stream.clone();
@@ -2835,15 +2833,15 @@ mod tests {
         assert_eq!(disclosed.visible_stream_heads.len(), 2);
         assert_eq!(disclosed.retention_and_history_floor.stream_floors.len(), 2);
         assert!(!disclosed.current_state_entries.iter().any(|row| matches!(row,
-            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+            TypedCurrentRow::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
                 if message_id == &MessageId::from_event_id(&event_id(0x53))
         )));
         assert!(disclosed.current_state_entries.iter().any(|row| matches!(row,
-            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+            TypedCurrentRow::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
                 if message_id == &MessageId::from_event_id(&event_id(0x33))
         )));
         assert!(disclosed.current_state_entries.iter().any(|row| matches!(row,
-            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+            TypedCurrentRow::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
                 if message_id == &MessageId::from_event_id(&event_id(0x54))
         )));
         let mut outsider_facts = facts;
@@ -2853,7 +2851,7 @@ mod tests {
         assert_eq!(outsider.retention_and_history_floor.stream_floors.len(), 1);
         assert!(!outsider.current_state_entries.iter().any(|row| matches!(
             row,
-            TypedCurrentResult::Value {
+            TypedCurrentRow::Value {
                 selector: CurrentSelector::Circle { .. }
                     | CurrentSelector::CircleMemberState { .. },
                 ..
@@ -2933,7 +2931,7 @@ mod tests {
             .is_err()
         );
         assert!(disclosed.current_state_entries.iter().any(|row| matches!(row,
-            TypedCurrentResult::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
+            TypedCurrentRow::Value { selector: CurrentSelector::MessageRevision { message_id }, .. }
                 if message_id==&MessageId::from_event_id(&event_id(0x33))
         )));
         assert!(

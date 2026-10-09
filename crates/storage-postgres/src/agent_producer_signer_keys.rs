@@ -5,7 +5,8 @@
 
 use arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload;
 use arkret_models_identity::{
-    HistoricalSignerKeyQuerySender, ResolvedSignerKey, SignerKeyQueryResult, SignerKeyQuerySelector,
+    HistoricalSignerKeyQuerySender, ResolvedSignerKey, SignerKeyQueryOutcome,
+    SignerKeyQuerySelector,
 };
 
 use super::*;
@@ -113,7 +114,7 @@ pub(crate) async fn retain_in_connection(
             },
         },
     };
-    let outcome = SignerKeyQueryResult::HistoricalResolved {
+    let outcome = SignerKeyQueryOutcome::HistoricalResolved {
         selector,
         key: ResolvedSignerKey {
             public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
@@ -136,13 +137,13 @@ async fn retain_outcome_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
-    outcome: SignerKeyQueryResult,
+    outcome: SignerKeyQueryOutcome,
 ) -> PersistenceResult<()> {
     retain_outcome_with_self_admission(conn, event, commit, outcome, None).await
 }
 
 pub(crate) struct PreparedSelfHistoricalFact {
-    outcome: SignerKeyQueryResult,
+    outcome: SignerKeyQueryOutcome,
     kind: &'static str,
     provenance: Value,
 }
@@ -183,7 +184,7 @@ async fn retain_outcome_with_self_admission(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
-    outcome: SignerKeyQueryResult,
+    outcome: SignerKeyQueryOutcome,
     provenance: Option<(&arkret_wire::AccountId, &'static str, &Value)>,
 ) -> PersistenceResult<()> {
     outcome
@@ -241,7 +242,7 @@ async fn confirmed_human_outcome_in_connection(
     status: &crate::pcr_device_status_reader::ConfirmedPcrDeviceStatusCut,
     account: &arkret_wire::AccountId,
     device: &arkret_wire::DeviceId,
-) -> PersistenceResult<SignerKeyQueryResult> {
+) -> PersistenceResult<SignerKeyQueryOutcome> {
     let authorization = status.authority.authorization.as_ref().ok_or_else(|| {
         PersistenceError::Conflict("self historical authorization is absent".into())
     })?;
@@ -284,7 +285,7 @@ async fn human_outcome_in_connection(
     event: &arkret_wire::Event,
     commit: &arkret_wire::RealmCommit,
     guard: &soland_storage::DeviceRevocationGateSelector,
-) -> PersistenceResult<SignerKeyQueryResult> {
+) -> PersistenceResult<SignerKeyQueryOutcome> {
     if commit.event_ref != event.event_id || commit.realm_id != event.realm_id {
         return Err(PersistenceError::Conflict(
             "Human historical target differs".into(),
@@ -297,8 +298,8 @@ async fn human_outcome_in_connection(
 fn human_fact_outcome(
     fact: &arkret_models_collaboration::authority_commit::HumanHistoricalSignerFact,
     commit: &arkret_wire::RealmCommit,
-) -> SignerKeyQueryResult {
-    SignerKeyQueryResult::HistoricalResolved {
+) -> SignerKeyQueryOutcome {
+    SignerKeyQueryOutcome::HistoricalResolved {
         selector: SignerKeyQuerySelector::HistoricalEvent {
             sender: HistoricalSignerKeyQuerySender::AccountDevice {
                 actor: fact.actor.clone(),
@@ -709,8 +710,8 @@ pub(crate) async fn retain_prepared_human_in_connection(
 fn service_fact_outcome(
     fact: &arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact,
     commit: &arkret_wire::RealmCommit,
-) -> SignerKeyQueryResult {
-    SignerKeyQueryResult::HistoricalServiceResolved {
+) -> SignerKeyQueryOutcome {
+    SignerKeyQueryOutcome::HistoricalServiceResolved {
         selector: SignerKeyQuerySelector::HistoricalEvent {
             sender: HistoricalSignerKeyQuerySender::Service {
                 actor: fact.actor.clone(),
@@ -731,7 +732,7 @@ fn service_fact_outcome(
 fn producer_fact_outcome(
     fact: &arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact,
     commit: &arkret_wire::RealmCommit,
-) -> SignerKeyQueryResult {
+) -> SignerKeyQueryOutcome {
     use arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact as Fact;
     match fact {
         Fact::Human(fact) => human_fact_outcome(fact, commit),
@@ -816,7 +817,7 @@ pub(crate) async fn read(
     pool: &PgPool,
     realm_id: &arkret_wire::RealmId,
     selector: &SignerKeyQuerySelector,
-) -> PersistenceResult<Option<SignerKeyQueryResult>> {
+) -> PersistenceResult<Option<SignerKeyQueryOutcome>> {
     let Some(target) = selector.committed_event_ref() else {
         historical_fact_diagnostic("ordinary_read", "target_missing");
         return Ok(None);
@@ -854,7 +855,7 @@ pub(crate) async fn read(
         historical_fact_diagnostic("ordinary_read", "immutable_fact_not_found");
         return Ok(None);
     };
-    let outcome: SignerKeyQueryResult = serde_json::from_value(row.payload).map_err(|error| {
+    let outcome: SignerKeyQueryOutcome = serde_json::from_value(row.payload).map_err(|error| {
         historical_fact_diagnostic("ordinary_read", "fact_decode_failed");
         PersistenceError::database(error)
     })?;
@@ -887,7 +888,7 @@ pub(crate) async fn read(
     }
     if matches!(
         &outcome,
-        SignerKeyQueryResult::HistoricalServiceResolved { .. }
+        SignerKeyQueryOutcome::HistoricalServiceResolved { .. }
     ) {
         let fact = producer_source_for_commit_in_connection(&mut conn, &event, &commit).await?;
         let Some(
@@ -905,8 +906,8 @@ pub(crate) async fn read(
     let matches = outcome.selector() == selector
         && matches!(
             outcome,
-            SignerKeyQueryResult::HistoricalResolved { .. }
-                | SignerKeyQueryResult::HistoricalServiceResolved { .. }
+            SignerKeyQueryOutcome::HistoricalResolved { .. }
+                | SignerKeyQueryOutcome::HistoricalServiceResolved { .. }
         );
     historical_fact_diagnostic(
         "ordinary_read",
@@ -925,7 +926,7 @@ pub(crate) async fn read_self_pcr(
     realm_id: &arkret_wire::RealmId,
     selector: &SignerKeyQuerySelector,
     recipient: &arkret_wire::AccountId,
-) -> PersistenceResult<Option<SignerKeyQueryResult>> {
+) -> PersistenceResult<Option<SignerKeyQueryOutcome>> {
     let SignerKeyQuerySelector::HistoricalEvent {
         sender: HistoricalSignerKeyQuerySender::AccountDevice { actor, .. },
     } = selector
@@ -1045,7 +1046,7 @@ pub(crate) async fn read_self_pcr(
             );
             PersistenceError::database(error)
         })?;
-    let outcome: SignerKeyQueryResult = serde_json::from_value(row.outcome).map_err(|error| {
+    let outcome: SignerKeyQueryOutcome = serde_json::from_value(row.outcome).map_err(|error| {
         historical_fact_diagnostic("restricted_self_pcr_read", "fact_or_selector_decode_failed");
         PersistenceError::database(error)
     })?;
@@ -1057,7 +1058,7 @@ pub(crate) async fn read_self_pcr(
         PersistenceError::SchemaViolation(error.to_string())
     })?;
     if outcome.selector() != selector
-        || !matches!(outcome, SignerKeyQueryResult::HistoricalResolved { .. })
+        || !matches!(outcome, SignerKeyQueryOutcome::HistoricalResolved { .. })
         || outcome
             .key()
             .map(|key| key.authorization_ref.stream_ref.realm_id())

@@ -632,7 +632,7 @@ async fn foreign_parent_is_readable(
             (&candidate.parent_revision, &candidate.parent),
             (&candidate.policy_revision, &candidate.policy),
         ]) {
-            let arkret_wire::TypedCurrentResult::Value {
+            let arkret_wire::TypedCurrentRow::Value {
                 revision, value, ..
             } = entry;
             let Ok(stored_revision) =

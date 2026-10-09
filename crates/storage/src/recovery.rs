@@ -37,7 +37,7 @@ pub struct RevokeCommandTerminalWrite {
 impl RevokeCommandTerminalWrite {
     pub fn validate(&self) -> PersistenceResult<()> {
         use arkret_models_crypto::{
-            SecurityRotationRevokeCommandResult, SecurityTransactionStep,
+            SecurityRotationRevokeCommandDecision, SecurityTransactionStep,
             SecurityTransactionTerminalOutcome,
         };
 
@@ -54,7 +54,7 @@ impl RevokeCommandTerminalWrite {
             PersistenceError::SchemaViolation("revoke command outcome is missing".to_owned())
         })?;
         match outcome.result {
-            SecurityRotationRevokeCommandResult::Accepted => {
+            SecurityRotationRevokeCommandDecision::Accepted => {
                 let step = self.step_outcome.as_ref().ok_or_else(|| {
                     PersistenceError::SchemaViolation(
                         "accepted revoke requires its durable step outcome".to_owned(),
@@ -73,7 +73,7 @@ impl RevokeCommandTerminalWrite {
                     ));
                 }
             }
-            SecurityRotationRevokeCommandResult::Rejected => {
+            SecurityRotationRevokeCommandDecision::Rejected => {
                 if self.step_outcome.is_some()
                     || !resource.accepted_steps.is_empty()
                     || !matches!(

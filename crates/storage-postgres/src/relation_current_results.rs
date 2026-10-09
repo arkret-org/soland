@@ -101,7 +101,7 @@ struct RelationSnapshotReadRow {
 pub(crate) async fn snapshot_rows_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,
-) -> PersistenceResult<Vec<arkret_wire::TypedCurrentResult>> {
+) -> PersistenceResult<Vec<arkret_wire::TypedCurrentRow>> {
     let rows = sql_query(
         "SELECT result.*, covering.stream_ref AS source_stream_ref \
          FROM relation_current_results result LEFT JOIN realm_commits covering \
@@ -136,7 +136,7 @@ pub(crate) async fn snapshot_rows_in_connection(
                     "Relation current source differs from its value scope",
                 ));
             }
-            Ok(arkret_wire::TypedCurrentResult::Value {
+            Ok(arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::Relation {
                     primary_conflict_domain: record.primary_conflict_domain,
                 },

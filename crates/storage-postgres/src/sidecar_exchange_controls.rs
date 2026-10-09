@@ -216,10 +216,10 @@ pub(crate) async fn commit_in_connection(
 pub(crate) async fn install_in_connection(
     conn: &mut AsyncPgConnection,
     realm: &arkret_wire::RealmId,
-    entry: &arkret_wire::TypedCurrentResult,
+    entry: &arkret_wire::TypedCurrentRow,
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         selector:
             arkret_wire::CurrentSelector::AgentSidecarExchangeControls {
                 sidecar_id,

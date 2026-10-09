@@ -539,7 +539,7 @@ async fn verify_signal_agent_current_authority(
             )
             .await
             .map_err(|_| signal_rail_unavailable("resolve Signal authority"))?;
-        if !matches!(mode, Some(arkret_wire::TypedCurrentResult::Value { value, .. }) if serde_json::from_value::<arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue>(value.clone()).is_ok_and(|v| v.controller_account_id == controller_account && v.interaction_mode == arkret_models_collaboration::agent_interaction::AgentInteractionMode::Public))
+        if !matches!(mode, Some(arkret_wire::TypedCurrentRow::Value { value, .. }) if serde_json::from_value::<arkret_models_collaboration::agent_interaction::AgentInteractionCurrentValue>(value.clone()).is_ok_and(|v| v.controller_account_id == controller_account && v.interaction_mode == arkret_models_collaboration::agent_interaction::AgentInteractionMode::Public))
         {
             return Err(signal_proof_invalid("Signal authority is unavailable"));
         }
@@ -930,7 +930,7 @@ pub(crate) async fn admitted_signal_frame(
     envelope: SignalEnvelope,
 ) -> Result<SignalStreamFrame, AppError> {
     use arkret_models_identity::{
-        CurrentSignerKeyQuerySender, SignerKeyQueryResult, SignerKeyQuerySelector,
+        CurrentSignerKeyQuerySender, SignerKeyQueryOutcome, SignerKeyQuerySelector,
         SignerKeysQueryRequestBody,
     };
     let actor =
@@ -968,7 +968,7 @@ pub(crate) async fn admitted_signal_frame(
         outcome
             .validate_for_request(&request)
             .map_err(structural_error)?;
-        let Some(SignerKeyQueryResult::CurrentResolved { selector, key }) =
+        let Some(SignerKeyQueryOutcome::CurrentResolved { selector, key }) =
             outcome.results.into_iter().next()
         else {
             return Err(signal_rail_unavailable("verify current sender authority"));

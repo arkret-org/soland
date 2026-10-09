@@ -1647,7 +1647,7 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     assert_eq!(historical.selector(), &historical_selector);
     assert!(matches!(
         historical,
-        arkret_models_identity::SignerKeyQueryResult::HistoricalResolved { .. }
+        arkret_models_identity::SignerKeyQueryOutcome::HistoricalResolved { .. }
     ));
     historical.validate(&realm_id).unwrap();
 
@@ -3605,7 +3605,7 @@ async fn participant_authority_scenario() {
             .current_state_entries
             .iter()
             .find_map(|entry| match entry {
-                arkret_wire::TypedCurrentResult::Value {
+                arkret_wire::TypedCurrentRow::Value {
                     selector: arkret_wire::CurrentSelector::DirectConversationBinding { pair_key },
                     source_stream_ref,
                     value,

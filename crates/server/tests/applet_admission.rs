@@ -963,7 +963,7 @@ async fn revoke_original_admin_device(fixture: &Fixture) {
     terminal.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: revoke.event_id,
         covering_commit_id: covering.commit_id,
-        result: SecurityRotationRevokeCommandResult::Accepted,
+        result: SecurityRotationRevokeCommandDecision::Accepted,
         decided_at,
     });
     persistence
@@ -2464,7 +2464,7 @@ impl Fixture {
         grant
             .validate()
             .expect("actual accepted founding-device StandardGrant metadata");
-        let introspection = arkret_models_collaboration::session_grants::SessionGrantValidationResult {
+        let introspection = arkret_models_collaboration::session_grants::SessionGrantValidationOutcome {
             active: true,
             status: arkret_models_identity::admin_grant::SessionGrantAdminIntrospectionStatus::Active,
             proof_required: false,
@@ -2473,7 +2473,7 @@ impl Fixture {
         };
         let wire = serde_json::to_value(&introspection).unwrap();
         serde_json::from_value::<
-            arkret_models_collaboration::session_grants::SessionGrantValidationResult,
+            arkret_models_collaboration::session_grants::SessionGrantValidationOutcome,
         >(wire.clone())
         .expect("typed introspection response round-trip")
         .validate()

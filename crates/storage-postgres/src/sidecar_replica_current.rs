@@ -1,5 +1,5 @@
 //! Install source-signed Sidecar current values without replaying admission.
-use arkret_wire::{CommitStreamRef, CurrentSelector, RealmId, TypedCurrentResult};
+use arkret_wire::{CommitStreamRef, CurrentSelector, RealmId, TypedCurrentRow};
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName};
 use diesel_async::RunQueryDsl;
@@ -20,10 +20,10 @@ fn invalid(message: &str) -> PersistenceError {
 pub(crate) async fn install_in_connection(
     conn: &mut crate::AsyncPgConnection,
     realm: &RealmId,
-    entry: &TypedCurrentResult,
+    entry: &TypedCurrentRow,
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
-    let TypedCurrentResult::Value {
+    let TypedCurrentRow::Value {
         selector,
         source_stream_ref,
         revision,
@@ -237,7 +237,7 @@ mod tests {
         attach.authority_commit.commit.stream_position = 0;
         attach.authority_commit.commit.previous_commit_ref = None;
         let attach = recovery_fixture::source_request(&pool, attach).await;
-        let entry = TypedCurrentResult::Value {
+        let entry = TypedCurrentRow::Value {
             selector: CurrentSelector::SidecarContext {
                 sidecar_id: sidecar.clone(),
                 source_context_ref: context,

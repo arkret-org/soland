@@ -315,7 +315,7 @@ impl Cut {
         stream: &CommitStreamRef,
         head: &arkret_wire::CommitStreamHead,
     ) -> PersistenceResult<Self> {
-        use arkret_wire::{CurrentSelector as S, TypedCurrentResult};
+        use arkret_wire::{CurrentSelector as S, TypedCurrentRow};
         let mut cut = Self::default();
         let mut genesis_present = false;
         if snapshot.realm_id != *stream.realm_id()
@@ -326,7 +326,7 @@ impl Cut {
         }
         let mut selectors = BTreeSet::new();
         for entry in &snapshot.current_state_entries {
-            let TypedCurrentResult::Value {
+            let TypedCurrentRow::Value {
                 selector,
                 source_stream_ref,
                 revision,

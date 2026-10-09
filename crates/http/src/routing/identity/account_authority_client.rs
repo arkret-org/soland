@@ -1,12 +1,12 @@
 use arkret_models_collaboration::session_grants::{
-    AuthSessionTerminationInput, AuthSessionTerminationReason, AuthSessionTerminationResult,
+    AuthSessionTerminationInput, AuthSessionTerminationOutcome, AuthSessionTerminationReason,
     SessionGrantValidationByJwt,
 };
 use chrono::{DateTime, Utc};
 use soland_http::error::AppError;
 
 use crate::state::AppState;
-use crate::wire::{SessionGrantValidationInput, SessionGrantValidationResult};
+use crate::wire::{SessionGrantValidationInput, SessionGrantValidationOutcome};
 
 /// Typed deployment-internal boundary from the Station to its Account Authority process.
 ///
@@ -52,7 +52,7 @@ impl<'a> AccountAuthorityClient<'a> {
     pub(crate) async fn introspect_logout_grant(
         &self,
         grant_jwt: &str,
-    ) -> Result<SessionGrantValidationResult, AppError> {
+    ) -> Result<SessionGrantValidationOutcome, AppError> {
         let audience = arkret_identifiers::DidCoreId::new(self.state.service_id().clone())
             .map_err(|error| {
                 AppError::internal(format!(
@@ -76,7 +76,7 @@ impl<'a> AccountAuthorityClient<'a> {
         &self,
         grant_jwt: &str,
         validated_at: DateTime<Utc>,
-    ) -> Result<AuthSessionTerminationResult, AppError> {
+    ) -> Result<AuthSessionTerminationOutcome, AppError> {
         let request = AuthSessionTerminationInput {
             grant_jwt: grant_jwt.to_owned(),
             logout_request_digest: None,

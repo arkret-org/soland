@@ -140,7 +140,7 @@ mod snapshot_capacity_tests {
                 stream_position: 0,
                 commit_id: arkret_wire::RealmCommitId::from_digest([3; 32]),
             }],
-            current_state_entries: vec![arkret_wire::TypedCurrentResult::Value {
+            current_state_entries: vec![arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::RealmProfile,
                 source_stream_ref: stream_ref.clone(),
                 revision: arkret_wire::CurrentRevision {

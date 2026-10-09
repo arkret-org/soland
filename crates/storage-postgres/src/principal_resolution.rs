@@ -206,7 +206,7 @@ impl PgPrincipalResolutionStore {
             return Ok(IndexRebuild::NoAnchor);
         };
         let result = serde_json::from_value::<
-            arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult,
+            arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome,
         >(row.result_json)
         .map_err(|error| {
             PersistenceError::Internal(format!("stored PCR genesis result is invalid: {error}"))

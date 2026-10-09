@@ -285,12 +285,12 @@ async fn snapshot_only_parent_cases() {
     .unwrap()
     .unwrap();
     assert!(read.current_state_entries.iter().any(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value {selector:arkret_wire::CurrentSelector::Space {space_id},..}
+        arkret_wire::TypedCurrentRow::Value {selector:arkret_wire::CurrentSelector::Space {space_id},..}
             if space_id==&foreign_id)));
     let original_space = read.current_state_entries.iter().find(|entry| matches!(entry,
-        arkret_wire::TypedCurrentResult::Value {selector:arkret_wire::CurrentSelector::Space {space_id},..}
+        arkret_wire::TypedCurrentRow::Value {selector:arkret_wire::CurrentSelector::Space {space_id},..}
             if space_id==&foreign_id)).unwrap().clone();
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         value: original_value,
         revision: original_revision,
         ..

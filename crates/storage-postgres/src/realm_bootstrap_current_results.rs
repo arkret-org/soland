@@ -445,14 +445,14 @@ mod tests {
                 .find(|entry| {
                     matches!(
                         entry,
-                        arkret_wire::TypedCurrentResult::Value {
+                        arkret_wire::TypedCurrentRow::Value {
                             selector: arkret_wire::CurrentSelector::RealmPreviewPolicy,
                             ..
                         }
                     )
                 })
                 .expect("confirmed preview current in material");
-            let arkret_wire::TypedCurrentResult::Value {
+            let arkret_wire::TypedCurrentRow::Value {
                 revision,
                 value: actual,
                 source_stream_ref,

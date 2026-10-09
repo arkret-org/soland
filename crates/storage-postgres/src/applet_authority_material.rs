@@ -4,7 +4,7 @@ use arkret_models_collaboration::applet_installation_authority::{
 };
 use arkret_models_collaboration::events_payloads::CapabilityGrantPayload;
 use arkret_models_collaboration::exact_current_results::{
-    CapabilityGrantExactCurrentResult, CapabilityGrantExactCurrentSelector,
+    CapabilityGrantExactCurrentRow, CapabilityGrantExactCurrentSelector,
     CapabilityGrantExactCurrentSelectorKind, ExactCurrentResultEntry,
     ExactCurrentResultsReadOutcome,
 };
@@ -301,7 +301,7 @@ pub(crate) async fn read(
             realm_id: realm.clone(),
             governance_generation: generation,
             effective_stream_head: effective_head.clone(),
-            entry: ExactCurrentResultEntry::CapabilityGrant(CapabilityGrantExactCurrentResult {
+            entry: ExactCurrentResultEntry::CapabilityGrant(CapabilityGrantExactCurrentRow {
                 selector: selector.clone(),
                 source_stream_ref: current.source.stream_ref,
                 revision: current.revision,

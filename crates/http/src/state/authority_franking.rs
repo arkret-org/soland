@@ -176,7 +176,7 @@ pub(crate) async fn verify_franking_committed_pair(
                 .authority_commits()
                 .historical_producer_signer_key(realm, &selector)
                 .await?;
-            let Some(arkret_models_identity::SignerKeyQueryResult::HistoricalResolved {
+            let Some(arkret_models_identity::SignerKeyQueryOutcome::HistoricalResolved {
                 selector: actual,
                 key,
                 ..

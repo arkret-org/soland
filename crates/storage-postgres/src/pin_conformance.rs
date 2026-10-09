@@ -223,7 +223,7 @@ pub async fn run_pin_admission_fixture() -> Vec<(&'static str, usize)> {
         .current_state_entries
         .iter()
         .find_map(|entry| match entry {
-            arkret_wire::TypedCurrentResult::Value {
+            arkret_wire::TypedCurrentRow::Value {
                 selector: arkret_wire::CurrentSelector::Pin { .. },
                 value,
                 ..

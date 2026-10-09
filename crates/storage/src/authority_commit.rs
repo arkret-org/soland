@@ -171,7 +171,7 @@ pub struct CommittedEventRecord {
 /// Durable MIMI room binding winner at one accepted RealmCommit revision.
 #[derive(Clone, Debug)]
 pub struct MimiRoomBindingCurrentRecord {
-    pub current: arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingCurrentResult,
+    pub current: arkret_models_collaboration::events_payloads::mimi::MimiRoomBindingCurrentRow,
     pub source_event_id: arkret_wire::EventId,
     pub realm_id: arkret_wire::RealmId,
 }
@@ -200,7 +200,7 @@ pub struct RealmStateSnapshotMaterial {
     pub realm_id: arkret_wire::RealmId,
     pub governance_generation: u64,
     pub visible_stream_heads: Vec<arkret_wire::CommitStreamHead>,
-    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentRow>,
     pub retention_and_history_floor: arkret_wire::RetentionAndHistoryFloor,
 }
 
@@ -210,7 +210,7 @@ pub struct RealmStateSnapshotMaterial {
 pub struct DirectConversationReplicaCut {
     pub authority: CurrentRealmAuthority,
     pub head: CommitStreamHead,
-    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentRow>,
 }
 
 impl DirectConversationReplicaCut {
@@ -280,7 +280,7 @@ pub struct AccountRealmWindow {
     pub current_stream_heads: Vec<arkret_wire::CommitStreamHead>,
     /// Typed current results of the same proved cut, i.e. at the window
     /// cut; the Account current carrier of the window's Realm detail.
-    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentRow>,
 }
 
 /// An issued snapshot without any live window reservation stays archived at
@@ -695,8 +695,8 @@ pub struct PcrGenesisCommitUnit {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PcrGenesisCommitOutcome {
-    Committed(arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult),
-    Duplicate(arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult),
+    Committed(arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome),
+    Duplicate(arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome),
 }
 
 impl PcrGenesisCommitUnit {
@@ -1327,7 +1327,7 @@ pub struct ReplicaAnchorInstall {
     /// The snapshot's head on the Realm stream, at or after the join.
     pub snapshot_head: CommitStreamHead,
     pub visible_stream_heads: Vec<CommitStreamHead>,
-    pub current_state_entries: Vec<arkret_wire::TypedCurrentResult>,
+    pub current_state_entries: Vec<arkret_wire::TypedCurrentRow>,
     /// Exact signed bootstrap verified by the caller, archived with its rows.
     pub verified_snapshot: arkret_wire::RealmStateSnapshot,
 }
@@ -1467,7 +1467,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
-    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryOutcome>> {
         let _ = (realm_id, selector);
         Ok(None)
     }
@@ -1479,7 +1479,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_models_identity::SignerKeyQuerySelector,
         recipient: &arkret_wire::AccountId,
-    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryResult>> {
+    ) -> PersistenceResult<Option<arkret_models_identity::SignerKeyQueryOutcome>> {
         let _ = (realm_id, selector, recipient);
         Ok(None)
     }
@@ -2048,7 +2048,7 @@ pub trait AuthorityCommitStore: Send + Sync {
         submission: &arkret_models_collaboration::principal_operations::PcrGenesisAdmissionInput,
         exact_request_body: &[u8],
     ) -> PersistenceResult<
-        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionResult>,
+        Option<arkret_models_collaboration::principal_operations::PcrGenesisAdmissionOutcome>,
     >;
 
     /// Atomically checks current authority, appends the per-stream commit,
@@ -2098,14 +2098,14 @@ pub trait AuthorityCommitStore: Send + Sync {
         &self,
         realm_id: &arkret_wire::RealmId,
         selector: &arkret_wire::CurrentSelector,
-    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>>;
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentRow>>;
 
     /// Restore the default pointer from its accepted Commit or verified
     /// replica cut, without reading unrelated current families.
     async fn realm_default_strand_current(
         &self,
         realm_id: &arkret_wire::RealmId,
-    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentResult>>;
+    ) -> PersistenceResult<Option<arkret_wire::TypedCurrentRow>>;
 
     /// Governance generation and current heads for every independent Realm,
     /// Circle, and Sidecar stream at one durable cut, sorted by `stream_ref`.

@@ -909,7 +909,7 @@ async fn admit_sync_revoke_terminal(
     use arkret_models_crypto::{
         AcceptedSecurityTransactionStep, BackupObjectRef, BackupRotationBinding,
         BackupRotationKind, BackupRotationPlan, PreparedEventBatchRequest, PreparedEventUnit,
-        SecurityRotationRevokeCommandOutcome, SecurityRotationRevokeCommandResult,
+        SecurityRotationRevokeCommandDecision, SecurityRotationRevokeCommandOutcome,
         SecurityRotationRevokeProposal, SecurityRotationTransactionCreateRequest,
         SecurityTransactionAcceptor, SecurityTransactionCreateRequest,
         SecurityTransactionPreparedPlan, SecurityTransactionStep,
@@ -1088,7 +1088,7 @@ async fn admit_sync_revoke_terminal(
     accepted.resource.revoke_command_outcome = Some(SecurityRotationRevokeCommandOutcome {
         proposal_event_id: revoke.event_id,
         covering_commit_id: covering.commit_id,
-        result: SecurityRotationRevokeCommandResult::Accepted,
+        result: SecurityRotationRevokeCommandDecision::Accepted,
         decided_at,
     });
     transactions

@@ -4,11 +4,11 @@ use arkret_canonical::base64url::base64url_decode;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload;
 use arkret_models_identity::{
-    CurrentDeviceSigningKey, CurrentSignerKeyQuerySender, ResolvedSignerKey, SignerKeyQueryResult,
+    CurrentDeviceSigningKey, CurrentSignerKeyQuerySender, ResolvedSignerKey, SignerKeyQueryOutcome,
     SignerKeyQuerySelector, SignerKeysQueryOutcome, SignerKeysQueryRequestBody,
 };
 use arkret_wire::{
-    CommittedEventRef, CurrentSelector, EventId, RealmId, StationSigningKey, TypedCurrentResult,
+    CommittedEventRef, CurrentSelector, EventId, RealmId, StationSigningKey, TypedCurrentRow,
 };
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -209,7 +209,7 @@ pub(crate) async fn resolve_self_signer_keys(
             signer_query_diagnostic("result", "unavailable");
         }
         results.push(
-            resolved.unwrap_or_else(|| SignerKeyQueryResult::Unavailable {
+            resolved.unwrap_or_else(|| SignerKeyQueryOutcome::Unavailable {
                 selector: selector.clone(),
             }),
         );
@@ -230,7 +230,7 @@ async fn current_device_key(
     state: &AppState,
     body: &SignerKeysQueryRequestBody,
     selector: &SignerKeyQuerySelector,
-) -> Option<SignerKeyQueryResult> {
+) -> Option<SignerKeyQueryOutcome> {
     let account = selector.actor().as_account_id()?;
     let device = selector.device_id()?;
     let projection = super::keys::current_device_projection_for_signer(
@@ -271,7 +271,7 @@ async fn current_device_key(
         .ok()?,
     };
     key.validate().ok()?;
-    Some(SignerKeyQueryResult::CurrentDeviceResolved {
+    Some(SignerKeyQueryOutcome::CurrentDeviceResolved {
         selector: selector.clone(),
         key,
     })
@@ -340,7 +340,7 @@ async fn current_agent_key(
     state: &AppState,
     realm_id: &RealmId,
     selector: &SignerKeyQuerySelector,
-) -> Option<SignerKeyQueryResult> {
+) -> Option<SignerKeyQueryOutcome> {
     let agent_id = &selector.actor().as_account_id()?.principal_id;
     let agent = state
         .agent_pairings()
@@ -359,7 +359,7 @@ async fn current_agent_key(
     let mut status = None;
     let mut active = Vec::new();
     for entry in &material.current_state_entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector: current,
             value,
             revision,
@@ -479,7 +479,7 @@ async fn current_agent_key(
         realm_id,
     )
     .ok()?;
-    Some(SignerKeyQueryResult::CurrentResolved {
+    Some(SignerKeyQueryOutcome::CurrentResolved {
         selector: selector.clone(),
         key,
     })
@@ -528,7 +528,7 @@ pub(crate) async fn current_agent_endpoint_key(
             verification_method: verification_method.clone(),
         },
     };
-    let Some(SignerKeyQueryResult::CurrentResolved { key, .. }) =
+    let Some(SignerKeyQueryOutcome::CurrentResolved { key, .. }) =
         current_agent_key(state, &realm_id, &selector).await
     else {
         return Err("Agent producer has no current accepted signing key".to_owned());

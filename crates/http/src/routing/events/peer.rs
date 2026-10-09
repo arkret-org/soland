@@ -16,7 +16,7 @@ use arkret_models_collaboration::authority_commit::{
 };
 use arkret_models_collaboration::objects::direct_conversation::DirectConversationFoundingAuthorityEvidence;
 use arkret_models_collaboration::principal_operations::{
-    PcrGenesisAdmissionInput, PcrGenesisAdmissionResult,
+    PcrGenesisAdmissionInput, PcrGenesisAdmissionOutcome,
 };
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
 use arkret_wire::{SignalRelayOutcome, SignalRelayRequest};
@@ -53,7 +53,7 @@ pub(super) fn router() -> Router {
 pub(super) async fn admit_private_principal_genesis(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PcrGenesisAdmissionResult> {
+) -> JsonResult<PcrGenesisAdmissionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     authenticate_account_authority_private_request(state, req)?;
     let header_idempotency_key = required_header(req, "idempotency-key")?;

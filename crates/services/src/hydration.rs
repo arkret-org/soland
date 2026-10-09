@@ -1498,7 +1498,7 @@ pub async fn hydrate_projections_from_persistence(
                     "confirmed default Strand Event has no typed current result".to_owned(),
                 )
             })?;
-        let arkret_wire::TypedCurrentResult::Value { value, .. } = result;
+        let arkret_wire::TypedCurrentRow::Value { value, .. } = result;
         let object = value
             .as_object()
             .filter(|object| object.len() == 1)

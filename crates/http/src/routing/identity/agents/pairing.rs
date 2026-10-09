@@ -446,7 +446,7 @@ pub(super) async fn accepted_agent_key_authorization_snapshot(
     let mut lifecycle = None;
     let mut active = BTreeSet::new();
     for entry in &material.current_state_entries {
-        let arkret_wire::TypedCurrentResult::Value {
+        let arkret_wire::TypedCurrentRow::Value {
             selector, value, ..
         } = entry;
         match selector {

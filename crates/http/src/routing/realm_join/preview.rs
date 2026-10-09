@@ -18,7 +18,7 @@ use arkret_models_collaboration::governance::realm_join_intake::{
 };
 use arkret_wire::{
     AccountId, ActorId, Base64UrlString, CurrentSelector, DidCoreId, HistoryAccess, InviteId,
-    JoinRule, RealmId, TypedCurrentResult,
+    JoinRule, RealmId, TypedCurrentRow,
 };
 use base64::Engine as _;
 use salvo::prelude::*;
@@ -291,11 +291,11 @@ impl PreviewAudience {
 }
 
 fn singleton_value<'a>(
-    entries: &'a [TypedCurrentResult],
+    entries: &'a [TypedCurrentRow],
     wanted: &CurrentSelector,
 ) -> Option<&'a serde_json::Value> {
     entries.iter().find_map(|entry| match entry {
-        TypedCurrentResult::Value {
+        TypedCurrentRow::Value {
             selector, value, ..
         } if selector == wanted => Some(value),
         _ => None,
@@ -312,7 +312,7 @@ fn disclose(
     audience: PreviewAudience,
     realm_id: &RealmId,
     governance_generation: u64,
-    entries: &[TypedCurrentResult],
+    entries: &[TypedCurrentRow],
 ) -> Option<RealmPublicPreview> {
     if policy.mode == "none" || !audience.admitted_by(&policy.audiences) {
         return None;

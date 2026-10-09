@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_models_collaboration::governance::grant_constraint::{
     AuthorityRootRef, CapabilityGrant, CapabilitySubject, IssuerAuthorityRef,
 };
-use arkret_wire::{ActorId, CurrentSelector, GrantId, RealmId, ScopeRef, TypedCurrentResult};
+use arkret_wire::{ActorId, CurrentSelector, GrantId, RealmId, ScopeRef, TypedCurrentRow};
 use diesel::OptionalExtension as _;
 use diesel::sql_types::{BigInt, Jsonb, Text, Timestamptz};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
@@ -27,10 +27,10 @@ pub(crate) fn keeps(_selector: &CurrentSelector) -> bool {
 pub(crate) async fn save_row(
     conn: &mut AsyncPgConnection,
     realm: &RealmId,
-    entry: &TypedCurrentResult,
+    entry: &TypedCurrentRow,
     installed_at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
-    let TypedCurrentResult::Value {
+    let TypedCurrentRow::Value {
         selector,
         source_stream_ref,
         revision,
@@ -288,7 +288,7 @@ pub(crate) async fn exact_current_evidence(
     conn: &mut AsyncPgConnection,
     stream: &arkret_wire::CommitStreamRef,
     selectors: &[CurrentSelector],
-) -> PersistenceResult<Option<(arkret_wire::CommitStreamHead, Vec<TypedCurrentResult>)>> {
+) -> PersistenceResult<Option<(arkret_wire::CommitStreamHead, Vec<TypedCurrentRow>)>> {
     let realm = stream.realm_id();
     let Some(head) = verified_head(conn, stream).await? else {
         return Ok(None);
@@ -327,8 +327,8 @@ pub(crate) async fn exact_current_evidence(
         else {
             return Ok(None);
         };
-        let entry: TypedCurrentResult = serde_json::from_value(row.entry_json).map_err(invalid)?;
-        let TypedCurrentResult::Value {
+        let entry: TypedCurrentRow = serde_json::from_value(row.entry_json).map_err(invalid)?;
+        let TypedCurrentRow::Value {
             selector: found,
             source_stream_ref,
             revision,
@@ -354,7 +354,7 @@ pub(crate) async fn direct_current_evidence(
     realm: &RealmId,
     pair_key: &arkret_wire::Hash,
     participants: &[ActorId; 2],
-) -> PersistenceResult<Option<(arkret_wire::CommitStreamHead, Vec<TypedCurrentResult>)>> {
+) -> PersistenceResult<Option<(arkret_wire::CommitStreamHead, Vec<TypedCurrentRow>)>> {
     let stream = arkret_wire::CommitStreamRef::Realm {
         realm_id: realm.clone(),
     };
@@ -407,7 +407,7 @@ pub(crate) async fn direct_current_evidence(
         return Ok(None);
     };
     for entry in &entries {
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             selector: found,
             revision,
             value,
@@ -472,16 +472,15 @@ mod direct_evidence_tests {
             .bind::<Text,_>(commit.as_str()).bind::<Text,_>(realm.as_str()).bind::<Text,_>(&key)
             .bind::<Jsonb,_>(serde_json::to_value(&stream).unwrap()).bind::<Timestamptz,_>(at)
             .execute(&mut *conn).await.unwrap();
-        let entry =
-            |selector: CurrentSelector, value: serde_json::Value| TypedCurrentResult::Value {
-                selector,
-                source_stream_ref: stream.clone(),
-                revision: arkret_wire::CurrentRevision {
-                    commit_id: commit.clone(),
-                    stream_position: 0,
-                },
-                value,
-            };
+        let entry = |selector: CurrentSelector, value: serde_json::Value| TypedCurrentRow::Value {
+            selector,
+            source_stream_ref: stream.clone(),
+            revision: arkret_wire::CurrentRevision {
+                commit_id: commit.clone(),
+                stream_position: 0,
+            },
+            value,
+        };
         for selector in [
             CurrentSelector::DirectConversationBinding {
                 pair_key: pair_key.clone(),
@@ -575,7 +574,7 @@ mod direct_evidence_tests {
         assert!(advanced_cut.retains_resolver_facts(&original_cut));
         assert!(!original_cut.retains_resolver_facts(&advanced_cut));
         let mut replaced_cut = advanced_cut.clone();
-        let TypedCurrentResult::Value { revision, .. } = &mut replaced_cut.current_state_entries[0];
+        let TypedCurrentRow::Value { revision, .. } = &mut replaced_cut.current_state_entries[0];
         revision.commit_id = head.commit_id.clone();
         revision.stream_position = head.stream_position;
         assert!(!replaced_cut.retains_resolver_facts(&original_cut));
@@ -619,7 +618,7 @@ mod direct_evidence_tests {
             .unwrap()
             .unwrap();
         assert_eq!(extended.len(), 5);
-        assert!(extended.iter().any(|entry| matches!(entry,TypedCurrentResult::Value { selector:CurrentSelector::MemberState { actor_id },.. } if actor_id==&third)));
+        assert!(extended.iter().any(|entry| matches!(entry,TypedCurrentRow::Value { selector:CurrentSelector::MemberState { actor_id },.. } if actor_id==&third)));
         let mut bad = entry(
             CurrentSelector::MemberState {
                 actor_id: pair[0].clone(),
@@ -633,7 +632,7 @@ mod direct_evidence_tests {
                 .unwrap()
                 .is_none()
         );
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             source_stream_ref,
             value,
             ..
@@ -647,7 +646,7 @@ mod direct_evidence_tests {
         };
         // Foreign source injection is refused by the verified installation boundary.
         assert!(save_row(&mut conn, &realm, &bad, at).await.is_err());
-        let TypedCurrentResult::Value {
+        let TypedCurrentRow::Value {
             source_stream_ref,
             revision,
             ..
@@ -698,7 +697,7 @@ pub(crate) async fn snapshot_current_evidence(
     conn: &mut AsyncPgConnection,
     realm: &RealmId,
     heads: &[arkret_wire::CommitStreamHead],
-) -> PersistenceResult<Vec<TypedCurrentResult>> {
+) -> PersistenceResult<Vec<TypedCurrentRow>> {
     let rows = diesel::sql_query(
         "SELECT jsonb_build_object('selector',selector,'source_stream_ref',source_stream_ref, \
          'revision',jsonb_build_object('commit_id',current_commit_id,'stream_position',current_stream_position), \
@@ -716,8 +715,8 @@ pub(crate) async fn snapshot_current_evidence(
     }
     let mut entries = Vec::new();
     for row in rows {
-        let entry: TypedCurrentResult = serde_json::from_value(row.entry_json).map_err(invalid)?;
-        let TypedCurrentResult::Value {
+        let entry: TypedCurrentRow = serde_json::from_value(row.entry_json).map_err(invalid)?;
+        let TypedCurrentRow::Value {
             source_stream_ref,
             revision,
             ..

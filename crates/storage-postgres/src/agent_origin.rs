@@ -73,7 +73,7 @@ pub(crate) async fn check_origin_cut(
         .bind::<Text,_>(realm).bind::<Text,_>(account.principal_id.as_str())
         .get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(|| missing("Origin lifecycle current missing"))?;
-    let actual_status: arkret_wire::TypedCurrentResult =
+    let actual_status: arkret_wire::TypedCurrentRow =
         serde_json::from_value(status.value).map_err(invalid)?;
     if actual_status != state.agent_lifecycle_witness.result {
         return Err(missing("Origin lifecycle witness changed"));
@@ -83,7 +83,7 @@ pub(crate) async fn check_origin_cut(
         .bind::<Text,_>(state.authorization.agent_key_id.as_str())
         .get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(|| missing("Origin key current missing"))?;
-    let actual_key: arkret_wire::TypedCurrentResult =
+    let actual_key: arkret_wire::TypedCurrentRow =
         serde_json::from_value(key.value).map_err(invalid)?;
     if actual_key != state.key_state_witness.result {
         return Err(missing("Origin authorization witness changed"));
@@ -582,9 +582,9 @@ pub(crate) async fn assemble_state_in_connection(
         .bind::<Text,_>(realm.as_str()).bind::<Text,_>(account.principal_id.as_str())
         .bind::<Text,_>(proof.verification_method.as_str()).get_result::<JsonRow>(&mut *conn).await.optional()
         .map_err(PersistenceError::database)?.ok_or_else(|| missing("Agent runtime method is not active"))?;
-    let key_result: arkret_wire::TypedCurrentResult =
+    let key_result: arkret_wire::TypedCurrentRow =
         serde_json::from_value(key.value).map_err(invalid)?;
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         revision: key_revision,
         ..
     } = &key_result;
@@ -592,7 +592,7 @@ pub(crate) async fn assemble_state_in_connection(
         .iter()
         .find(|c| c.commit_id == key_revision.commit_id)
         .ok_or_else(|| missing("Agent key current covering Commit missing"))?;
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         value: key_value, ..
     } = &key_result;
     let entries = key_value
@@ -645,9 +645,9 @@ pub(crate) async fn assemble_state_in_connection(
         .bind::<Text,_>(realm.as_str()).bind::<Text,_>(account.principal_id.as_str())
         .get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(|| missing("Agent current lifecycle is not active"))?;
-    let status_result: arkret_wire::TypedCurrentResult =
+    let status_result: arkret_wire::TypedCurrentRow =
         serde_json::from_value(status.value).map_err(invalid)?;
-    let arkret_wire::TypedCurrentResult::Value {
+    let arkret_wire::TypedCurrentRow::Value {
         revision: status_revision,
         ..
     } = &status_result;
