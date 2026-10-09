@@ -841,7 +841,7 @@ mod account_query_tests {
             "catchup=true&catchup=false",
             "filter=%7B%22realm_ids%22%3Anull%7D",
             "filter=%7B%22window_limit%22%3A1%2C%22window_limit%22%3A2%7D",
-            // The retired member has no alias or dual read.
+            // The closed filter rejects the retired member.
             "filter=%7B%22timeline_limit%22%3A20%7D",
             "filter=%7B%22window_limit%22%3A101%7D",
             "filter=%7B%20%7D",

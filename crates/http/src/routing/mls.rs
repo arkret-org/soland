@@ -768,9 +768,8 @@ async fn upload_keypackage(
     let owner_account_pk = local_keypackage_owner_account_pk(state, &session).await?;
 
     let body = body.into_inner();
-    // The minimal-metadata Realm profile was retired. The compatibility DTO
-    // still deserializes these legacy fields, but they cannot admit a new
-    // KeyPackage under the current closed wire contract.
+    // The SDK upload shape retains retired pairwise fields. Reject them
+    // before admission under the current closed KeyPackage wire contract.
     if body.pairwise_verification_method.is_some() || body.intended_realm_id.is_some() {
         return Err(AppError::param_invalid(
             "minimal-metadata pairwise KeyPackage upload is retired",
