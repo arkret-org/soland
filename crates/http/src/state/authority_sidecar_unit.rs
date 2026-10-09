@@ -17,19 +17,26 @@ pub(crate) async fn commit_sidecar_ensure_unit(
         source_events.push(create);
     }
     source_events.push(attach);
-    let committed_at = chrono::Utc::now();
     let method = arkret_wire::DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
             state.service_did().as_str(),
         ),
     )
     .map_err(|error| ServiceError::Internal(error.to_string()))?;
-    let mut commands = Vec::new();
+    let mut verified_events = Vec::with_capacity(source_events.len());
     for event in source_events {
         let producer = super::authority_producer_validation::verify_self_event_producer(
             state, session, &event,
         )
         .await?;
+        verified_events.push((event, producer));
+    }
+    // Fresh native Device attestations must precede the acceptance time they
+    // cover. Freeze one batch timestamp only after every producer is verified;
+    // the atomic commit still rechecks the original authorization guards.
+    let committed_at = chrono::Utc::now();
+    let mut commands = Vec::with_capacity(verified_events.len());
+    for (event, producer) in verified_events {
         let transaction = state
             .authority_commits()
             .prepare_self_event_transaction(
