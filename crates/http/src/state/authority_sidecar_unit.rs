@@ -17,6 +17,16 @@ pub(crate) async fn commit_sidecar_ensure_unit(
         source_events.push(create);
     }
     source_events.push(attach);
+    let mut admitted_events = Vec::with_capacity(source_events.len());
+    for event in source_events {
+        let producer = super::authority_producer_validation::verify_self_event_producer(
+            state, session, &event,
+        )
+        .await?;
+        admitted_events.push((event, producer));
+    }
+    // Freeze the shared acceptance cut only after every original Device root
+    // has been issued. Storage still rechecks each guard in the atomic batch.
     let committed_at = chrono::Utc::now();
     let method = arkret_wire::DidUrl::new(
         crate::routing::federation::federation_service_signature_key_id(
@@ -25,11 +35,7 @@ pub(crate) async fn commit_sidecar_ensure_unit(
     )
     .map_err(|error| ServiceError::Internal(error.to_string()))?;
     let mut commands = Vec::new();
-    for event in source_events {
-        let producer = super::authority_producer_validation::verify_self_event_producer(
-            state, session, &event,
-        )
-        .await?;
+    for (event, producer) in admitted_events {
         let transaction = state
             .authority_commits()
             .prepare_self_event_transaction(
