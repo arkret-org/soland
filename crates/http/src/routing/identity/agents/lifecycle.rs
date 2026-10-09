@@ -1193,12 +1193,6 @@ pub(super) async fn lifecycle_transition(
             "Agent lifecycle Event/Commit reference mismatch",
         ));
     }
-    let lifecycle_ref = arkret_wire::CommittedEventRef {
-        event_id,
-        commit_id: committed.commit.commit_id,
-        stream_ref: committed.commit.stream_ref,
-        stream_position: committed.commit.stream_position,
-    };
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
     // transition; this row is the read-side projection consumed by the HTTP API).
@@ -1233,10 +1227,7 @@ pub(super) async fn lifecycle_transition(
     }
     // spec `agent_lifecycle_state` = `operation_status_outcome` =
     // `{status}` (status is the post-transition `agent_status`).
-    Ok(AgentLifecycleOutcome {
-        status: new_state,
-        lifecycle_ref,
-    })
+    Ok(AgentLifecycleOutcome { status: new_state })
 }
 
 #[endpoint(
