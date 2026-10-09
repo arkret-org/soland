@@ -15,13 +15,12 @@ pub(super) async fn persist_mimi_canonical_message_event(
     binding_event_id: EventId,
     source_provider_id: arkret_wire::DidCoreId,
     request: &MimiSubmitMessageRequestBody,
-    payload: Value,
+    payload: arkret_models_collaboration::events_payloads::message::MessageCreatePayload,
 ) -> Result<String, AppError> {
     let realm_id = arkret_wire::RealmId::new(realm_id.to_owned())
         .map_err(|e| AppError::param_invalid(e.to_string()))?;
-    let event = crate::state::author_mimi_event(
+    let event = crate::state::author_mimi_event::<arkret_wire::event_spec::MessageCreate>(
         state,
-        arkret_wire::EventKind::MessageCreate,
         arkret_wire::ScopeRef::Realm { realm_id },
         payload,
     )
