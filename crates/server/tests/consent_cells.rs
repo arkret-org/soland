@@ -26,7 +26,6 @@ fn test_config() -> AppConfig {
         development_mode: true,
         embedded_webvh_registration_bearer: Some(ACCOUNT_REGISTER_BEARER.to_owned()),
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned(), "peer".to_owned()],
-        jws_replay_window_seconds: 0,
         ..soland_test_support::app_config()
     }
 }

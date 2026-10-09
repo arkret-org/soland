@@ -705,7 +705,6 @@ mod tests {
             ),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned()],
-            jws_replay_window_seconds: 0,
             ..AppConfig::test_default()
         }
     }

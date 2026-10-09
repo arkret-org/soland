@@ -155,15 +155,15 @@ impl AdminAuth {
 
 /// Gate a write-side admin handler on the caller's authorization.
 ///
-/// In `development_mode` any authenticated session is allowed. In production
-/// mode the session actor MUST appear in `AppConfig::admin_principal_ids`
+/// In an explicitly compiled development harness, any harness session is allowed. Otherwise
+/// the session actor MUST appear in `AppConfig::admin_principal_ids`
 /// (env `SOLAND_ADMIN_PRINCIPAL_IDS`). Returns the original session on
 /// success or an `AppError` with `capability_denied` on failure.
 pub(super) fn require_admin_principal(
     state: &AppState,
     session: SessionRecord,
 ) -> Result<SessionRecord, AppError> {
-    if state.config().development_mode || state.is_admin_principal(&session.actor) {
+    if state.config().development_harness_enabled() || state.is_admin_principal(&session.actor) {
         Ok(session)
     } else {
         Err(crate::app_error!(

@@ -67,7 +67,7 @@ pub(super) async fn admin_collection(
 ) -> JsonResult<AdminCollectionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = admin.session()?;
-    if !state.config().development_mode && !state.is_admin_principal(&session.actor) {
+    if !state.config().development_harness_enabled() && !state.is_admin_principal(&session.actor) {
         return Err(AppError::capability_denied(
             "admin collection API requires the caller principal ID to be listed in SOLAND_ADMIN_PRINCIPAL_IDS",
         ));

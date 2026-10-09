@@ -480,7 +480,7 @@ async fn describe_returns_development_mode_field_body() {
         .await
         .unwrap();
     assert_eq!(health["development_mode"], true);
-    assert_eq!(health["proof_verifier_mode"], "development");
+    assert_eq!(health["proof_verifier_mode"], "production");
     assert_eq!(health["admin_auth_mode"], "development");
 
     let describe: Value = TestClient::get("http://server/_arkret/describe")
@@ -499,7 +499,7 @@ async fn describe_returns_development_mode_field_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(operator_describe["proof_verifier_mode"], "development");
+    assert_eq!(operator_describe["proof_verifier_mode"], "production");
     assert_eq!(operator_describe["admin_auth_mode"], "development");
 
     // Now flip to production posture with an explicit admin allowlist to

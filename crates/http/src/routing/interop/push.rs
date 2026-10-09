@@ -167,7 +167,8 @@ pub(super) async fn push_register(
         {
             Some(grant.revocation_ref.as_str())
         }
-        None if state.config().development_mode => None,
+        #[cfg(any(test, feature = "conformance-harness"))]
+        None if state.config().development_harness_enabled() => None,
         _ => {
             return Err(AppError::unauthenticated(
                 "public push registration requires a browser-bound standard human grant",

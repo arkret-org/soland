@@ -1554,7 +1554,7 @@ impl AppState {
     /// `development_mode`. Mirrors [`crate::config::AppConfig::admin_auth_mode`]
     /// but reflects runtime allowlist changes.
     pub fn admin_auth_mode(&self) -> &'static str {
-        if self.config.development_mode {
+        if self.config.development_harness_enabled() {
             "development"
         } else if !self.settings().admin_principal_ids.is_empty() {
             "principal_id_allowlist"

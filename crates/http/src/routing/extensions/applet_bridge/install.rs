@@ -1317,7 +1317,6 @@ mod tests {
                 std::env::temp_dir().join("soland-applet-proof-test-blobs"),
             ),
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-            jws_replay_window_seconds: 0,
             notary_signing_key_seed: Some([9u8; 32]),
             ..crate::config::AppConfig::test_default()
         };

@@ -98,7 +98,6 @@ async fn grant_session(slug: &str, configure: impl FnOnce(&mut AppConfig)) -> Gr
     let origin = spawn_introspection_mock(slot.clone()).await;
     let mut config = AppConfig {
         development_mode: true,
-        jws_replay_window_seconds: 0,
         session_grant_introspection_url: Some(format!("{origin}{INTROSPECTION_PATH}")),
         account_authority_url: Some(origin),
         ..soland_test_support::app_config()

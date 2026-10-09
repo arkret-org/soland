@@ -56,8 +56,54 @@ def removed_basis_errors(root: Path) -> list[str]:
     return []
 
 
+HARNESS_CFG = '#[cfg(any(test, feature = "conformance-harness"))]'
+HARNESS_ITEMS = {
+    "crates/http/src/routing/identity/auth/login.rs": ("dev_login", "initial_session_device_verification_state", "account_new_session_error", "session_device_inventory_record"),
+    "crates/http/src/routing/admin/introspect.rs": ("synthetic_dev_admin_scopes", "synthetic_dev_grant"),
+    "crates/http/src/routing/identity/auth/logout.rs": ("dev_mode_local_logout",),
+}
+HARNESS_STATEMENTS = {
+    "crates/http/src/routing/identity/auth.rs": r'let router = router\.push\(Router::with_path\("dev-login"\)',
+    "crates/http/src/routing/admin/introspect.rs": r'if state\.config\(\)\.development_harness_enabled\(\)',
+    "crates/http/src/routing/identity/auth/logout.rs": r'if state\.config\(\)\.development_harness_enabled\(\)',
+    "crates/http/src/routing/identity/auth/sessions.rs": r'Err\(error\)\s+if state\.config\(\)\.development_harness_enabled\(\)',
+    "crates/http/src/routing/interop/push.rs": r'None if state\.config\(\)\.development_harness_enabled\(\)',
+}
+
+
+def harness_surface_errors(root: Path) -> list[str]:
+    failures = []
+    for relative, names in HARNESS_ITEMS.items():
+        source = (root / relative).read_text(encoding="utf-8")
+        for name in names:
+            matches = list(re.finditer(rf"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+{name}\b", source))
+            if len(matches) != 1:
+                failures.append(f"{relative}: expected exactly one harness function {name}")
+                continue
+            prefix = source[max(0, matches[0].start() - 600):matches[0].start()]
+            if HARNESS_CFG not in prefix[prefix.rfind("\n\n") + 2:]:
+                failures.append(f"{relative}: {name} lacks {HARNESS_CFG}")
+    for relative, pattern in HARNESS_STATEMENTS.items():
+        source = (root / relative).read_text(encoding="utf-8")
+        match = re.search(pattern, source)
+        if match is None or not source[:match.start()].rstrip().endswith(HARNESS_CFG):
+            failures.append(f"{relative}: synthetic branch must be directly harness-gated")
+    source = (root / "crates/http/src/config.rs").read_text(encoding="utf-8")
+    if 'cfg!(any(test, feature = "conformance-harness")) && self.development_mode' not in source:
+        failures.append("config.rs: runtime development mode must not enable synthetic trust in a normal build")
+    if "jws_replay_window_seconds" in source:
+        failures.append("config.rs: removed, unused JWS replay setting must not return")
+    bootstrap = (root / "crates/server/src/bootstrap.rs").read_text(encoding="utf-8")
+    if "danger_accept_invalid_certs" in bootstrap:
+        failures.append("bootstrap.rs: initial Account Authority discovery must validate TLS certificates")
+    for name in ("demo.rs", "actors_users.rs", "organization_resolution.rs"):
+        if (root / "crates/http/src/routing/spaces/directory" / name).exists():
+            failures.append(f"directory/{name}: retired, uncompiled demo directory must not return")
+    return failures
+
+
 def main() -> int:
-    failures = deterministic_http_key_errors(ROOT) + removed_basis_errors(ROOT)
+    failures = deterministic_http_key_errors(ROOT) + removed_basis_errors(ROOT) + harness_surface_errors(ROOT)
     for relative_path, names in SURFACES.items():
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         for name in names:
@@ -96,7 +142,8 @@ def main() -> int:
         return 1
     print(
         f"test-support surface gate passed "
-        f"({len(SURFACES)} file(s) of accessors, {len(GATED_MODULES)} gated module(s))"
+        f"({len(SURFACES)} accessor files, {len(GATED_MODULES)} gated modules, "
+        f"{sum(map(len, HARNESS_ITEMS.values()))} isolated functions, {len(HARNESS_STATEMENTS)} isolated branches)"
     )
     return 0
 

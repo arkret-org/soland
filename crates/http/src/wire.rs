@@ -47,14 +47,12 @@ pub struct HealthOutcome {
     /// deployment with a "DEVELOPMENT MODE — do not use in production"
     /// banner without having to scrape `/_arkret/describe`.
     pub development_mode: bool,
-    /// String mirror of [`Self::development_mode`]: `"development"` when
-    /// `development_mode == true`, `"production"` otherwise. The proof
-    /// verifier path is gated on the same flag — dev mode currently
-    /// accepts unsigned / weakly-signed envelopes.
+    /// Formal proof verification is always enabled, including in a harness.
+    /// This diagnostic never advertises relaxed unsigned or weak-proof trust.
     pub proof_verifier_mode: &'static str,
     /// Effective admin-API authentication posture:
-    ///   - `"development"` — any authenticated session may call admin endpoints (dev mode lets
-    ///     every session through)
+    ///   - `"development"` — synthetic local admin sessions are enabled in an explicit harness
+    ///     build
     ///   - `"principal_id_allowlist"` — production gate via `SOLAND_ADMIN_PRINCIPAL_IDS`
     ///   - `"closed"` — production mode with no admin principals; admin endpoints are locked.
     pub admin_auth_mode: &'static str,
@@ -110,6 +108,7 @@ pub struct AuthBridgeDescribeOutcome {
 
 #[derive(salvo::oapi::ToSchema, Debug, Serialize, Deserialize)]
 pub struct AuthBridgeAuthDescriptor {
+    #[cfg(any(test, feature = "conformance-harness"))]
     pub dev_login_path: String,
     pub session_grant_issuance_path: String,
     pub session_grant_presentation: String,
@@ -173,6 +172,7 @@ pub use soland_contracts::admin::policy::{
     UpsertPolicyDocumentRequestBody,
 };
 
+#[cfg(any(test, feature = "conformance-harness"))]
 #[derive(salvo::oapi::ToSchema, Debug, Deserialize)]
 pub struct DevLoginRequestBody {
     pub actor: String,
@@ -180,6 +180,7 @@ pub struct DevLoginRequestBody {
     pub display_name: Option<String>,
 }
 
+#[cfg(any(test, feature = "conformance-harness"))]
 #[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct SessionLoginOutcome {
     pub session_credential: String,

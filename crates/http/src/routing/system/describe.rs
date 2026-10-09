@@ -485,6 +485,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
         version: "2026-06-21-session-grant-direct".to_owned(),
         api_base_path: "/_soland".to_owned(),
         auth: AuthBridgeAuthDescriptor {
+            #[cfg(any(test, feature = "conformance-harness"))]
             dev_login_path: "/_soland/gate/auth/dev-login".to_owned(),
             session_grant_issuance_path: "/_arkret/gate/account/session-grants".to_owned(),
             session_grant_presentation:
