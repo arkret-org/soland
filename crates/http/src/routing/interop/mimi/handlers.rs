@@ -1479,7 +1479,7 @@ mod consent_proof_tests {
         let binding = request
             .unsigned_signature_binding_bytes(&request.signature.unsigned())
             .unwrap();
-        let signing_key = arkret_signatures::development_signing_key(&verification_method);
+        let signing_key = arkret_test_kit::keys::development_signing_key(&verification_method);
         request.signature.jws =
             arkret_signatures::jws::sign_jws_ed25519(&binding, &signing_key).unwrap();
         request
@@ -1612,7 +1612,7 @@ mod consent_proof_tests {
     fn did_key_originator(
         seed: &str,
     ) -> (ed25519_dalek::SigningKey, DidCoreId, arkret_wire::DidUrl) {
-        let signing_key = arkret_signatures::development_signing_key(seed);
+        let signing_key = arkret_test_kit::keys::development_signing_key(seed);
         let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
             signing_key.verifying_key().as_bytes(),
         );

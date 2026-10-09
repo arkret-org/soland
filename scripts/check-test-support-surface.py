@@ -7,9 +7,8 @@ Two shapes:
   `#[cfg(any(test, feature = "test-support"))]`.
 * `GATED_MODULES` — a whole module that must not be compiled into a default
   build. The development conformance harness is the case this exists for:
-  `soland_services::conformance_basis` builds Seals with a notary signer
-  derived from a caller-supplied 32-byte seed, and
-  `soland_http::routing::conformance` is the HTTP surface that drives it.
+  `soland_http::routing::conformance` is the isolated HTTP fixture surface.
+  The removed legacy `conformance_basis` module must not return.
   `development_mode` decides whether the namespace is *mounted*; these
   attributes decide whether it is *compiled*, which is what keeps the seed
   constructor out of the release binary.
@@ -27,10 +26,6 @@ TEST_CFG = '#[cfg(any(test, feature = "test-support"))]'
 # `(relative_path, module_declaration): required_attribute`
 GATED_MODULES = {
     (
-        "crates/services/src/lib.rs",
-        "pub mod conformance_basis;",
-    ): '#[cfg(any(test, feature = "test-support"))]',
-    (
         "crates/http/src/routing/mod.rs",
         "pub(crate) mod conformance;",
     ): '#[cfg(any(test, feature = "conformance-harness"))]',
@@ -45,8 +40,24 @@ SURFACES = {
 }
 
 
+def deterministic_http_key_errors(root: Path) -> list[str]:
+    source = (root / "crates/http/src/http_signature.rs").read_text(encoding="utf-8")
+    if re.search(r"\bdeterministic_development_signing_key\b", source):
+        return ["crates/http/src/http_signature.rs: unused deterministic fixture key constructor must remain removed"]
+    return []
+
+
+def removed_basis_errors(root: Path) -> list[str]:
+    source = (root / "crates/services/src/lib.rs").read_text(encoding="utf-8")
+    if re.search(r"\bmod\s+conformance_basis\b", source) or (
+        root / "crates/services/src/conformance_basis.rs"
+    ).exists() or (root / "crates/services/src/conformance_basis").exists():
+        return ["crates/services/src: removed conformance_basis must not return"]
+    return []
+
+
 def main() -> int:
-    failures: list[str] = []
+    failures = deterministic_http_key_errors(ROOT) + removed_basis_errors(ROOT)
     for relative_path, names in SURFACES.items():
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         for name in names:
