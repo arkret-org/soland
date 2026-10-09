@@ -466,6 +466,7 @@ pub(crate) async fn exact_current_result_for_account(
                 }));
             }
             ExactCurrentResultSelector::CapabilityGrant(_) => unreachable!("handled before membership gate"),
+            ExactCurrentResultSelector::Policy(_) => return Ok(SelfExactCurrentRead::Unresolved("management Policy exact-current authorization is not established")),
             ExactCurrentResultSelector::AgentInteraction(selector) => {
                 use arkret_models_collaboration::agent_interaction::AgentInteractionExactCurrentResult;
                 use arkret_models_collaboration::exact_current_results::NeverWrittenExactCurrentSelector;

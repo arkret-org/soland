@@ -126,7 +126,9 @@ fn applet_identity_winner_is_independent_from_exact_scope_installations() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.applet_installations"));
     assert!(INITIAL_UP.contains("PRIMARY KEY (applet_id, effective_scope_key)"));
     assert!(INITIAL_UP.contains("NOT (record ?| ARRAY["));
-    assert!(INITIAL_UP.contains("'bot_actor_id'"));
+    assert!(INITIAL_UP.contains("'bot_actor_id'")); // retired install-level identity is forbidden
+    assert!(INITIAL_UP.contains("record->>'target_station_id' = target_station_id"));
+    assert!(INITIAL_UP.contains("request_body jsonb NOT NULL"));
     assert!(INITIAL_UP.contains("'globally_fenced_at'"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS applet_managed_identities CASCADE"));
 }

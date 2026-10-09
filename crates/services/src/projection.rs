@@ -233,42 +233,60 @@ impl ProjectionService {
         // rebuild, never overwriting a concurrent bootstrap or successor.
         loop {
             let generation = self.rebuild_generation();
-            let mut state = ProjectionState::new();
-            hydrate_projections_from_persistence(persistence, &mut state, projection_adapter)
-                .await?;
-            state.replay_resolved_pending(self.clock());
-            for record in persistence
-                .realm_organization_statements()
-                .snapshot_all()
-                .await?
-            {
-                let key = (
-                    record.realm_id.clone(),
-                    record.organization_id.clone(),
-                    record.relationship.clone(),
-                );
-                state.realm_organization_statements.insert(
-                    key,
-                    soland_domain::reducer::RealmOrganizationStatementState {
-                        realm_id: record.realm_id,
-                        organization_id: record.organization_id,
-                        relationship: record.relationship,
-                        statement_id: record.statement_id,
-                        status: record.status,
-                        control_scopes: record.control_scopes,
-                        issued_at: record.issued_at,
-                        not_before: record.not_before,
-                        expires_at: record.expires_at,
-                        supersedes_statement_id: record.supersedes_statement_id,
-                        revokes_statement_id: record.revokes_statement_id,
-                        realm_commit_ref: record.realm_commit_ref,
-                        proof_digest: record.proof_digest,
-                        delegation_ref: record.delegation_ref,
-                        issuer_role: record.issuer_role,
-                        updated_at: record.updated_at,
-                    },
-                );
+            let reconstructed: PersistenceResult<ProjectionState> = async {
+                let mut state = ProjectionState::new();
+                hydrate_projections_from_persistence(persistence, &mut state, projection_adapter)
+                    .await?;
+                state.replay_resolved_pending(self.clock());
+                for record in persistence
+                    .realm_organization_statements()
+                    .snapshot_all()
+                    .await?
+                {
+                    let key = (
+                        record.realm_id.clone(),
+                        record.organization_id.clone(),
+                        record.relationship.clone(),
+                    );
+                    state.realm_organization_statements.insert(
+                        key,
+                        soland_domain::reducer::RealmOrganizationStatementState {
+                            realm_id: record.realm_id,
+                            organization_id: record.organization_id,
+                            relationship: record.relationship,
+                            statement_id: record.statement_id,
+                            status: record.status,
+                            control_scopes: record.control_scopes,
+                            issued_at: record.issued_at,
+                            not_before: record.not_before,
+                            expires_at: record.expires_at,
+                            supersedes_statement_id: record.supersedes_statement_id,
+                            revokes_statement_id: record.revokes_statement_id,
+                            realm_commit_ref: record.realm_commit_ref,
+                            proof_digest: record.proof_digest,
+                            delegation_ref: record.delegation_ref,
+                            issuer_role: record.issuer_role,
+                            updated_at: record.updated_at,
+                        },
+                    );
+                }
+                Ok(state)
             }
+            .await;
+            let state = match reconstructed {
+                Ok(state) => state,
+                Err(error) => {
+                    // A live mutation can move the cut between durable reads
+                    // before the candidate reaches its publication CAS. Its
+                    // incomplete reconstruction is stale, just like a stale
+                    // successful candidate; stable-cut failures remain errors.
+                    if self.rebuild_generation() == generation {
+                        return Err(error);
+                    }
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+            };
             if self.install_rebuild(generation, state) {
                 return Ok(());
             }

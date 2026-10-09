@@ -6,18 +6,19 @@
 #[allow(dead_code)]
 mod admission;
 
+use std::io::{Read, Write};
+
 use arkret_models_integration::{AppletTransactionOutcome, AppletTransactionRequestBody};
 use arkret_signatures::http_signature::{
     HttpSignatureScenario, SignatureVerificationPolicy, verify_signed_http_message,
 };
 use soland_test_support::AppStateTestExt as _;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn request_bytes(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+fn request_bytes(socket: &mut impl Read) -> Vec<u8> {
     let mut raw = Vec::new();
     loop {
         let mut chunk = [0_u8; 4096];
-        let count = socket.read(&mut chunk).await.unwrap();
+        let count = socket.read(&mut chunk).unwrap();
         assert!(
             count > 0,
             "completion request ended before its complete body"
@@ -43,9 +44,26 @@ async fn request_bytes(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
 
 #[tokio::test]
 async fn durable_completion_retries_real_signed_delivery_before_ack() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    let endpoint = format!("http://{addr}");
+    let endpoint = format!("https://{addr}");
+    let tls = std::sync::Arc::new(
+        rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![rustls::pki_types::CertificateDer::from(
+                include_bytes!("fixtures/outbox-test-cert.der").to_vec(),
+            )],
+            rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+                include_bytes!("fixtures/outbox-test-key.der").to_vec(),
+            )),
+        )
+        .unwrap(),
+    );
     let fixture = admission::Fixture::new().await;
     let install = fixture.install_at_endpoint(false, Some(&endpoint)).await;
     let pending = fixture
@@ -75,10 +93,17 @@ async fn durable_completion_retries_real_signed_delivery_before_ack() {
     let expected_bytes = arkret_canonical::canonical_json_bytes(&body).unwrap();
     let key = fixture.state.notary_signing_key().verifying_key();
     let (send, mut receive) = tokio::sync::mpsc::channel(2);
-    let server = tokio::spawn(async move {
+    let server = std::thread::spawn(move || {
         for attempt in 0..2 {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let raw = request_bytes(&mut socket).await;
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut socket = rustls::StreamOwned::new(
+                rustls::ServerConnection::new(tls.clone()).unwrap(),
+                socket,
+            );
+            let raw = request_bytes(&mut socket);
             let end = raw
                 .windows(4)
                 .position(|bytes| bytes == b"\r\n\r\n")
@@ -131,7 +156,7 @@ async fn durable_completion_retries_real_signed_delivery_before_ack() {
             .unwrap();
             verify_signed_http_message(
                 "POST",
-                &format!("http://{addr}/_arkret/edge/applet/transactions"),
+                &format!("https://{addr}/_arkret/edge/applet/transactions"),
                 &addr.to_string(),
                 "/_arkret/edge/applet/transactions",
                 headers
@@ -144,7 +169,8 @@ async fn durable_completion_retries_real_signed_delivery_before_ack() {
             )
             .unwrap();
             let signature_input = header("Signature-Input").to_owned();
-            send.send((body.to_vec(), signature_input)).await.unwrap();
+            send.blocking_send((body.to_vec(), signature_input))
+                .unwrap();
             let (status, response) = if attempt == 0 {
                 ("503 Service Unavailable",serde_json::json!({"type":"https://arkret.org/problems/service_unavailable","title":"Service unavailable","status":503,"code":"service_unavailable"}).to_string())
             } else {
@@ -162,8 +188,9 @@ async fn durable_completion_retries_real_signed_delivery_before_ack() {
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
                 response.len()
             );
-            socket.write_all(response.as_bytes()).await.unwrap();
-            socket.shutdown().await.unwrap();
+            socket.write_all(response.as_bytes()).unwrap();
+            socket.conn.send_close_notify();
+            socket.flush().unwrap();
         }
     });
     assert_eq!(
@@ -223,5 +250,5 @@ async fn durable_completion_retries_real_signed_delivery_before_ack() {
         0,
         "acknowledged completion is not redelivered"
     );
-    server.await.unwrap();
+    server.join().unwrap();
 }

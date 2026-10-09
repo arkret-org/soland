@@ -1,7 +1,5 @@
 //! Host-local widget inventory, serialized with the exact installation fence.
-use arkret_models_integration::{
-    AppletManagedActorAuthoringContext, AppletManagedActorCommittedRequest,
-};
+use arkret_models_integration::AppletInstallRequestBody;
 use chrono::{DateTime, Utc};
 use diesel::sql_types::{Jsonb, Text, Timestamptz};
 use diesel::{OptionalExtension as _, sql_query};
@@ -159,19 +157,12 @@ pub(crate) async fn issue(
     }
     // Only an accepted authoring unit can supply the original approval and
     // package declaration. A caller's installation JSON is never an issuer.
-    let row=sql_query("SELECT authoring_context AS record FROM applet_authoring_units WHERE response_body->>'registration_event_ref'=$1 ORDER BY accepted_at LIMIT 1")
+    let row=sql_query("SELECT request_body AS record FROM applet_authoring_units WHERE operation_id='ak.self.applet.command.install' AND response_body->>'registration_event_ref'=$1 ORDER BY accepted_at LIMIT 1")
         .bind::<Text,_>(record.install.registration_event_ref.as_str()).get_result::<RecordRow>(&mut *conn)
         .await.optional().map_err(PersistenceError::database)?.ok_or_else(||denied("accepted widget approval is absent"))?;
-    let context: AppletManagedActorAuthoringContext =
+    let request: AppletInstallRequestBody =
         serde_json::from_value(row.record).map_err(PersistenceError::database)?;
-    let AppletManagedActorCommittedRequest::Install(request) = context.committed_request else {
-        return Err(denied("widget approval is not an install"));
-    };
-    let basis = request
-        .authoring_request()
-        .basis
-        .install()
-        .ok_or_else(|| denied("widget install basis is absent"))?;
+    let basis = &request.authoring_request_basis;
     if basis.effective_scope != record.install.effective_scope
         || basis.applet_id != record.install.applet_id
         || !basis.approval_request.widget_allowed
@@ -185,7 +176,7 @@ pub(crate) async fn issue(
         ));
     }
     let widget = request
-        .applet_package()
+        .applet_package
         .widget
         .as_ref()
         .ok_or_else(|| denied("accepted package has no widget declaration"))?;

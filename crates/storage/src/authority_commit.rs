@@ -355,7 +355,7 @@ pub struct AuthorityCommitTransaction {
 /// Current producer authorization pinned by the self submit preflight and
 /// rechecked inside the same transaction that commits the Event. This is an
 /// internal persistence guard, never a caller-supplied protocol claim.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SelfProducerCommitGuard {
     /// The locally configured MIMI facade authored this Event. The exact
     /// binding and independently verified reporter/sender are rechecked at cut.
@@ -372,12 +372,28 @@ pub enum SelfProducerCommitGuard {
         reporter_device_guard: Option<crate::DeviceRevocationGateSelector>,
     },
     HumanDevice(crate::DeviceRevocationGateSelector),
+    /// Original native regular root frozen with the accepting Event Commit.
+    HumanDeviceEvidence {
+        selector: crate::DeviceRevocationGateSelector,
+        evidence: Box<arkret_models_identity::AccountDeviceSignerEvidence>,
+    },
     Agent {
         pcr_realm_id: arkret_wire::RealmId,
         agent_id: arkret_wire::DidCoreId,
         authorization_ref: arkret_wire::CommittedEventRef,
         verification_method: arkret_wire::DidUrl,
     },
+}
+
+impl SelfProducerCommitGuard {
+    pub fn human_device_selector(&self) -> Option<&crate::DeviceRevocationGateSelector> {
+        match self {
+            Self::HumanDevice(selector) | Self::HumanDeviceEvidence { selector, .. } => {
+                Some(selector)
+            }
+            _ => None,
+        }
+    }
 }
 
 /// A complete ordinary Realm bootstrap, including the exact HTTP request

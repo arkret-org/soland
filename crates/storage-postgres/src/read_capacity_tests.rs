@@ -343,7 +343,7 @@ async fn seed_snapshot_families(conn: &mut AsyncPgConnection, first: i64, last: 
             .await.unwrap();
     }
     for (table, columns, expressions, value) in [
-        ("applet_registration_current_results", "applet_id", format!("'applet-' || {key}"), "'{}'::jsonb".to_owned()),
+        ("applet_registration_current_results", "applet_id,instance_event_ref", format!("'applet-' || {key},'registration-event-' || {key}"), "'{}'::jsonb".to_owned()),
         ("member_identity_updates_current_results", "member_id,segment", "jsonb_build_object('member',m)::text,'member_identity'".to_owned(), "jsonb_build_object('assertions','[]'::jsonb)".to_owned()),
         ("circle_current_results", "circle_id,create_event_id,source_stream_ref,short_name_folded", format!("'circle-' || {key},'circle-event-' || {key},jsonb_build_object('kind','realm','realm_id',{realm}),'circle-' || m"), format!("jsonb_build_object('id','circle-' || {key},'realm_id',{realm})")),
         ("circle_member_state_current_results", "circle_id,member_id,membership,source_stream_ref", format!("'circle-' || {key},jsonb_build_object('member',m)::text,'join',jsonb_build_object('kind','circle','realm_id',{realm},'circle_id','circle-' || {key})"), format!("jsonb_build_object('membership','join','parent_membership_revision',jsonb_build_object('commit_id',{commit},'stream_position',0))")),

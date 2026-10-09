@@ -52,7 +52,7 @@ async fn hydration_does_not_overwrite_a_concurrent_realm_projection() {
     let database = crate::test_database::TestDatabase::lease().await;
     let pool = database.pool();
     ordinary_realm::open_human_discussion(&pool, &uuid::Uuid::now_v7().to_string()).await;
-    let persistence = crate::PgPersistenceStore::new(pool);
+    let persistence = crate::PgPersistenceStore::new(pool.clone());
     let service = ProjectionService::new("hydration-concurrency");
     let rebuilding = service.clone();
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
@@ -68,42 +68,41 @@ async fn hydration_does_not_overwrite_a_concurrent_realm_projection() {
             .await
     });
     entered_rx.await.unwrap();
+    // Production rebuilds use generation CAS and retry persistence reads.
+    // A live writer must progress; its durable accepted Realm must survive
+    // the discarded, older private reconstruction.
+    let concurrent =
+        ordinary_realm::open_human_discussion(&pool, &uuid::Uuid::now_v7().to_string()).await;
+    let concurrent_realm = concurrent.realm_id().to_string();
+    let concurrent_owner = concurrent.unit.transactions[0].event.actor_id.to_string();
+    let written_owner = concurrent_owner.clone();
+    let written_realm = concurrent_realm.clone();
     let writing = service.clone();
-    let (started_tx, started_rx) = mpsc::channel();
     let (written_tx, written_rx) = mpsc::channel();
     let writer = std::thread::spawn(move || {
-        started_tx.send(()).unwrap();
         let now = chrono::Utc::now();
-        assert!(writing.reconcile_realm_owner(
-            "concurrent-realm",
-            "concurrent-owner",
-            false,
-            now,
-            now
-        ));
+        assert!(writing.reconcile_realm_owner(&written_realm, &written_owner, false, now, now));
         written_tx.send(()).unwrap();
     });
-    let blocked = tokio::task::block_in_place(|| {
-        started_rx.recv().unwrap();
-        written_rx.recv_timeout(Duration::from_millis(500)).is_err()
-    });
+    let progressed =
+        tokio::task::block_in_place(|| written_rx.recv_timeout(Duration::from_secs(5)).is_ok());
     release_tx.send(()).unwrap();
     let result = hydration.await.unwrap();
     writer.join().unwrap();
     result.unwrap();
     assert!(
-        blocked,
-        "a projection writer escaped the in-progress hydration cut"
+        progressed,
+        "a persistence rebuild blocked a live projection writer"
     );
     assert_eq!(
         service
             .snapshot()
             .realm_states
-            .get("concurrent-realm")
+            .get(&concurrent_realm)
             .unwrap()
             .owner
             .as_deref(),
-        Some("concurrent-owner")
+        Some(concurrent_owner.as_str())
     );
 }
 

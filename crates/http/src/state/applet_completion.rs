@@ -64,11 +64,11 @@ async fn deliver_one(
         .validate()
         .map_err(|error| error.to_string())?;
     let request = match &completion.context.committed_request {
-        AppletManagedActorCommittedRequest::Install(request) => request.authoring_request(),
+        AppletManagedActorCommittedRequest::Bot(request) => &request.authoring_request,
         AppletManagedActorCommittedRequest::Ghost(request) => &request.authoring_request,
     };
     let applet_id = match &request.basis {
-        arkret_models_integration::AppletManagedActorAuthoringBasis::InstallBot(basis) => {
+        arkret_models_integration::AppletManagedActorAuthoringBasis::ProvisionBot(basis) => {
             &basis.applet_id
         }
         arkret_models_integration::AppletManagedActorAuthoringBasis::ProvisionGhost(basis) => {
@@ -133,17 +133,19 @@ async fn deliver_one(
         )
         .map_err(|error| error.to_string())?;
     let method = state.service_verification_method("notary-key")?;
-    let base = completion
-        .endpoint
-        .parse()
-        .map_err(|error: url::ParseError| error.to_string())?;
+    let (base, transport) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        &completion.endpoint,
+        "Applet authoring completion",
+        state.config().development_mode,
+        std::time::Duration::from_secs(15),
+    )?;
     let mut builder = Client::builder(base)
+        .http_client(transport)
         .retry(RetryConfig::disabled())
         .http_message_signer(HttpMessageSigner::new(
             method.to_string(),
             state.notary_signing_key().as_ref().clone(),
-        ))
-        .timeout(std::time::Duration::from_secs(15));
+        ));
     if state.config().development_mode {
         builder = builder.allow_insecure_localhost();
     }

@@ -7,6 +7,29 @@ pub(in crate::routing) async fn submit_applet_authoring_unit(
     input: soland_storage::AppletAuthoringUnitWrite,
     finalize: soland_storage::AppletUnitFinalizer,
 ) -> Result<soland_storage::AppletAuthoringUnitOutcome, SubmitOneError> {
+    // Only the native Account Station may attest its locked Device source.
+    // Acquire complete method history before entering the acceptance transaction;
+    // the callback signs at its actual locked Commit time, never at read time.
+    let service_resolution = if matches!(
+        &input.request,
+        soland_storage::AppletAdmissionRequest::Install(_)
+    ) {
+        Some(
+            crate::routing::system::service_resolution::current_authenticated_service_resolution(
+                state,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "service_unavailable",
+                    error.message,
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     let station = state.clone();
     let verification_method = state
         .service_verification_method("notary-key")
@@ -28,15 +51,24 @@ pub(in crate::routing) async fn submit_applet_authoring_unit(
         )
         .map_err(|error| soland_storage::PersistenceError::Internal(error.to_string()))
     });
-    let author: soland_storage::AppletCommitAuthor =
-        std::sync::Arc::new(move |event, authority, head, at, producer_signer_fact| {
+    let author: soland_storage::AppletCommitAuthor = std::sync::Arc::new(
+        move |event, authority, head, at, producer_signer_fact, device_core| {
             if authority.service_id != station.service_core_id() {
                 return Err(soland_storage::PersistenceError::Conflict(
                     "failed_precondition: this Station is not the current Applet authority"
                         .to_owned(),
                 ));
             }
-            station
+            let evidence = device_core.map(|core| {
+                if core.account_id.station_id != station.service_core_id() {
+                    return Err(soland_storage::PersistenceError::Conflict("failed_precondition: only the native Account Station may attest its Device".to_owned()));
+                }
+                Ok(arkret_models_identity::AccountDeviceSignerEvidence {
+                    device_projection_attestation: arkret_signatures::device_projection::sign_device_projection_attestation(core.clone(), verification_method.clone(), signing_key.as_ref()).map_err(|error| soland_storage::PersistenceError::Conflict(error.to_string()))?,
+                    service_resolution: service_resolution.clone().ok_or_else(|| soland_storage::PersistenceError::Conflict("failed_precondition: original Device Service history unavailable".to_owned()))?,
+                })
+            }).transpose()?;
+            let commit = station
                 .authority_commits()
                 .sign_event_commit_at_authority_cut(
                     event,
@@ -47,8 +79,10 @@ pub(in crate::routing) async fn submit_applet_authoring_unit(
                     at,
                     producer_signer_fact,
                 )
-                .map_err(|error| soland_storage::PersistenceError::Conflict(error.to_string()))
-        });
+                .map_err(|error| soland_storage::PersistenceError::Conflict(error.to_string()))?;
+            Ok((commit, evidence))
+        },
+    );
     state
         .event_queries()
         .admit_applet_authoring_unit(input, author, attester, finalize)

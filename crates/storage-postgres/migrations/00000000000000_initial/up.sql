@@ -566,7 +566,7 @@ CREATE TABLE public.applet_managed_identities (
     CONSTRAINT applet_managed_identities_pkey PRIMARY KEY (applet_id, target_station_id),
     CONSTRAINT applet_managed_identities_record_key_check CHECK (
         record->>'applet_id' = applet_id
-        AND record->'bot_actor_id'->'account_id'->>'station_id' = target_station_id
+        AND record->>'target_station_id' = target_station_id
     )
 );
 
@@ -682,6 +682,7 @@ CREATE TABLE public.applet_authoring_units (
     request_digest text NOT NULL,
     committed_event_refs jsonb NOT NULL,
     response_body jsonb NOT NULL,
+    request_body jsonb NOT NULL,
     authoring_context jsonb NOT NULL,
     accepted_at timestamp with time zone NOT NULL,
     PRIMARY KEY (actor_key, operation_id, idempotency_key)
@@ -3947,9 +3948,22 @@ CREATE TABLE public.one_time_keys (
 );
 
 -- Accepted whole-value Applet registration and its covering Commit.
+-- Local provenance of accepted registration instances. Equal consecutive
+-- security snapshots retain their first real Event anchor; replacement starts
+-- a new instance, even when a later snapshot returns to an older value.
+CREATE TABLE public.applet_registration_instances (
+    realm_id text NOT NULL,
+    applet_id text NOT NULL,
+    registration_event_ref text NOT NULL,
+    instance_event_ref text NOT NULL,
+    accepted_commit_id text NOT NULL REFERENCES public.realm_commits(commit_id),
+    PRIMARY KEY (realm_id, applet_id, registration_event_ref)
+);
+
 CREATE TABLE public.applet_registration_current_results (
     realm_id text NOT NULL,
     applet_id text NOT NULL,
+    instance_event_ref text NOT NULL,
     current_commit_id text NOT NULL REFERENCES public.realm_commits(commit_id),
     current_stream_position bigint NOT NULL CHECK (current_stream_position >= 0),
     value jsonb NOT NULL,
@@ -5534,6 +5548,12 @@ CREATE TABLE account_device_signer_evidence (
 );
 CREATE INDEX account_device_signer_evidence_subject_idx
  ON account_device_signer_evidence(principal_id,station_id,device_id,attested_at);
+
+-- Exact native regular Device root frozen with its original acceptance Commit.
+CREATE TABLE account_device_committed_evidence (
+ commit_id TEXT PRIMARY KEY REFERENCES agent_producer_signer_keys(commit_id),
+ evidence_ref TEXT NOT NULL REFERENCES account_device_signer_evidence(evidence_ref)
+);
 
 -- Complete producer_device_evidence a governance Station verified for a
 -- cross-Station human-device producer (device-lifecycle 8.2.2). One row per

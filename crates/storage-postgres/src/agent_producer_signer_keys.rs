@@ -32,7 +32,7 @@ pub(crate) async fn retain_in_connection(
     commit: &arkret_wire::RealmCommit,
     guard: Option<&SelfProducerCommitGuard>,
 ) -> PersistenceResult<()> {
-    if let Some(SelfProducerCommitGuard::HumanDevice(selector)) = guard {
+    if let Some(selector) = guard.and_then(SelfProducerCommitGuard::human_device_selector) {
         // PCR-local commits are not ordinary signer-query targets. Their own
         // domain validates producer authority and may project after this hook.
         if guard_matches_pcr_target(event, selector) {
@@ -208,7 +208,7 @@ pub(crate) async fn prepare_self_pcr_outcome_in_connection(
     commit: &arkret_wire::RealmCommit,
     guard: Option<&SelfProducerCommitGuard>,
 ) -> PersistenceResult<Option<PreparedSelfHistoricalFact>> {
-    let Some(SelfProducerCommitGuard::HumanDevice(guard)) = guard else {
+    let Some(guard) = guard.and_then(SelfProducerCommitGuard::human_device_selector) else {
         return Ok(None);
     };
     if !guard_matches_pcr_target(event, guard) {

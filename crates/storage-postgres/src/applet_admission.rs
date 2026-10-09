@@ -34,16 +34,53 @@ fn signature_rejected(error: impl std::fmt::Display) -> PersistenceError {
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> PersistenceResult<T> {
     serde_json::from_value(value).map_err(rejected)
 }
-fn request(input: &AppletAuthoringUnitWrite) -> &AppletManagedActorAuthoringRequest {
+fn request(
+    input: &AppletAuthoringUnitWrite,
+) -> PersistenceResult<&AppletManagedActorAuthoringRequest> {
     match &input.request {
-        AppletManagedActorCommittedRequest::Install(body) => body.authoring_request(),
-        AppletManagedActorCommittedRequest::Ghost(body) => &body.authoring_request,
+        soland_storage::AppletAdmissionRequest::Managed(
+            AppletManagedActorCommittedRequest::Bot(body),
+        ) => Ok(&body.authoring_request),
+        soland_storage::AppletAdmissionRequest::Managed(
+            AppletManagedActorCommittedRequest::Ghost(body),
+        ) => Ok(&body.authoring_request),
+        soland_storage::AppletAdmissionRequest::Install(_) => Err(rejected(
+            "Service installation has no managed authoring request",
+        )),
     }
 }
 fn bundle(input: &AppletAuthoringUnitWrite) -> Option<&AppletManagedActorAuthoringBundle> {
     match &input.request {
-        AppletManagedActorCommittedRequest::Install(body) => body.managed_actor_bundle(),
-        AppletManagedActorCommittedRequest::Ghost(body) => Some(&body.managed_actor_bundle),
+        soland_storage::AppletAdmissionRequest::Managed(
+            AppletManagedActorCommittedRequest::Bot(body),
+        ) => Some(&body.managed_actor_bundle),
+        soland_storage::AppletAdmissionRequest::Managed(
+            AppletManagedActorCommittedRequest::Ghost(body),
+        ) => body.managed_actor_bundle.as_ref(),
+        soland_storage::AppletAdmissionRequest::Install(_) => None,
+    }
+}
+fn target_station(input: &AppletAuthoringUnitWrite) -> PersistenceResult<&arkret_wire::DidCoreId> {
+    match &input.request {
+        soland_storage::AppletAdmissionRequest::Install(body) => {
+            Ok(&body.authoring_request_basis.target_station_id)
+        }
+        _ => Ok(request(input)?.basis.target_station_id()),
+    }
+}
+fn effective_scope(input: &AppletAuthoringUnitWrite) -> PersistenceResult<&ScopeRef> {
+    match &input.request {
+        soland_storage::AppletAdmissionRequest::Install(body) => {
+            Ok(&body.authoring_request_basis.effective_scope)
+        }
+        _ => {
+            let req = request(input)?;
+            req.basis
+                .bot()
+                .map(|b| &b.effective_scope)
+                .or_else(|| req.basis.ghost().map(|b| &b.effective_scope))
+                .ok_or_else(|| rejected("managed scope absent"))
+        }
     }
 }
 fn controller(method: &DidUrl) -> PersistenceResult<arkret_wire::DidCoreId> {
@@ -110,36 +147,60 @@ pub(crate) struct ValidatedAppletUnit {
     pub managed_document: Option<arkret_identity::DidDocument>,
 }
 
+fn verify_package(
+    input: &AppletAuthoringUnitWrite,
+    epoch: &AppletRegistrationEpochEvidence,
+) -> PersistenceResult<()> {
+    input
+        .package
+        .validate_with_epoch_evidence(epoch)
+        .map_err(rejected)?;
+    let package_proof = input
+        .package
+        .proof
+        .as_ref()
+        .ok_or_else(|| rejected("package proof absent"))?;
+    if controller(&package_proof.verification_method)? != input.package.controller_principal_id
+        || arkret_wire::project_did_to_core_id(&input.controller_did_document.id)
+            .map_err(rejected)?
+            != input.package.controller_principal_id
+    {
+        return Err(rejected("package controller changed"));
+    }
+    let mut unsigned = input.package.clone();
+    unsigned.proof = None;
+    let package_bytes = arkret_canonical::canonical_json_bytes(&unsigned).map_err(rejected)?;
+    if package_proof.payload_digest.as_str()
+        != arkret_canonical::canonical::sha256_digest(&package_bytes)
+    {
+        return Err(rejected("package proof digest changed"));
+    }
+    arkret_identity::verify_jws_with_document(
+        &package_bytes,
+        &package_proof.jws,
+        &package_proof.verification_method,
+        &input.controller_did_document.id,
+        &input.controller_did_document,
+    )
+    .map_err(signature_rejected)?;
+    Ok(())
+}
+
 pub(crate) fn validate_input(
     input: &AppletAuthoringUnitWrite,
 ) -> PersistenceResult<ValidatedAppletUnit> {
-    let req = request(input);
-    req.validate_bindings().map_err(rejected)?;
-    if arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&input.request).map_err(rejected)?)
-        .map_err(rejected)?
-        != input.canonical_request_hash
+    if arkret_canonical::canonical_sha256(&input.request).map_err(rejected)?
+        != input.canonical_request_hash.as_str()
     {
         return Err(rejected("canonical request identity changed"));
     }
-    if req.canonical_digest().map_err(rejected)? != input.request_digest
-        || input.accepted_at >= req.expires_at
-        || input.accepted_at < req.issued_at
-        || req.proof.verification_method != input.station_verification_method
-        || controller(&input.station_verification_method)? != req.governance_station_id
-    {
-        return Err(rejected("expired, replaced or differently signed preview"));
-    }
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(
-            &req.proof.jws,
-            &req.proof_binding_bytes().map_err(rejected)?,
-            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                bytes: input.station_public_key.to_vec(),
-            },
-        )
-        .map_err(signature_rejected)?;
     input.package.validate().map_err(rejected)?;
-    let (portal, epoch, mut events) = if let Some(basis) = req.basis.install() {
+    if let soland_storage::AppletAdmissionRequest::Install(body) = &input.request {
+        let basis = &body.authoring_request_basis;
+        basis.validate().map_err(rejected)?;
+        if body.applet_package != input.package {
+            return Err(rejected("installation package mirror differs"));
+        }
         let epoch: AppletRegistrationEpochEvidence = decode(
             basis
                 .registration_event
@@ -160,7 +221,7 @@ pub(crate) fn validate_input(
             .recomputed_install_plan
             .as_ref()
             .ok_or_else(|| rejected("fresh install plan absent"))?;
-        if req.plan_digest.as_ref() != Some(&plan.plan_digest)
+        if body.plan_digest != plan.plan_digest
             || plan.compute_plan_digest().map_err(rejected)? != plan.plan_digest
             || plan.applet_id != basis.applet_id
             || plan.package_digest != basis.package_digest
@@ -234,7 +295,47 @@ pub(crate) fn validate_input(
         {
             return Err(rejected("admin fixed set or producer guards changed"));
         }
-        (basis.effective_scope.realm_id().clone(), epoch, events)
+        epoch
+            .validate_against_did_document(&input.service_did_document)
+            .map_err(rejected)?;
+        verify_package(input, &epoch)?;
+        for event in &events {
+            event.validate_for_submit_structural().map_err(rejected)?;
+        }
+        return Ok(ValidatedAppletUnit {
+            events,
+            portal_realm: basis.effective_scope.realm_id().clone(),
+            provision: None,
+            managed_document: None,
+        });
+    }
+    let req = request(input)?;
+    req.validate_bindings().map_err(rejected)?;
+    if req.canonical_digest().map_err(rejected)? != input.request_digest
+        || input.accepted_at >= req.expires_at
+        || input.accepted_at < req.issued_at
+        || req.proof.verification_method != input.station_verification_method
+        || controller(&input.station_verification_method)? != req.governance_station_id
+    {
+        return Err(rejected("expired, replaced or differently signed preview"));
+    }
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(
+            &req.proof.jws,
+            &req.proof_binding_bytes().map_err(rejected)?,
+            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                bytes: input.station_public_key.to_vec(),
+            },
+        )
+        .map_err(signature_rejected)?;
+    let epoch = if let Some(basis) = req.basis.bot() {
+        if basis.applet_id != input.package.applet_id
+            || basis.service_id != input.package.service_id
+            || input.package.package_digest.as_ref() != Some(&basis.package_digest)
+        {
+            return Err(rejected("Bot immutable basis changed"));
+        }
+        basis.registration_epoch_evidence.clone()
     } else {
         let basis = req
             .basis
@@ -243,51 +344,17 @@ pub(crate) fn validate_input(
         if basis.applet_id != input.package.applet_id
             || basis.service_id != input.package.service_id
             || input.package.package_digest.as_ref() != Some(&basis.package_digest)
-            || !input.admin_producer_guards.is_empty()
         {
             return Err(rejected("Ghost immutable basis changed"));
         }
-        (
-            basis.realm_id.clone(),
-            basis.registration_epoch_evidence.clone(),
-            vec![],
-        )
+        basis.registration_epoch_evidence.clone()
     };
+    let portal = effective_scope(input)?.realm_id().clone();
+    let mut events = vec![];
     epoch
         .validate_against_did_document(&input.service_did_document)
         .map_err(rejected)?;
-    input
-        .package
-        .validate_with_epoch_evidence(&epoch)
-        .map_err(rejected)?;
-    let package_proof = input
-        .package
-        .proof
-        .as_ref()
-        .ok_or_else(|| rejected("package proof absent"))?;
-    if controller(&package_proof.verification_method)? != input.package.controller_principal_id
-        || arkret_wire::project_did_to_core_id(&input.controller_did_document.id)
-            .map_err(rejected)?
-            != input.package.controller_principal_id
-    {
-        return Err(rejected("package controller changed"));
-    }
-    let mut unsigned = input.package.clone();
-    unsigned.proof = None;
-    let package_bytes = arkret_canonical::canonical_json_bytes(&unsigned).map_err(rejected)?;
-    if package_proof.payload_digest.as_str()
-        != arkret_canonical::canonical::sha256_digest(&package_bytes)
-    {
-        return Err(rejected("package proof digest changed"));
-    }
-    arkret_identity::verify_jws_with_document(
-        &package_bytes,
-        &package_proof.jws,
-        &package_proof.verification_method,
-        &input.controller_did_document.id,
-        &input.controller_did_document,
-    )
-    .map_err(signature_rejected)?;
+    verify_package(input, &epoch)?;
     let Some(b) = bundle(input) else {
         if input.prior_managed_refs.len() != 4 {
             return Err(rejected("reuse accepted anchors absent"));
@@ -317,7 +384,7 @@ pub(crate) fn validate_input(
         decode(serde_json::to_value(&b.managed_actor_provision_event.payload).map_err(rejected)?)?;
     provision.validate().map_err(rejected)?;
     let service = ActorId::service(input.package.service_id.clone());
-    let role = if req.basis.install().is_some() {
+    let role = if req.basis.bot().is_some() {
         AppletManagedActorRole::Bot
     } else {
         AppletManagedActorRole::Ghost
@@ -331,14 +398,12 @@ pub(crate) fn validate_input(
     {
         return Err(rejected("managed Account identity changed"));
     }
-    if let Some(basis) = req.basis.install() {
-        if provision.actor_id != input.package.bot_actor_id
-            || provision.registration_ref != basis.registration_event.event_id
-            || !basis.capability_grant_events.iter().any(|e| {
-                arkret_wire::GrantId::from_event_id(&e.event_id) == provision.applet_authority_ref
-            })
+    if let Some(basis) = req.basis.bot() {
+        if provision.registration_ref != basis.registration_event_ref
+            || provision.applet_authority_ref != basis.authorization_ref
+            || provision.external_ref.is_some()
         {
-            return Err(rejected("Bot staged authority binding changed"));
+            return Err(rejected("Bot exact authority binding changed"));
         }
     } else if let Some(basis) = req.basis.ghost() {
         if provision.registration_ref != basis.registration_event_ref
@@ -384,6 +449,7 @@ pub(crate) fn validate_input(
     // Provision and accountability are portal-scoped; the Profile is
     // principal-scoped state in the managed actor's own PCR founded by index 1.
     let principal_control_realm = RealmId::from_event_id(&b.pcr_genesis_event.event_id);
+    let creation_scope = effective_scope(input)?.clone();
     for (index, e) in four.iter().enumerate() {
         service_event(e, input)?;
         let expected_realm = match index {
@@ -398,9 +464,13 @@ pub(crate) fn validate_input(
             || expected_realm.is_some_and(|realm| {
                 &e.realm_id != realm
                     || e.scope_ref
-                        != (ScopeRef::Realm {
-                            realm_id: realm.clone(),
-                        })
+                        != if index == 3 {
+                            ScopeRef::Realm {
+                                realm_id: realm.clone(),
+                            }
+                        } else {
+                            creation_scope.clone()
+                        }
             })
             || (index == 0 || index == 2) && (e.actor_id != service || e.executed_by.is_some())
             || (index == 1 || index == 3)
@@ -443,10 +513,9 @@ pub(crate) fn validate_input(
         decode(serde_json::to_value(&b.profile_event.payload).map_err(rejected)?)?;
     let kind_matches = match role {
         AppletManagedActorRole::Bot => profile.object.actor_kind == arkret_wire::ActorKind::Bot,
-        AppletManagedActorRole::Ghost => matches!(
-            profile.object.actor_kind,
-            arkret_wire::ActorKind::Integration | arkret_wire::ActorKind::Bot
-        ),
+        AppletManagedActorRole::Ghost => {
+            profile.object.actor_kind == arkret_wire::ActorKind::Integration
+        }
     };
     if profile.object.principal_id != *provision.actor_id.signing_principal_id()
         || !kind_matches
@@ -579,9 +648,19 @@ async fn stream_head(
     conn: &mut AsyncPgConnection,
     realm: &RealmId,
 ) -> PersistenceResult<Option<CommitStreamHead>> {
-    let key = crate::authority_commit::stream_key(&CommitStreamRef::Realm {
-        realm_id: realm.clone(),
-    })?;
+    stream_head_for(
+        conn,
+        &CommitStreamRef::Realm {
+            realm_id: realm.clone(),
+        },
+    )
+    .await
+}
+async fn stream_head_for(
+    conn: &mut AsyncPgConnection,
+    stream: &CommitStreamRef,
+) -> PersistenceResult<Option<CommitStreamHead>> {
+    let key = crate::authority_commit::stream_key(stream)?;
     let row=sql_query("SELECT commit_json AS value FROM realm_commits WHERE stream_key=$1 ORDER BY stream_position DESC LIMIT 1 FOR UPDATE")
         .bind::<Text,_>(key).get_result::<JsonRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
     row.map(|r| {
@@ -612,7 +691,7 @@ async fn admit_in_connection(
     let identity_lock = format!(
         "applet:{}:{}",
         input.package.applet_id,
-        request(input).basis.target_station_id()
+        target_station(input)?
     );
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
         .bind::<Text, _>(&identity_lock)
@@ -634,14 +713,19 @@ async fn admit_in_connection(
         });
     }
     let mut validated = validate_input(input)?;
-    let req = request(input);
-    let preview=sql_query("SELECT request_digest,signed_request,expires_at FROM applet_authoring_previews WHERE subject_key=$1 AND status='current' FOR UPDATE")
-        .bind::<Text,_>(&input.preview_subject_key).get_result::<PreviewRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("issued preview missing"))?;
-    if preview.request_digest != input.request_digest.as_str()
-        || preview.signed_request != serde_json::to_value(req).map_err(rejected)?
-        || input.accepted_at >= preview.expires_at
-    {
-        return Err(rejected("issued preview was replaced or expired"));
+    let managed_request = match &input.request {
+        soland_storage::AppletAdmissionRequest::Install(_) => None,
+        _ => Some(request(input)?),
+    };
+    if let Some(req) = managed_request {
+        let preview=sql_query("SELECT request_digest,signed_request,expires_at FROM applet_authoring_previews WHERE subject_key=$1 AND status='current' FOR UPDATE")
+            .bind::<Text,_>(&input.preview_subject_key).get_result::<PreviewRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("issued preview missing"))?;
+        if preview.request_digest != input.request_digest.as_str()
+            || preview.signed_request != serde_json::to_value(req).map_err(rejected)?
+            || input.accepted_at >= preview.expires_at
+        {
+            return Err(rejected("issued preview was replaced or expired"));
+        }
     }
     crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &validated.portal_realm)
         .await?;
@@ -676,108 +760,163 @@ async fn admit_in_connection(
             verify_admin_producer(conn, e, guard, input.accepted_at).await?;
         }
     }
-    // A reuse is accepted only after independently reopening the exact original
-    // four Events; refs supplied beside a request are not proof of acceptance.
-    if validated.provision.is_none() {
+    if admin_count == 0 && validated.provision.is_none() {
         let body = match &input.request {
-            AppletManagedActorCommittedRequest::Install(b) => b,
-            _ => return Err(rejected("Ghost cannot reuse the Bot founding unit")),
+            soland_storage::AppletAdmissionRequest::Managed(
+                AppletManagedActorCommittedRequest::Ghost(body),
+            ) => body,
+            _ => return Err(rejected("only Ghost mapping can reuse accepted provenance")),
         };
-        let reuse = body
-            .reuse_existing_managed_actor()
-            .ok_or_else(|| rejected("reuse body absent"))?;
-        let mut prior = Vec::new();
-        for r in &input.prior_managed_refs {
-            prior.push(accepted_pair(conn, r).await?.0);
-        }
-        let prior_provision: AppletManagedActorProvisionPayload =
-            decode(serde_json::to_value(&prior[0].payload).map_err(rejected)?)?;
-        if prior_provision.actor_id != input.package.bot_actor_id
-            || prior_provision.applet_id != input.package.applet_id
-            || prior_provision.service_id != input.package.service_id
+        body.validate().map_err(rejected)?;
+        let basis = body
+            .authoring_basis()
+            .ok_or_else(|| rejected("reuse Ghost basis absent"))?;
+        let existing = body
+            .existing_managed_actor
+            .as_ref()
+            .ok_or_else(|| rejected("reuse anchors absent"))?;
+        if basis.existing_managed_actor.as_ref() != Some(existing)
+            || input.prior_managed_refs.len() != 4
         {
-            return Err(rejected("reuse identity winner differs"));
+            return Err(rejected(
+                "reuse anchors differ from the signed current preview",
+            ));
         }
-        for (e, k) in prior.iter().zip([
+        let mut prior = Vec::new();
+        for reference in &input.prior_managed_refs {
+            prior.push(accepted_pair(conn, reference).await?.0);
+        }
+        let p: AppletManagedActorProvisionPayload =
+            decode(serde_json::to_value(&prior[0].payload).map_err(rejected)?)?;
+        p.validate().map_err(rejected)?;
+        if p.actor_role != AppletManagedActorRole::Ghost
+            || p.applet_id != input.package.applet_id
+            || p.service_id != input.package.service_id
+            || p.actor_id != existing.ghost_actor_id
+            || p.external_ref.as_ref() != Some(&basis.external_ref)
+            || p.actor_id.route_service_id() != target_station(input)?
+            || p.actor_id.as_account_id().is_none()
+            || existing.managed_actor_provision_ref != prior[0].event_id
+            || existing.principal_control_realm_id != RealmId::from_event_id(&prior[1].event_id)
+            || existing.accountability_grant_ref != prior[2].event_id
+            || existing.profile_event_ref != prior[3].event_id
+        {
+            return Err(rejected(
+                "reuse immutable identity or external tuple differs",
+            ));
+        }
+        for (event, kind) in prior.iter().zip([
             EventKind::AppletManagedActorProvision,
             EventKind::RealmCreate,
             EventKind::IdentityAccountabilityGrant,
             EventKind::ProfileCreate,
         ]) {
-            if e.kind != k {
-                return Err(rejected("reuse fixed set differs"));
+            if event.kind != kind {
+                return Err(rejected("reuse accepted fixed set differs"));
             }
-            verify_prior_service_event(conn, e, input, &prior[0].event_id).await?;
+            verify_prior_service_event(conn, event, input, &prior[0].event_id).await?;
         }
-        if input
-            .prior_managed_refs
-            .iter()
-            .map(|reference| reference.event_id.clone())
-            .collect::<Vec<_>>()
-            != vec![
-                reuse.managed_actor_provision_ref.clone(),
-                reuse.pcr_genesis_ref.clone(),
-                reuse.accountability_grant_ref.clone(),
-                reuse.profile_event_ref.clone(),
-            ]
-            || reuse.actor_id != prior_provision.actor_id
-            || reuse.initial_package_bot_actor_id != prior_provision.actor_id
+        if !exact_ref(
+            &prior[1],
+            "applet_managed_actor_provision",
+            &prior[0].event_id,
+        ) || !exact_ref(&prior[3], "accountability", &prior[2].event_id)
         {
-            return Err(rejected("reuse exact anchor vector differs"));
+            return Err(rejected("reuse accepted lineage differs"));
         }
-        validated.provision = Some(prior_provision);
+        let mut qualification = prior[0].clone();
+        qualification.actor_id = p.actor_id.clone();
+        qualification.realm_id = validated.portal_realm.clone();
+        qualification.scope_ref = effective_scope(input)?.clone();
+        qualification.executed_by = Some(ActorId::service(p.service_id.clone()));
+        crate::managed_message_actor::require_managed_actor_in_connection(
+            conn,
+            &qualification,
+            input.accepted_at,
+        )
+        .await?;
+        validated.provision = Some(p);
     }
-    let provision = validated
-        .provision
-        .as_ref()
-        .ok_or_else(|| rejected("provision absent"))?;
-    // Require the exact active Service grant, intact ancestry and constraints;
-    // a same-Service sibling grant is never an authorization substitute.
-    let grant_actor = applet_grant_subject(input);
-    let cut = crate::realm_authorization_cut::RealmAuthorizationCut::read(
-        conn,
-        &validated.portal_realm,
-        &grant_actor,
-    )
-    .await?;
+    if bundle(input).is_some()
+        && validated
+            .provision
+            .as_ref()
+            .is_some_and(|p| p.actor_role == AppletManagedActorRole::Ghost)
+    {
+        let p = validated.provision.as_ref().expect("Ghost creation branch");
+        let existing=sql_query("SELECT to_jsonb(EXISTS(SELECT 1 FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk WHERE e.state='committed' AND e.kind='ak.applet.managed_actor.provision' AND e.envelope#>>'{payload,applet_id}'=$1 AND e.envelope#>>'{payload,service_id}'=$2 AND e.envelope#>>'{payload,actor_id,account_id,station_id}'=$3 AND e.envelope#>'{payload,external_ref}'=$4)) AS value")
+            .bind::<Text,_>(input.package.applet_id.as_str()).bind::<Text,_>(input.package.service_id.as_str()).bind::<Text,_>(target_station(input)?.as_str()).bind::<Jsonb,_>(serde_json::to_value(&p.external_ref).map_err(rejected)?).get_result::<JsonRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+        if existing.value.as_bool() != Some(false) {
+            return Err(rejected(
+                "duplicate_conflict: Ghost tuple already has accepted identity; current reuse preview required",
+            ));
+        }
+    }
+    let provision = validated.provision.as_ref();
     if admin_count == 0 {
-        let target = arkret_wire::WireResourceSelector::realm(validated.portal_realm.clone());
-        // Resolve the current registration independently before evaluating the
-        // grant's AppletAuthority constraint; the grant is not its own witness.
-        let registration =
-            require_exact_service_grant(conn, input, provision, &validated.portal_realm)
-                .await?
-                .ok_or_else(|| rejected("Ghost current registration is absent"))?;
+        let p = provision.ok_or_else(|| rejected("managed provenance absent"))?;
+        let grant_actor = applet_grant_subject(input);
+        let cut = crate::realm_authorization_cut::RealmAuthorizationCut::read(
+            conn,
+            &validated.portal_realm,
+            &grant_actor,
+        )
+        .await?;
+        let registration = require_exact_service_grant(conn, input, p, &validated.portal_realm)
+            .await?
+            .ok_or_else(|| rejected("current registration absent"))?;
+        let target = match effective_scope(input)? {
+            ScopeRef::Realm { realm_id } => {
+                arkret_wire::WireResourceSelector::realm(realm_id.clone())
+            }
+            ScopeRef::Circle {
+                realm_id,
+                circle_id,
+            } => arkret_wire::WireResourceSelector::circle(realm_id.clone(), circle_id.clone()),
+            _ => return Err(rejected("unsupported creation scope")),
+        };
         let facts = soland_storage::OperationFacts {
             applet_id: Some(registration.applet_id.to_string()),
             executed_by: Some(ActorId::service(registration.service_id)),
             registration_epoch: Some(registration.registration_epoch.to_string()),
-            ..soland_storage::OperationFacts::default()
+            ..Default::default()
         };
-        let evaluation = cut.evaluate(
-            &[arkret_wire::CapabilityActionId::APPLET_GHOST_PROVISION],
-            &target,
-            &facts,
-            input.accepted_at,
-        );
-        if !evaluation
+        let action = match p.actor_role {
+            AppletManagedActorRole::Bot => "ak.applet.bot.provision",
+            AppletManagedActorRole::Ghost => {
+                arkret_wire::CapabilityActionId::APPLET_GHOST_PROVISION
+            }
+        };
+        let creation_ref = creation_authorization_ref(input, p)?;
+        if !cut
+            .evaluate(&[action], &target, &facts, input.accepted_at)
             .unreserved()
             .iter()
-            .any(|g| g.id == provision.applet_authority_ref)
+            .any(|g| g.id == creation_ref)
         {
-            return Err(rejected("exact Ghost provisioning grant is unavailable"));
+            return Err(rejected("exact managed provisioning grant is unavailable"));
         }
     }
-    let mut refs = Vec::new();
+    let mut refs = if admin_count == 0 && bundle(input).is_none() {
+        input.prior_managed_refs.clone()
+    } else {
+        Vec::new()
+    };
     for (index, event) in validated.events.iter().enumerate() {
         if index == admin_count && bundle(input).is_some() {
-            require_exact_service_grant(conn, input, provision, &validated.portal_realm).await?;
+            require_exact_service_grant(
+                conn,
+                input,
+                provision.ok_or_else(|| rejected("managed provision absent"))?,
+                &validated.portal_realm,
+            )
+            .await?;
         }
         if event.kind == EventKind::RealmCreate {
             let authority_ref =
                 arkret_wire::RealmCommitAuthorityRef::GenesisOrChangeEvent(event.event_id.clone());
             let inserted=sql_query("INSERT INTO realm_authorities(realm_id,generation,service_id,authority_ref,last_handoff_ref) VALUES($1,0,$2,$3,NULL) ON CONFLICT DO NOTHING")
-                .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(req.governance_station_id.as_str()).bind::<Jsonb,_>(serde_json::to_value(authority_ref).map_err(rejected)?).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+                .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(target_station(input)?.as_str()).bind::<Jsonb,_>(serde_json::to_value(authority_ref).map_err(rejected)?).execute(&mut *conn).await.map_err(PersistenceError::database)?;
             if inserted != 1 {
                 return Err(rejected("managed PCR already exists"));
             }
@@ -786,10 +925,12 @@ async fn admit_in_connection(
             .await
             .map_err(PgTransactionError::into_persistence)?
             .ok_or_else(|| rejected("local current authority unavailable"))?;
-        if authority.service_id != req.governance_station_id {
+        if authority.service_id != *target_station(input)? {
             return Err(rejected("authoring unit crosses sovereign Stations"));
         }
-        let head = stream_head(conn, &event.realm_id).await?;
+        let stream = CommitStreamRef::from_scope(&event.scope_ref, Some(event.realm_id.clone()))
+            .map_err(rejected)?;
+        let head = stream_head_for(conn, &stream).await?;
         // Native installation does not exempt its ordinary Human members from
         // the original signer-fact contract. Freeze under this same locked cut,
         // bind it before Commit ID/signature, and archive only with acceptance.
@@ -802,12 +943,33 @@ async fn admit_in_connection(
         )
         .await?;
         let candidate = producer_signer_fact.clone().map(Into::into);
-        let commit = author(
+        let device_core = if let Some(fact) = producer_signer_fact.as_ref() {
+            Some(
+                crate::account_device_committed_evidence::prepare_core(
+                    conn,
+                    event,
+                    fact,
+                    input.accepted_at,
+                    target_station(input)?,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let (commit, device_evidence) = author(
             event,
             &authority,
             head.as_ref(),
             input.accepted_at,
             candidate.as_ref(),
+            device_core.as_ref(),
+        )?;
+        crate::account_device_committed_evidence::validate(
+            event,
+            &commit,
+            producer_signer_fact.as_ref(),
+            device_evidence.as_ref(),
         )?;
         crate::agent_producer_signer_keys::validate_human_fact_binding(
             event,
@@ -857,15 +1019,21 @@ async fn admit_in_connection(
                 conn, event, &commit, fact,
             )
             .await?;
+            crate::account_device_committed_evidence::retain(
+                conn,
+                &commit,
+                fact,
+                device_evidence
+                    .as_ref()
+                    .ok_or_else(|| rejected("original Device evidence absent"))?,
+            )
+            .await?;
         }
         if event.kind == EventKind::CapabilityGrant {
             crate::capability_grant_current_results::commit_capability_grant_current_result_in_connection(conn,event,&commit).await?;
         }
         crate::applet_current_results::project_applet_event_in_connection(
-            conn,
-            event,
-            &commit,
-            Some(provision),
+            conn, event, &commit, provision,
         )
         .await?;
         if event.kind == EventKind::IdentityAccountabilityGrant {
@@ -925,33 +1093,43 @@ async fn admit_in_connection(
     crate::unit_of_work::commit_applet_record(conn, finalization.applet_record).await?;
     crate::idempotency::record_idempotency_in_connection(conn, &finalization.idempotency_record)
         .await?;
-    require_current_managed_method(conn, provision, input.accepted_at).await?;
-    let portal_head = stream_head(conn, &validated.portal_realm)
-        .await?
-        .ok_or_else(|| rejected("accepted Portal head unavailable"))?;
-    let managed_document = if let Some(doc) = validated.managed_document.as_ref() {
-        doc.clone()
-    } else {
-        verified_managed_document(provision)?
-    };
-    let (managed_vm, managed_key) =
-        managed_signing_key(provision, &managed_document, input.accepted_at)?;
-    let context = Box::pin(
-        crate::applet_authoring_context::materialize_context_in_connection(
-            conn,
-            input,
-            &portal_head,
-            provision,
-            &managed_vm,
-            &managed_key,
-            attester,
-        ),
-    )
-    .await?;
-    sql_query("UPDATE applet_authoring_previews SET status='committed',committed_at=$3 WHERE subject_key=$1 AND request_digest=$2 AND status='current'")
+    let context_json = if managed_request.is_some() && bundle(input).is_some() {
+        let provision = provision.ok_or_else(|| rejected("managed provision absent"))?;
+        require_current_managed_method(conn, provision, input.accepted_at).await?;
+        let portal_head = stream_head(conn, &validated.portal_realm)
+            .await?
+            .ok_or_else(|| rejected("accepted Portal head unavailable"))?;
+        let managed_document = if let Some(doc) = validated.managed_document.as_ref() {
+            doc.clone()
+        } else {
+            verified_managed_document(provision)?
+        };
+        let (managed_vm, managed_key) =
+            managed_signing_key(provision, &managed_document, input.accepted_at)?;
+        let context = Box::pin(
+            crate::applet_authoring_context::materialize_context_in_connection(
+                conn,
+                input,
+                &portal_head,
+                provision,
+                &managed_vm,
+                &managed_key,
+                attester,
+            ),
+        )
+        .await?;
+        sql_query("UPDATE applet_authoring_previews SET status='committed',committed_at=$3 WHERE subject_key=$1 AND request_digest=$2 AND status='current'")
         .bind::<Text,_>(&input.preview_subject_key).bind::<Text,_>(input.request_digest.as_str()).bind::<Timestamptz,_>(input.accepted_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
-    sql_query("INSERT INTO applet_authoring_units(actor_key,operation_id,idempotency_key,canonical_request_hash,request_digest,committed_event_refs,response_body,authoring_context,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-        .bind::<Text,_>(&actor_key).bind::<Text,_>(&input.operation_id).bind::<Text,_>(&input.idempotency_key).bind::<Text,_>(input.canonical_request_hash.as_str()).bind::<Text,_>(input.request_digest.as_str()).bind::<Jsonb,_>(serde_json::to_value(&refs).map_err(rejected)?).bind::<Jsonb,_>(&finalization.response_body).bind::<Jsonb,_>(serde_json::to_value(context).map_err(rejected)?).bind::<Timestamptz,_>(input.accepted_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+        serde_json::to_value(context).map_err(rejected)?
+    } else {
+        Value::Null
+    };
+    if managed_request.is_some() && bundle(input).is_none() {
+        sql_query("UPDATE applet_authoring_previews SET status='committed',committed_at=$3 WHERE subject_key=$1 AND request_digest=$2 AND status='current'")
+            .bind::<Text,_>(&input.preview_subject_key).bind::<Text,_>(input.request_digest.as_str()).bind::<Timestamptz,_>(input.accepted_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
+    }
+    sql_query("INSERT INTO applet_authoring_units(actor_key,operation_id,idempotency_key,canonical_request_hash,request_digest,committed_event_refs,response_body,request_body,authoring_context,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+        .bind::<Text,_>(&actor_key).bind::<Text,_>(&input.operation_id).bind::<Text,_>(&input.idempotency_key).bind::<Text,_>(input.canonical_request_hash.as_str()).bind::<Text,_>(input.request_digest.as_str()).bind::<Jsonb,_>(serde_json::to_value(&refs).map_err(rejected)?).bind::<Jsonb,_>(&finalization.response_body).bind::<Jsonb,_>(serde_json::to_value(&input.request).map_err(rejected)?).bind::<Jsonb,_>(context_json).bind::<Timestamptz,_>(input.accepted_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;
     Ok(AppletAuthoringUnitOutcome {
         committed_event_refs: refs,
         response_body: finalization.response_body,
@@ -1052,7 +1230,8 @@ async fn verify_admin_producer(
         soland_storage::SelfProducerCommitGuard::MimiFacade { .. } => {
             return Err(rejected("MIMI facade is not an Applet admin producer"));
         }
-        soland_storage::SelfProducerCommitGuard::HumanDevice(selector) => {
+        soland_storage::SelfProducerCommitGuard::HumanDevice(selector)
+        | soland_storage::SelfProducerCommitGuard::HumanDeviceEvidence { selector, .. } => {
             let account = event
                 .actor_id
                 .as_account_id()
@@ -1140,38 +1319,21 @@ async fn require_current_managed_method(
 fn validate_finalized_refs(
     input: &AppletAuthoringUnitWrite,
     refs: &[arkret_wire::CommittedEventRef],
-    provision: &AppletManagedActorProvisionPayload,
+    provision: Option<&AppletManagedActorProvisionPayload>,
     response: &Value,
 ) -> PersistenceResult<()> {
     match &input.request {
-        AppletManagedActorCommittedRequest::Install(body) => {
+        soland_storage::AppletAdmissionRequest::Install(body) => {
             let outcome: arkret_models_integration::AppletInstallOutcome =
                 decode(response.clone())?;
-            let provision_ref = if body.managed_actor_bundle().is_some() {
-                refs.get(input.admin_producer_guards.len())
-            } else {
-                input.prior_managed_refs.as_slice().first()
-            }
-            .ok_or_else(|| rejected("actual provision ref missing"))?;
-            let pcr = if body.managed_actor_bundle().is_some() {
-                refs.get(input.admin_producer_guards.len() + 1)
-            } else {
-                input.prior_managed_refs.get(1)
-            }
-            .ok_or_else(|| rejected("actual PCR ref missing"))?;
-            let grants = request(input)
-                .basis
-                .install()
-                .ok_or_else(|| rejected("install basis absent"))?
+            let grants = body
+                .authoring_request_basis
                 .capability_grant_events
                 .iter()
                 .map(|e| arkret_wire::GrantId::from_event_id(&e.event_id))
                 .collect::<Vec<_>>();
-            if refs.first().map(|reference| &reference.event_id)
-                != Some(&outcome.registration_event_ref)
-                || outcome.bot_actor_provision_ref != provision_ref.event_id
-                || &outcome.bot_principal_control_realm_id != pcr.stream_ref.realm_id()
-                || outcome.bot_actor_id != provision.actor_id
+            if refs.first().map(|r| &r.event_id) != Some(&outcome.registration_event_ref)
+                || refs.len() != 1 + grants.len()
                 || outcome.applet_id != input.package.applet_id
                 || outcome.registration_epoch != input.package.registration_epoch
                 || outcome.capability_grant_refs != grants
@@ -1179,22 +1341,47 @@ fn validate_finalized_refs(
                 || outcome.widget_policy_ref.is_some()
             {
                 return Err(rejected(
-                    "install outcome contains fabricated or out-of-unit anchors",
+                    "Service install outcome fabricates managed anchors",
                 ));
             }
         }
-        AppletManagedActorCommittedRequest::Ghost(_) => {
-            let outcome: arkret_models_integration::GhostActorProvisionOutcome =
-                decode(response.clone())?;
+        soland_storage::AppletAdmissionRequest::Managed(body) => {
+            let p = provision.ok_or_else(|| rejected("managed provision absent"))?;
+            let (actor, provision_ref, pcr, accountability, profile, authorization) = match body {
+                AppletManagedActorCommittedRequest::Bot(_) => {
+                    let o: arkret_models_integration::AppletBotProvisionOutcome =
+                        decode(response.clone())?;
+                    (
+                        o.bot_actor_id,
+                        o.managed_actor_provision_ref,
+                        o.principal_control_realm_id,
+                        o.accountability_grant_ref,
+                        o.profile_event_ref,
+                        o.authorization_ref,
+                    )
+                }
+                AppletManagedActorCommittedRequest::Ghost(_) => {
+                    let o: arkret_models_integration::GhostActorProvisionOutcome =
+                        decode(response.clone())?;
+                    (
+                        o.ghost_actor_id,
+                        o.managed_actor_provision_ref,
+                        o.principal_control_realm_id,
+                        o.accountability_grant_ref,
+                        o.profile_event_ref,
+                        o.authorization_ref,
+                    )
+                }
+            };
             if refs.len() != 4
-                || outcome.managed_actor_provision_ref != refs[0].event_id
-                || &outcome.principal_control_realm_id != refs[1].stream_ref.realm_id()
-                || outcome.accountability_grant_ref != refs[2].event_id
-                || outcome.profile_event_ref != refs[3].event_id
-                || outcome.ghost_actor_id != provision.actor_id
-                || outcome.authorization_ref != provision.applet_authority_ref
+                || provision_ref != refs[0].event_id
+                || &pcr != refs[1].stream_ref.realm_id()
+                || accountability != refs[2].event_id
+                || profile != refs[3].event_id
+                || actor != p.actor_id
+                || authorization != creation_authorization_ref(input, p)?
             {
-                return Err(rejected("Ghost outcome contains fabricated anchors"));
+                return Err(rejected("managed outcome fabricates accepted anchors"));
             }
         }
     }
@@ -1210,9 +1397,10 @@ async fn require_exact_service_grant(
     let actor = applet_grant_subject(input);
     let cut =
         crate::realm_authorization_cut::RealmAuthorizationCut::read(conn, realm, &actor).await?;
+    let creation_authority = creation_authorization_ref(input, provision)?;
     let grant = cut
         .effective_grants(input.accepted_at)
-        .find(|(id, _)| *id == &provision.applet_authority_ref)
+        .find(|(id, _)| *id == &creation_authority)
         .map(|(_, g)| g)
         .ok_or_else(|| rejected("exact Applet grant is not active at this accepted cut"))?;
     let bindings=grant.constraints.iter().filter(|c|c.constraint_kind==arkret_models_collaboration::governance::grant_constraint::GrantConstraintKind::AuthorityControl && c.constraint_subkind==Some(arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind::AppletAuthority)).collect::<Vec<_>>();
@@ -1223,52 +1411,77 @@ async fn require_exact_service_grant(
     {
         return Err(rejected("exact grant epoch or executor binding differs"));
     }
-    let mut accepted_registration = None;
-    if let Some(basis) = request(input).basis.ghost() {
-        #[derive(QueryableByName)]
-        struct RegistrationRow {
-            #[diesel(sql_type=Jsonb)]
-            value: Value,
-            #[diesel(sql_type=Text)]
-            event_ref: String,
-        }
-        let registration=sql_query("SELECT r.value,c.commit_json->>'event_ref' AS event_ref FROM applet_registration_current_results r JOIN realm_commits c ON c.commit_id=r.current_commit_id WHERE r.realm_id=$1 AND r.applet_id=$2")
-            .bind::<Text,_>(realm.as_str()).bind::<Text,_>(basis.applet_id.as_str()).get_result::<RegistrationRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?.ok_or_else(||rejected("active exact Applet registration absent"))?;
-        let expected = serde_json::to_value(
-            input
-                .package
-                .to_registration(&basis.registration_epoch_evidence)
-                .map_err(rejected)?,
+    let req = request(input)?;
+    let (epoch, registration_ref) = if let Some(basis) = req.basis.bot() {
+        (
+            &basis.registration_epoch_evidence,
+            &basis.registration_event_ref,
         )
+    } else {
+        let basis = req
+            .basis
+            .ghost()
+            .ok_or_else(|| rejected("creation basis absent"))?;
+        (
+            &basis.registration_epoch_evidence,
+            &basis.registration_event_ref,
+        )
+    };
+    #[derive(QueryableByName)]
+    struct RegistrationRow {
+        #[diesel(sql_type=Jsonb)]
+        value: Value,
+    }
+    // Compare the accepted instance, rather than the latest Event reference:
+    // independent scopes may reassert an identical security snapshot. The
+    // projection rotates this provenance on replacement and never revives it.
+    let registration=sql_query("SELECT r.value FROM applet_registration_current_results r JOIN applet_registration_instances a ON a.realm_id=r.realm_id AND a.applet_id=r.applet_id AND a.instance_event_ref=r.instance_event_ref JOIN realm_commits c ON c.commit_id=a.accepted_commit_id JOIN canonical_events e ON e.pk=c.event_pk WHERE r.realm_id=$1 AND r.applet_id=$2 AND a.registration_event_ref=$3 AND e.id=$4 AND e.state='committed' AND e.kind='ak.applet.registration' AND e.envelope->'scope_ref'=$5 AND ((e.envelope->'payload') - 'proof')=(r.value - 'proof')")
+        .bind::<Text,_>(realm.as_str()).bind::<Text,_>(input.package.applet_id.as_str())
+        .bind::<Text,_>(registration_ref.as_str()).bind::<Binary,_>(registration_ref.token_bytes().to_vec())
+        .bind::<Jsonb,_>(serde_json::to_value(effective_scope(input)?).map_err(rejected)?)
+        .get_result::<RegistrationRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
+        .ok_or_else(||rejected("accepted Applet registration instance was replaced or scope differs"))?;
+    let expected = serde_json::to_value(input.package.to_registration(&epoch).map_err(rejected)?)
         .map_err(rejected)?;
-        if registration.value != expected
-            || registration.event_ref != basis.registration_event_ref.as_str()
-        {
-            return Err(rejected(
-                "active registration epoch replaced the Ghost basis",
-            ));
-        }
-        accepted_registration = Some(decode(registration.value)?);
-        if !input.package.namespaces.actors.is_empty()
-            && !input.package.namespaces.actors.iter().any(|n| {
-                arkret_models_integration::namespace_pattern_matches(
-                    arkret_models_integration::AppletNamespaceDomain::Actors,
-                    &n.pattern,
-                    provision.initial_resolution.did.as_str(),
-                )
-            })
-        {
-            return Err(rejected("applet_namespace_mismatch"));
-        }
+    if crate::applet_current_results::registration_security_value(&registration.value)
+        != crate::applet_current_results::registration_security_value(&expected)
+    {
+        return Err(rejected(
+            "active registration security snapshot differs from the managed basis",
+        ));
+    }
+    let accepted_registration = Some(decode(registration.value)?);
+    if provision.actor_role == AppletManagedActorRole::Ghost
+        && !input.package.namespaces.actors.is_empty()
+        && !input.package.namespaces.actors.iter().any(|n| {
+            arkret_models_integration::namespace_pattern_matches(
+                arkret_models_integration::AppletNamespaceDomain::Actors,
+                &n.pattern,
+                provision.initial_resolution.did.as_str(),
+            )
+        })
+    {
+        return Err(rejected("applet_namespace_mismatch"));
     }
     Ok(accepted_registration)
 }
 
+fn creation_authorization_ref(
+    input: &AppletAuthoringUnitWrite,
+    provision: &AppletManagedActorProvisionPayload,
+) -> PersistenceResult<arkret_wire::GrantId> {
+    if bundle(input).is_none() {
+        return request(input)?
+            .basis
+            .ghost()
+            .map(|basis| basis.authorization_ref.clone())
+            .ok_or_else(|| rejected("mapping authority absent"));
+    }
+    Ok(provision.applet_authority_ref.clone())
+}
+
 fn applet_grant_subject(input: &AppletAuthoringUnitWrite) -> ActorId {
-    ActorId::account(arkret_wire::AccountId::new(
-        input.package.service_id.clone(),
-        request(input).basis.target_station_id().clone(),
-    ))
+    ActorId::service(input.package.service_id.clone())
 }
 
 async fn verify_prior_service_event(

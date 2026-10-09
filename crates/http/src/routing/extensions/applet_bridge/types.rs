@@ -32,18 +32,12 @@ fn event_payload_value(event: &Event) -> Value {
 pub struct AppletIdentityRecord {
     pub applet_id: AppletId,
     pub registry_id: DidCoreId,
-    pub bot_actor_id: ActorId,
-    pub bot_actor_provision_ref: EventId,
-    pub bot_principal_control_realm_id: RealmId,
+    pub target_station_id: DidCoreId,
     pub initial_package: AppletPackage,
     pub initial_owner_actor_id: ActorId,
     pub initial_effective_scope: ScopeRef,
     pub initial_registration_event: Event,
     pub initial_capability_grant_refs: Vec<GrantId>,
-    pub bot_actor_provision_event: Event,
-    pub bot_pcr_genesis_event: Event,
-    pub bot_accountability_grant_event: Event,
-    pub bot_profile_event: Event,
     #[serde(
         default,
         with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
@@ -72,6 +66,7 @@ pub struct AppletRecord {
     pub capability_grant_events: Vec<Event>,
     pub install_execution: Value,
     pub revoke_execution: Option<Value>,
+    pub bots: Vec<BotActorRecord>,
     pub ghosts: Vec<GhostActorRecord>,
 }
 
@@ -82,6 +77,7 @@ pub struct AppletRecord {
 #[serde(deny_unknown_fields)]
 pub(super) struct AppletInstallationRecord {
     pub applet_id: AppletId,
+    pub target_station_id: DidCoreId,
     pub owner_actor_id: ActorId,
     pub portal_realm_id: RealmId,
     pub effective_scope: ScopeRef,
@@ -105,6 +101,7 @@ pub(super) struct AppletInstallationRecord {
     pub install_execution: Value,
     #[serde(default)]
     pub revoke_execution: Option<Value>,
+    pub bots: Vec<BotActorRecord>,
     pub ghosts: Vec<GhostActorRecord>,
 }
 
@@ -133,6 +130,7 @@ impl AppletRecord {
             capability_grant_events: installation.capability_grant_events,
             install_execution: installation.install_execution,
             revoke_execution: installation.revoke_execution,
+            bots: installation.bots,
             ghosts: installation.ghosts,
         }
     }
@@ -140,6 +138,7 @@ impl AppletRecord {
     pub(super) fn stored_installation(&self) -> AppletInstallationRecord {
         AppletInstallationRecord {
             applet_id: self.applet_id.clone(),
+            target_station_id: self.identity.target_station_id.clone(),
             owner_actor_id: self.owner_actor_id.clone(),
             portal_realm_id: self.portal_realm_id.clone(),
             effective_scope: self.effective_scope.clone(),
@@ -157,6 +156,7 @@ impl AppletRecord {
             capability_grant_events: self.capability_grant_events.clone(),
             install_execution: self.install_execution.clone(),
             revoke_execution: self.revoke_execution.clone(),
+            bots: self.bots.clone(),
             ghosts: self.ghosts.clone(),
         }
     }
@@ -184,6 +184,20 @@ pub(crate) fn registration_epoch_evidence_from_event(
         })?;
     serde_json::from_value(evidence)
         .map_err(|error| format!("registration Event epoch evidence is invalid: {error}"))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BotActorRecord {
+    pub bot_actor_id: ActorId,
+    pub request_id: String,
+    pub request_digest: Hash,
+    pub managed_actor_provision_event: Event,
+    pub pcr_genesis_event: Event,
+    pub accountability_grant_event: Event,
+    pub profile_event: Event,
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -284,21 +298,8 @@ fn validate_managed_actor_unit(
         AppletManagedActorRole::Bot => "Bot",
         AppletManagedActorRole::Ghost => "Ghost",
     };
-    let (authority_package, authority_scope, authority_registration_ref, authority_grant_refs) =
-        match role {
-            AppletManagedActorRole::Bot => (
-                &record.identity.initial_package,
-                &record.identity.initial_effective_scope,
-                &record.identity.initial_registration_event,
-                record.identity.initial_capability_grant_refs.as_slice(),
-            ),
-            AppletManagedActorRole::Ghost => (
-                &record.package,
-                &record.effective_scope,
-                &record.registration_event,
-                record.install_response.capability_grant_refs.as_slice(),
-            ),
-        };
+    let authority_package = &record.package;
+    let authority_scope = &provision_event.scope_ref;
     let authority_realm_id = authority_scope.realm_id();
     let service_actor_id = arkret_wire::ActorId::service(authority_package.service_id.clone());
     validate_stored_event(provision_event, "managed provision")?;
@@ -318,8 +319,6 @@ fn validate_managed_actor_unit(
         || &provision.actor_id != actor_id
         || !matches!(&provision.actor_id, ActorId::Account { .. })
         || provision.actor_id.route_service_id() != station_id
-        || provision.registration_ref != authority_registration_ref.event_id
-        || !authority_grant_refs.contains(&provision.applet_authority_ref)
         || provision.external_ref.as_ref() != external_ref
         || provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
         || provision_event.actor_id != service_actor_id
@@ -366,7 +365,12 @@ fn validate_managed_actor_unit(
         ));
     }
 
-    let registration_method = authority_package.webhook_auth.key_ref.as_str();
+    let registration_method = provision_event
+        .producer_proof
+        .as_ref()
+        .ok_or_else(|| "managed provenance has no producer proof".to_owned())?
+        .verification_method
+        .as_str();
     for event in [accountability_event, profile_event] {
         validate_registration_epoch_proof_method(event, registration_method, label)?;
     }
@@ -461,12 +465,6 @@ impl AppletRecord {
             || self.package.controller_principal_id
                 != self.identity.initial_package.controller_principal_id
             || self.package.service_id != self.identity.initial_package.service_id
-            || self.package.bot_actor_id != self.identity.initial_package.bot_actor_id
-            || self.bot_actor_id != self.package.bot_actor_id
-            || self.bot_actor_id != self.install_response.bot_actor_id
-            || self.bot_actor_provision_ref != self.install_response.bot_actor_provision_ref
-            || self.bot_principal_control_realm_id
-                != self.install_response.bot_principal_control_realm_id
             || &self.portal_realm_id != self.effective_scope.realm_id()
             || self.install_id != self.install_response.install_id
             || self.install_response.registration_epoch != self.package.registration_epoch
@@ -542,30 +540,6 @@ impl AppletRecord {
                     .to_owned(),
             );
         }
-        let bot_provision = validate_managed_actor_unit(
-            self,
-            AppletManagedActorRole::Bot,
-            &self.bot_actor_id,
-            self.bot_actor_id.route_service_id(),
-            None,
-            &self.bot_actor_provision_event,
-            &self.bot_pcr_genesis_event,
-            &self.bot_accountability_grant_event,
-            &self.bot_profile_event,
-        )?;
-        if self.bot_actor_provision_ref != self.bot_actor_provision_event.event_id
-            || self.bot_principal_control_realm_id
-                != RealmId::from_event_id(&self.bot_pcr_genesis_event.event_id)
-            || bot_provision.applet_authority_ref.as_str()
-                != self
-                    .bot_actor_provision_event
-                    .authorization_ref
-                    .as_deref()
-                    .unwrap_or_default()
-        {
-            return Err("stored Bot durable authority coordinates drift".to_owned());
-        }
-
         let expected_resource = match &self.effective_scope {
             ScopeRef::Realm { realm_id } => WireResourceSelector::realm(realm_id.clone()),
             ScopeRef::Circle {
@@ -627,10 +601,7 @@ impl AppletRecord {
                 || grant.issuer_id != self.owner_actor_id
                 || grant.realm_id.as_ref() != Some(&self.portal_realm_id)
                 || !matches!(&grant.subject, CapabilitySubject::Actor(subject)
-                if subject == &ActorId::account(arkret_wire::AccountId::new(
-                    self.package.service_id.clone(),
-                    self.bot_actor_id.route_service_id().clone(),
-                )))
+                if subject == &ActorId::service(self.package.service_id.clone()))
                 || grant.resources.as_slice() != [expected_resource.clone()]
                 || applet_authority_constraints.as_slice() != [&expected_constraint]
                 || grant.actions.is_empty()
@@ -665,25 +636,45 @@ impl AppletRecord {
             );
         }
 
-        let mut all_event_ids = BTreeSet::from([
-            self.registration_event.event_id.clone(),
-            self.bot_actor_provision_event.event_id.clone(),
-            self.bot_pcr_genesis_event.event_id.clone(),
-            self.bot_accountability_grant_event.event_id.clone(),
-            self.bot_profile_event.event_id.clone(),
-        ]);
-        if all_event_ids.len() != 5 {
-            return Err("stored Applet fixed Event set reuses an Event id".to_owned());
-        }
+        let mut all_event_ids = BTreeSet::from([self.registration_event.event_id.clone()]);
         for event in &self.capability_grant_events {
             if !all_event_ids.insert(event.event_id.clone()) {
                 return Err("stored Applet Event set reuses an Event id".to_owned());
             }
         }
-        let mut managed_actor_ids = BTreeSet::from([self.bot_actor_id.clone()]);
+        let mut managed_actor_ids = BTreeSet::new();
+        let mut bot_requests = BTreeSet::new();
+        for bot in &self.bots {
+            if !managed_actor_ids.insert(bot.bot_actor_id.clone())
+                || !bot_requests.insert(&bot.request_id)
+            {
+                return Err("stored Bot identity or request id is duplicated".to_owned());
+            }
+            validate_managed_actor_unit(
+                self,
+                AppletManagedActorRole::Bot,
+                &bot.bot_actor_id,
+                &self.target_station_id,
+                None,
+                &bot.managed_actor_provision_event,
+                &bot.pcr_genesis_event,
+                &bot.accountability_grant_event,
+                &bot.profile_event,
+            )?;
+            for event in [
+                &bot.managed_actor_provision_event,
+                &bot.pcr_genesis_event,
+                &bot.accountability_grant_event,
+                &bot.profile_event,
+            ] {
+                if !all_event_ids.insert(event.event_id.clone()) {
+                    return Err("stored Bot fixed Event set reuses an Event id".to_owned());
+                }
+            }
+        }
         let mut external_refs = BTreeSet::new();
         for ghost in &self.ghosts {
-            if ghost.ghost_actor_id.route_service_id() != self.bot_actor_id.route_service_id()
+            if ghost.ghost_actor_id.route_service_id() != &self.target_station_id
                 || ghost.ghost_actor_id.signing_principal_id() == &self.package.service_id
                 || ghost.ghost_actor_id.signing_principal_id()
                     == &self.package.controller_principal_id
@@ -743,7 +734,7 @@ pub struct AppletRevokeRecordOutcome {
     pub status: String,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub revoked_at: chrono::DateTime<chrono::Utc>,
-    pub bot_actor_id: String,
+    pub bot_actor_ids: Vec<String>,
     pub ghost_actor_ids: Vec<String>,
 }
 

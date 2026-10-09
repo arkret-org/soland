@@ -41,9 +41,8 @@ use super::install::{
     require_realm_admin, validate_admin_install_events, validate_applet_package,
 };
 use super::record::{
-    applet_id_param, applet_record, applet_record_for_realm, applet_records,
-    encode_applet_identity, encode_applet_record, ensure_not_revoked, idempotency_key,
-    persist_applet_record, query_value,
+    applet_id_param, applet_record, applet_records, encode_applet_identity, encode_applet_record,
+    ensure_not_revoked, idempotency_key, persist_applet_record, query_value,
 };
 use super::signature::{
     VerifiedAppletServiceSignature, require_ghost_provision_signature,
@@ -90,6 +89,17 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
                     )
                     .push(
                         Router::with_path("{applet_id}")
+                            .push(
+                                Router::with_path("authority/material")
+                                    .hoop(super::signature::require_authority_material_signature)
+                                    .post(super::authority_material::read),
+                            )
+                            .push(
+                                Router::with_path("bots/provision")
+                                    .hoop(require_ghost_provision_signature)
+                                    .push(Router::with_path("preview").post(super::bot::preview))
+                                    .post(super::bot::provision),
+                            )
                             .push(
                                 Router::with_path("ghosts/provision")
                                     .hoop(require_ghost_provision_signature)
@@ -163,8 +173,6 @@ async fn install_preview_endpoint(
         return Err(AppError::conflict("install authoring request basis does not match the authenticated actor, target Station, or Applet package")
             .with_wire_code("applet_install_plan_mismatch"));
     }
-    let issued_at = arkret_canonical::canonical::normalize_timestamp_canonical(chrono::Utc::now());
-    let expires_at = issued_at + chrono::Duration::minutes(5);
     for event in
         std::iter::once(&basis.registration_event).chain(basis.capability_grant_events.iter())
     {
@@ -192,29 +200,8 @@ async fn install_preview_endpoint(
         approved_scopes,
     )
     .await?;
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        state.service_did(),
-        state
-            .service_verification_method("notary-key")
-            .map_err(AppError::internal)?,
-    );
-    let authoring_request = AppletManagedActorAuthoringRequest::sign(
-        preview.authoring_request_basis,
-        plan.plan_digest.clone(),
-        state.service_core_id(),
-        issued_at,
-        expires_at,
-        &signer,
-    )
-    .map_err(|error| {
-        AppError::internal(format!("install authoring request sign failed: {error}"))
-    })?;
-    let authoring_request = issue_applet_authoring_preview(state, authoring_request).await?;
-    json_ok(AppletInstallPreviewOutcome {
-        plan,
-        authoring_request,
-    })
+    require_realm_admin(state, &session, &basis.effective_scope).await?;
+    json_ok(AppletInstallPreviewOutcome { plan })
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.install", tags("extensions"))]
@@ -239,16 +226,10 @@ async fn install_endpoint(
     let body = serde_json::to_value(&commit)
         .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
     let body_digest = crate::util::canonical_digest(&body)?;
-    let authoring_request = commit.authoring_request();
-    let basis = authoring_request.basis.install().ok_or_else(|| {
-        crate::app_error!(
-            AppletInstallPlanMismatch,
-            "install commit requires an install_bot authoring basis"
-        )
-    })?;
+    let basis = &commit.authoring_request_basis;
     if let Some(existing) = applet_record(
         state,
-        commit.applet_package().applet_id.as_str(),
+        &commit.applet_package.applet_id.as_str(),
         &basis.effective_scope,
     )
     .await?
@@ -262,85 +243,14 @@ async fn install_endpoint(
         res.status_code(StatusCode::OK);
         return json_ok(existing.install_response);
     }
-    authoring_request.validate_bindings().map_err(|error| {
-        AppError::param_invalid(format!("install authoring request is invalid: {error}"))
-    })?;
-    require_current_applet_authoring_preview(state, authoring_request).await?;
-    let authoring_preview_subject_key = applet_authoring_preview_subject_key(authoring_request)?;
-    let authoring_request_digest = authoring_request
-        .canonical_digest()
-        .map_err(|error| {
-            AppError::param_invalid(format!("authoring request digest failed: {error}"))
-        })?
-        .to_string();
-    require_first_install_commit_fresh(authoring_request.expires_at, chrono::Utc::now())?;
-    let expected_ps_method = state
-        .service_verification_method("notary-key")
-        .map_err(AppError::internal)?;
-    require_current_station_authoring_binding(
-        basis.target_station_id.as_str(),
-        &authoring_request.proof.verification_method,
-        state.service_id(),
-        &expected_ps_method,
-    )?;
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(
-            &authoring_request.proof.jws,
-            &authoring_request.proof_binding_bytes().map_err(|error| {
-                AppError::param_invalid(format!("authoring proof binding is invalid: {error}"))
-            })?,
-            &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-                bytes: state.notary_verifying_key().as_bytes().to_vec(),
-            },
-        )
-        .map_err(|error| {
-            AppError::param_invalid(format!("authoring request proof is invalid: {error}"))
-        })?;
-    let managed_actor_bundle = commit.managed_actor_bundle();
-    if let Some(managed_actor_bundle) = managed_actor_bundle {
-        managed_actor_bundle
-            .validate_bindings(authoring_request)
-            .map_err(|error| {
-                AppError::param_invalid(format!("managed actor bundle is invalid: {error}"))
-            })?;
-        if managed_actor_bundle.proof.created_at
-            > chrono::Utc::now() + chrono::Duration::seconds(30)
-        {
-            return Err(AppError::param_invalid(
-                "managed actor bundle proof created_at is in the future",
-            ));
-        }
-    }
     let registration_epoch_evidence =
         registration_epoch_evidence_from_event(&basis.registration_event)?;
-    validate_applet_package(state, commit.applet_package(), &registration_epoch_evidence)?;
+    validate_applet_package(state, &commit.applet_package, &registration_epoch_evidence)?;
     super::install::registration_epoch_producer_signing_key(
         state,
-        commit.applet_package(),
+        &commit.applet_package,
         &registration_epoch_evidence,
     )?;
-    if let Some(managed_actor_bundle) = managed_actor_bundle {
-        if !registration_epoch_evidence
-            .contains_signing_key(managed_actor_bundle.proof.verification_method.as_str())
-        {
-            return Err(AppError::param_invalid(
-                "managed actor bundle proof key is not in the accepted registration epoch",
-            ));
-        }
-        crate::jws_verify::verify_did_controlled_jws_async(
-            &managed_actor_bundle
-                .proof_binding_bytes()
-                .map_err(|error| {
-                    AppError::param_invalid(format!("bundle proof binding is invalid: {error}"))
-                })?,
-            &managed_actor_bundle.proof.jws,
-            managed_actor_bundle.proof.verification_method.as_str(),
-            registration_epoch_evidence.did.as_str(),
-            state,
-        )
-        .await
-        .map_err(|error| AppError::param_invalid(format!("bundle proof is invalid: {error}")))?;
-    }
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let approved_scopes = approved_scopes_from_formal_install_events(
@@ -351,13 +261,13 @@ async fn install_endpoint(
     )?;
     let recomputed_plan = build_install_plan(
         state,
-        commit.applet_package(),
+        &commit.applet_package,
         &registration_epoch_evidence,
         &basis.effective_scope,
         approved_scopes,
     )
     .await?;
-    if authoring_request.plan_digest.as_ref() != Some(&recomputed_plan.plan_digest) {
+    if commit.plan_digest != recomputed_plan.plan_digest {
         return Err(
             AppError::conflict("install plan digest does not match recomputed plan")
                 .with_wire_code("applet_install_plan_mismatch"),
@@ -377,8 +287,6 @@ async fn install_endpoint(
         recomputed_plan,
         idempotency_key,
         body_digest,
-        authoring_preview_subject_key,
-        authoring_request_digest,
         res,
     )
     .await?;
@@ -406,12 +314,14 @@ fn require_exact_successful_install_replay(
     )
 }
 
-fn applet_authoring_preview_subject_key(
+pub(super) fn applet_authoring_preview_subject_key(
     request: &AppletManagedActorAuthoringRequest,
 ) -> Result<String, AppError> {
-    let subject = if let Some(basis) = request.basis.install() {
+    let subject = if let Some(basis) = request.basis.bot() {
         json!({
-            "purpose": "install_bot",
+            "purpose": "provision_bot",
+            "request_id": basis.request_id,
+            "effective_scope": basis.effective_scope,
             "applet_id": basis.applet_id,
             "target_station_id": basis.target_station_id,
         })
@@ -421,6 +331,7 @@ fn applet_authoring_preview_subject_key(
             "applet_id": basis.applet_id,
             "target_station_id": basis.target_station_id,
             "external_ref": basis.external_ref,
+            "effective_scope": basis.effective_scope,
         })
     } else {
         return Err(AppError::internal(
@@ -437,12 +348,11 @@ fn applet_authoring_preview_basis_digest(
         "schema": request.schema,
         "purpose": request.purpose,
         "basis": request.basis,
-        "plan_digest": request.plan_digest,
         "governance_station_id": request.governance_station_id,
     }))
 }
 
-async fn issue_applet_authoring_preview(
+pub(super) async fn issue_applet_authoring_preview(
     state: &AppState,
     request: AppletManagedActorAuthoringRequest,
 ) -> Result<AppletManagedActorAuthoringRequest, AppError> {
@@ -957,11 +867,13 @@ async fn revoke_install_inner(
             &revoke.effective_scope,
         )
         .await?;
-        outcome
-            .revoked_refs
-            .push(AppletRevokeEffectRef::TypedResource(
-                applet_revoke_local_ref(local_outcome.bot_actor_id)?,
-            ));
+        for bot_actor_id in local_outcome.bot_actor_ids {
+            outcome
+                .revoked_refs
+                .push(AppletRevokeEffectRef::TypedResource(
+                    applet_revoke_local_ref(bot_actor_id)?,
+                ));
+        }
         for ghost_actor_id in local_outcome.ghost_actor_ids {
             outcome
                 .revoked_refs
@@ -1153,7 +1065,7 @@ async fn durable_revoke_event_ref(
 /// provision has no such result before the current batch writer runs, so it
 /// stops without persisting anything until the Applet authority UoW returns
 /// the complete response from its own transaction.
-async fn durable_ghost_event_ref(
+pub(super) async fn durable_ghost_event_ref(
     state: &AppState,
     event: &arkret_wire::Event,
 ) -> Result<CommittedEventRef, AppError> {
@@ -1256,7 +1168,7 @@ async fn build_revoke_plan(
             grant_snapshot,
             &scope_realm_id,
             &package.service_id,
-            package.bot_actor_id.route_service_id(),
+            &record.target_station_id,
             &response.capability_grant_refs,
         )?;
         for grant_id in &response.capability_grant_refs {
@@ -1300,10 +1212,8 @@ fn active_applet_grant_revisions(
         .iter()
         .cloned()
         .collect::<std::collections::BTreeSet<_>>();
-    let expected_subject = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        applet_service_id.clone(),
-        target_station_id.clone(),
-    ));
+    let expected_subject = arkret_wire::ActorId::service(applet_service_id.clone());
+    let _ = target_station_id;
     let mut active = std::collections::BTreeMap::new();
     for row in snapshot {
         if !installed.contains(&row.grant_id)
@@ -1348,12 +1258,16 @@ async fn exact_managed_membership_removals(
 ) -> Result<Vec<AppletMembershipRemoveIntent>, AppError> {
     let realm_id = record.effective_scope.realm_id().as_str().to_owned();
     let managed_actor_ids = std::collections::BTreeSet::from_iter(
-        std::iter::once(record.bot_actor_id.clone()).chain(
-            record
-                .ghosts
-                .iter()
-                .map(|ghost| ghost.ghost_actor_id.clone()),
-        ),
+        record
+            .bots
+            .iter()
+            .map(|bot| bot.bot_actor_id.clone())
+            .chain(
+                record
+                    .ghosts
+                    .iter()
+                    .map(|ghost| ghost.ghost_actor_id.clone()),
+            ),
     );
     let current_members = {
         let projection = state.projections().snapshot();
@@ -1760,13 +1674,13 @@ async fn preview_ghost_actor_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let path_applet_id = applet_id_param(req)?;
     let preview = body.into_inner();
-    let record = applet_record_for_realm(state, &path_applet_id, &preview.realm_id)
+    let record = applet_record(state, &path_applet_id, &preview.effective_scope)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
     ensure_not_revoked(&record)?;
     if verified.install.applet_id.as_str() != path_applet_id
         || verified.install.package.service_id != record.package.service_id
-        || preview.realm_id != record.portal_realm_id
+        || preview.effective_scope != record.effective_scope
     {
         return Err(AppError::capability_denied(
             "authenticated Applet service or realm does not match the installed Applet",
@@ -1809,6 +1723,10 @@ async fn preview_ghost_actor_endpoint(
         .map_err(|error| {
             AppError::internal(format!("stored Ghost grant id is invalid: {error}"))
         })?;
+    let existing_managed_actor =
+        super::ghost_reuse::find_existing(state, &record, &preview.external_ref)
+            .await?
+            .map(|ghost| super::ghost_reuse::anchors(&ghost));
     let basis = AppletGhostAuthoringRequestBasis {
         schema: AppletGhostAuthoringRequestBasis::SCHEMA.to_owned(),
         purpose: AppletManagedActorPurpose::ProvisionGhost,
@@ -1817,13 +1735,14 @@ async fn preview_ghost_actor_endpoint(
         )?,
         applet_id: record.applet_id.clone(),
         service_id: record.package.service_id,
-        realm_id: preview.realm_id,
+        effective_scope: preview.effective_scope,
         external_ref: preview.external_ref,
         display_name: preview.display_name,
         registration_event_ref: record.registration_event.event_id,
         authorization_ref,
         registration_epoch_evidence,
         package_digest,
+        existing_managed_actor: existing_managed_actor.clone(),
     };
     let issued_at = arkret_canonical::canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
@@ -1842,7 +1761,10 @@ async fn preview_ghost_actor_endpoint(
     )
     .map_err(|error| AppError::internal(format!("Ghost authoring request sign failed: {error}")))?;
     let authoring_request = issue_applet_authoring_preview(state, authoring_request).await?;
-    json_ok(GhostPreviewOutcome { authoring_request })
+    json_ok(GhostPreviewOutcome {
+        authoring_request,
+        existing_managed_actor,
+    })
 }
 
 #[salvo::oapi::endpoint(
@@ -1865,6 +1787,18 @@ async fn provision_ghost_actor_endpoint(
         .map_err(|error| AppError::param_invalid(format!("applet_id is invalid: {error}")))?;
     let provision = body.into_inner();
     validate_ghost_actor_provision_request(&path_applet_id, &provision)?;
+    if provision.managed_actor_bundle.is_none() {
+        return super::ghost_reuse::provision(state, provision, verified, req, res).await;
+    }
+    let bundle = provision
+        .managed_actor_bundle
+        .as_ref()
+        .expect("creation branch");
+    if !provision.approval_signatures.is_empty() {
+        return Err(AppError::conflict(
+            "management review consumption is not established",
+        ));
+    }
     let authoring_basis = provision
         .authoring_basis()
         .ok_or_else(|| AppError::param_invalid("Ghost authoring basis is missing"))?
@@ -1885,7 +1819,7 @@ async fn provision_ghost_actor_endpoint(
         .jobs()
         .scoped_idempotency_record(
             &arkret_wire::ActorId::service(authoring_basis.service_id.clone()),
-            "ak.peer.applet_bridge.command.submit",
+            "ak.self.applet.ghost.command.provision",
             &idempotency_key,
         )
         .await
@@ -1953,31 +1887,18 @@ async fn provision_ghost_actor_endpoint(
         })?;
     if !authoring_basis
         .registration_epoch_evidence
-        .contains_signing_key(
-            provision
-                .managed_actor_bundle
-                .proof
-                .verification_method
-                .as_str(),
-        )
+        .contains_signing_key(bundle.proof.verification_method.as_str())
     {
         return Err(AppError::param_invalid(
             "Ghost managed actor bundle proof key is outside the registration epoch",
         ));
     }
     crate::jws_verify::verify_did_controlled_jws_async(
-        &provision
-            .managed_actor_bundle
-            .proof_binding_bytes()
-            .map_err(|error| {
-                AppError::param_invalid(format!("Ghost bundle proof binding is invalid: {error}"))
-            })?,
-        &provision.managed_actor_bundle.proof.jws,
-        provision
-            .managed_actor_bundle
-            .proof
-            .verification_method
-            .as_str(),
+        &bundle.proof_binding_bytes().map_err(|error| {
+            AppError::param_invalid(format!("Ghost bundle proof binding is invalid: {error}"))
+        })?,
+        &bundle.proof.jws,
+        bundle.proof.verification_method.as_str(),
         authoring_basis.registration_epoch_evidence.did.as_str(),
         state,
     )
@@ -2003,9 +1924,9 @@ async fn provision_ghost_actor_endpoint(
     let ghost_actor_id = submitted_provision.actor_id.clone();
     // G3.S9 — ghost actor DID recorded against the applet MUST be a
     // well-formed DID scalar without DID URL components.
-    let realm_id = authoring_basis.realm_id.clone();
+    let realm_id = authoring_basis.effective_scope.realm_id().clone();
 
-    let mut record = applet_record_for_realm(state, &path_applet_id, &realm_id)
+    let mut record = applet_record(state, &path_applet_id, &authoring_basis.effective_scope)
         .await?
         .ok_or_else(|| AppError::not_found("applet is not installed"))?;
     ensure_not_revoked(&record)?;
@@ -2054,7 +1975,10 @@ async fn provision_ghost_actor_endpoint(
         let candidate = ghost_actor_id.signing_principal_id().as_str();
         if existing_record.package.service_id.as_str() == candidate
             || existing_record.package.controller_principal_id.as_str() == candidate
-            || existing_record.package.bot_actor_id.to_string() == candidate
+            || existing_record
+                .bots
+                .iter()
+                .any(|bot| bot.bot_actor_id.signing_principal_id().as_str() == candidate)
             || existing_record
                 .ghosts
                 .iter()
@@ -2068,16 +1992,8 @@ async fn provision_ghost_actor_endpoint(
     }
     let (authorization_ref, _) =
         validate_signed_ghost_provision_events(state, &record, &provision).await?;
-    let profile_event_ref = provision
-        .managed_actor_bundle
-        .profile_event
-        .event_id
-        .clone();
-    let accountability_grant_ref = provision
-        .managed_actor_bundle
-        .accountability_grant_event
-        .event_id
-        .clone();
+    let profile_event_ref = bundle.profile_event.event_id.clone();
+    let accountability_grant_ref = bundle.accountability_grant_event.event_id.clone();
     let authorization_ref = arkret_wire::GrantId::new(authorization_ref).map_err(|error| {
         AppError::internal(format!(
             "validated Ghost authorization ref invalid: {error}"
@@ -2092,16 +2008,10 @@ async fn provision_ghost_actor_endpoint(
                 "validated Ghost request digest is invalid: {error}"
             ))
         })?,
-        managed_actor_provision_event: provision
-            .managed_actor_bundle
-            .managed_actor_provision_event
-            .clone(),
-        pcr_genesis_event: provision.managed_actor_bundle.pcr_genesis_event.clone(),
-        accountability_grant_event: provision
-            .managed_actor_bundle
-            .accountability_grant_event
-            .clone(),
-        profile_event: provision.managed_actor_bundle.profile_event.clone(),
+        managed_actor_provision_event: bundle.managed_actor_provision_event.clone(),
+        pcr_genesis_event: bundle.pcr_genesis_event.clone(),
+        accountability_grant_event: bundle.accountability_grant_event.clone(),
+        profile_event: bundle.profile_event.clone(),
         created_at: now,
     };
     let expected_applet_record = encode_applet_record(&record)?;
@@ -2114,9 +2024,11 @@ async fn provision_ghost_actor_endpoint(
     record.ghosts.push(ghost);
     let applet_record_value = encode_applet_record(&record)?;
     let input = soland_storage::AppletAuthoringUnitWrite {
-        request: arkret_models_integration::AppletManagedActorCommittedRequest::Ghost(Box::new(
-            provision.clone(),
-        )),
+        request: soland_storage::AppletAdmissionRequest::Managed(
+            arkret_models_integration::AppletManagedActorCommittedRequest::Ghost(Box::new(
+                provision.clone(),
+            )),
+        ),
         package: record.package.clone(),
         recomputed_install_plan: None,
         service_did_document,
@@ -2139,19 +2051,21 @@ async fn provision_ghost_actor_endpoint(
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
         canonical_request_hash: Hash::new(request_digest.clone())
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
-        operation_id: "ak.peer.applet_bridge.command.submit".to_owned(),
+        operation_id: "ak.self.applet.ghost.command.provision".to_owned(),
         idempotency_key: idempotency_key.clone(),
         prior_managed_refs: Vec::new(),
         prior_service_signer_evidence: None,
         accepted_at: now,
     };
-    let target_station_id = record.bot_actor_id.route_service_id().clone();
+    let target_station_id = record.target_station_id.clone();
     let outcome_actor = ghost_actor_id.clone();
     let outcome_service = service_id.clone();
     let outcome_authorization = authorization_ref.clone();
     let outcome_display = authoring_basis.display_name.clone();
     let finalizer: soland_storage::AppletUnitFinalizer = std::sync::Arc::new(move |references| {
-        let bundle = &provision.managed_actor_bundle;
+        let bundle = provision.managed_actor_bundle.as_ref().ok_or_else(|| {
+            soland_storage::PersistenceError::Conflict("creation bundle absent".to_owned())
+        })?;
         let outcome = GhostActorProvisionOutcome {
             ghost_actor_id: outcome_actor.clone(),
             managed_actor_provision_ref: crate::routing::events::event_log::applet_committed_ref(
@@ -2190,7 +2104,7 @@ async fn provision_ghost_actor_endpoint(
             },
             idempotency_record: soland_storage::IdempotencyRecord {
                 authenticated_actor: arkret_wire::ActorId::service(outcome_service.clone()),
-                operation_id: "ak.peer.applet_bridge.command.submit".to_owned(),
+                operation_id: "ak.self.applet.ghost.command.provision".to_owned(),
                 idempotency_key: idempotency_key.clone(),
                 request_hash: request_digest.clone(),
                 response_status: 201,
@@ -2298,10 +2212,14 @@ async fn resolve_actor_endpoint(
         if record.revoked_at.is_some() {
             continue;
         }
-        if record.bot_actor_id.signing_principal_id() == &actor_id {
+        if let Some(bot) = record
+            .bots
+            .iter()
+            .find(|bot| bot.bot_actor_id.signing_principal_id() == &actor_id)
+        {
             return json_ok(AppletActorView {
                 exists: true,
-                actor_id: Some(record.bot_actor_id.clone()),
+                actor_id: Some(bot.bot_actor_id.clone()),
                 display_name: Some(record.package.package_id.clone()),
                 external_ref: None,
             });

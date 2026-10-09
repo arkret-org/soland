@@ -84,6 +84,31 @@ pub struct PgAppletStore {
 }
 #[async_trait]
 impl AppletStore for PgAppletStore {
+    async fn authority_material(
+        &self,
+        applet: &arkret_wire::AppletId,
+        service: &arkret_wire::DidCoreId,
+        station: &arkret_wire::DidCoreId,
+        request: &arkret_models_collaboration::applet_installation_authority::AppletAuthorityMaterialRequestBody,
+    ) -> PersistenceResult<
+        arkret_models_collaboration::applet_installation_authority::AppletAuthorityMaterialOutcome,
+    > {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                .execute(&mut *conn)
+                .await?;
+            Ok(
+                crate::applet_authority_material::read(conn, applet, service, station, request)
+                    .await?,
+            )
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn issue_widget_token(
         &self,
         record: soland_storage::AppletWidgetTokenRecord,

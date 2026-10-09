@@ -1972,7 +1972,8 @@ pub(crate) async fn check_self_producer_guard_in_connection(
     }
     match guard {
         SelfProducerCommitGuard::MimiFacade { .. } => unreachable!("MIMI guard dispatched above"),
-        SelfProducerCommitGuard::HumanDevice(selector) => {
+        SelfProducerCommitGuard::HumanDevice(selector)
+        | SelfProducerCommitGuard::HumanDeviceEvidence { selector, .. } => {
             if selector.principal_id != actor.principal_id
                 || selector.station_id != actor.station_id
                 || !method
@@ -2269,6 +2270,7 @@ impl PgAuthorityCommitStore {
                 }
                 if let Some(fact) = prepared_human.as_ref() {
                     crate::agent_producer_signer_keys::retain_prepared_human_in_connection(conn, &transaction.event, &transaction.commit, fact).await?;
+                    crate::account_device_committed_evidence::retain_from_guard(conn, &transaction.event, &transaction.commit, fact, producer_guards.map(|guards| &guards[index])).await?;
                 } else if let Some(guards) = producer_guards {
                     crate::agent_producer_signer_keys::retain_in_connection(
                         conn, &transaction.event, &transaction.commit, Some(&guards[index]),
@@ -4079,6 +4081,14 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                         &transaction.event,
                         &transaction.commit,
                         fact,
+                    )
+                    .await?;
+                    crate::account_device_committed_evidence::retain_from_guard(
+                        conn,
+                        &transaction.event,
+                        &transaction.commit,
+                        fact,
+                        Some(guard),
                     )
                     .await?;
                 } else {

@@ -695,6 +695,8 @@ pub(crate) async fn submit_applet_event(
             | arkret_wire::EventKind::InviteAccept
             | arkret_wire::EventKind::CapabilityRelinquish
             | arkret_wire::EventKind::AppletBridgeError
+            | arkret_wire::EventKind::CapabilityGrant
+            | arkret_wire::EventKind::CapabilityRevoke
     ) {
         return Err(ServiceError::SchemaViolation(
             "Applet Event kind has no accepting domain unit".into(),

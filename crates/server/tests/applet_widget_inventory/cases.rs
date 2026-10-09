@@ -57,9 +57,13 @@ impl Fixture {
             serde_json::to_value(package.to_registration(&evidence).unwrap()).unwrap(),
         );
         let actions = if ghost {
-            vec!["ak.message.create", "ak.applet.ghost.provision"]
+            vec![
+                "ak.message.create",
+                "ak.applet.bot.provision",
+                "ak.applet.ghost.provision",
+            ]
         } else {
-            vec!["ak.message.create"]
+            vec!["ak.message.create", "ak.applet.bot.provision"]
         };
         let grants = actions
             .iter()
@@ -68,12 +72,7 @@ impl Fixture {
                     schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
                     realm_id: Some(self.realm.clone()),
                     issuer_id: ActorId::account(self.pcr.history.account.clone()),
-                    subject: CapabilitySubject::Actor(ActorId::account(
-                        arkret_wire::AccountId::new(
-                            package.service_id.clone(),
-                            self.state.service_core_id(),
-                        ),
-                    )),
+                    subject: CapabilitySubject::Actor(ActorId::service(package.service_id.clone())),
                     actions: vec![(*action).to_owned()],
                     resources: vec![
                         serde_json::from_value(json!({"kind":"realm","realm_id":self.realm}))
@@ -105,7 +104,7 @@ impl Fixture {
             })
             .collect::<Vec<_>>();
         let basis:AppletInstallAuthoringRequestBasis=serde_json::from_value(json!({
-            "schema":AppletInstallAuthoringRequestBasis::SCHEMA,"purpose":"install_bot","target_station_id":self.state.service_core_id(),
+            "schema":AppletInstallAuthoringRequestBasis::SCHEMA,"purpose":"install_service","target_station_id":self.state.service_core_id(),
             "install_actor_id":registration.actor_id,"applet_id":package.applet_id,"service_id":package.service_id,"package_digest":package.package_digest,
             "effective_scope":{"kind":"realm","realm_id":self.realm},"approval_request":{"approve_actions":actions,
                 "ghost_actor_mode":if ghost {"policy_declared"} else {"disallowed"},"delegated_native_actors_allowed":false,"e2ee_join_allowed":false,"widget_allowed":true},
@@ -114,7 +113,7 @@ impl Fixture {
         })).unwrap();
         let preview_body = serde_json::to_value(AppletInstallPreviewRequestBody {
             applet_package: package.clone(),
-            authoring_request_basis: basis,
+            authoring_request_basis: basis.clone(),
         })
         .unwrap();
         let (status, preview) = self
@@ -126,15 +125,11 @@ impl Fixture {
             )
             .await;
         assert_eq!(status, StatusCode::OK, "install preview: {preview}");
-        let request: AppletManagedActorAuthoringRequest =
-            serde_json::from_value(preview["authoring_request"].clone()).unwrap();
-        let bot = managed_actor_fixture(&namespace, "bot", &package.service_id);
-        ingest_managed_actor_current_document(&self.state, &bot).await;
-        let bundle = self.managed_bundle(&package, &request, &bot, registration.event_id.clone());
-        let body = serde_json::to_value(AppletInstallCreateRequestBody {
+        let plan: AppletInstallPlan = serde_json::from_value(preview["plan"].clone()).unwrap();
+        let body = serde_json::to_value(AppletInstallRequestBody {
             applet_package: package.clone(),
-            authoring_request: request,
-            managed_actor_bundle: bundle,
+            authoring_request_basis: basis,
+            plan_digest: plan.plan_digest,
         })
         .unwrap();
         let key = format!("install-{}", uuid::Uuid::now_v7());
@@ -147,9 +142,15 @@ impl Fixture {
             )
             .await;
         assert_eq!(status, StatusCode::CREATED, "install commit: {outcome}");
+        let outcome: AppletInstallOutcome = serde_json::from_value(outcome).unwrap();
+        let (bot_outcome, bot_body) = self
+            .provision_bot(&package, &namespace, outcome.registration_event_ref.clone())
+            .await;
         Installed {
             package,
-            outcome: serde_json::from_value(outcome).unwrap(),
+            outcome,
+            bot_outcome,
+            bot_body,
             body,
             key,
         }

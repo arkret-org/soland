@@ -5,20 +5,15 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{GrantId, Hash, RealmId};
 use arkret_identity::DidDocument;
-use arkret_models_collaboration::governance::accountability::{
-    AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
-    AccountabilityScopeKind,
-};
 use arkret_models_collaboration::governance::grant_constraint::{
     CapabilitySubject, GrantConstraintKind, GrantConstraintSubkind,
 };
 use arkret_models_integration::{
     AppletGhostActorMode, AppletInstallAuthoringRequestBasis, AppletInstallEffectiveStatus,
     AppletInstallOutcome, AppletInstallPlan, AppletInstallRequestBody,
-    AppletManagedActorProvisionPayload, AppletManagedActorRole, AppletPackage,
-    AppletRegistrationEpochEvidence, AppletScopeRejection, AppletWireNamespaces,
-    CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
-    ScopeGrant, WidgetEffect,
+    AppletManagedActorProvisionPayload, AppletPackage, AppletRegistrationEpochEvidence,
+    AppletScopeRejection, AppletWireNamespaces, CapabilityConstraint, DeniedScope, E2eeEffect,
+    E2eePolicy, EventSubmission, NamespaceConflict, ScopeGrant, WidgetEffect,
 };
 use arkret_wire::{
     ActorId, CapabilityActionId, Event, ResourceMatchScope, ScopeRef, WireResourceSelector,
@@ -39,7 +34,6 @@ use crate::state::AppState;
 struct ValidatedInstallEvents {
     approved_actions: Vec<String>,
     grant_ids: Vec<GrantId>,
-    bot_provision: Option<AppletManagedActorProvisionPayload>,
 }
 
 pub(super) struct ValidatedAdminInstallEvents {
@@ -53,9 +47,7 @@ pub(super) fn approved_scopes_from_formal_install_events(
     install_actor: &ActorId,
     station_id: &str,
 ) -> Result<Vec<ScopeGrant>, AppError> {
-    let basis = commit.authoring_request().basis.install().ok_or_else(|| {
-        AppError::param_invalid("install commit basis purpose is not install_bot")
-    })?;
+    let basis = &commit.authoring_request_basis;
     let validated = validate_formal_install_events(state, commit, install_actor, station_id)?;
     approved_scope_grants(&basis.effective_scope, validated.approved_actions)
 }
@@ -90,6 +82,19 @@ pub(super) fn approved_scope_grants(
     }])
 }
 
+#[cfg(test)]
+fn validate_bot_actor_station(
+    actor: &ActorId,
+    station: &arkret_wire::DidCoreId,
+) -> Result<(), AppError> {
+    if actor.route_service_id() != station {
+        return Err(AppError::param_invalid(
+            "Applet bot actor is not bound to the target Station",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_hosted_applet_pcr_governance_station(
     actual: &arkret_wire::DidCoreId,
     expected: &arkret_wire::DidCoreId,
@@ -104,30 +109,17 @@ pub(super) fn validate_hosted_applet_pcr_governance_station(
 }
 
 fn validate_formal_install_events(
-    state: &AppState,
+    _state: &AppState,
     commit: &AppletInstallRequestBody,
     install_actor: &ActorId,
-    station_id: &str,
+    _station_id: &str,
 ) -> Result<ValidatedInstallEvents, AppError> {
-    let package = commit.applet_package();
-    let basis = commit.authoring_request().basis.install().ok_or_else(|| {
-        AppError::param_invalid("install commit basis purpose is not install_bot")
-    })?;
+    let package = &commit.applet_package;
+    let basis = &commit.authoring_request_basis;
     let admin = validate_admin_install_events(package, basis, install_actor)?;
-    let bot_provision = if commit.managed_actor_bundle().is_some() {
-        Some(validate_bot_managed_actor_unit(
-            state,
-            commit,
-            &admin.grant_ids,
-            station_id,
-        )?)
-    } else {
-        None
-    };
     Ok(ValidatedInstallEvents {
         approved_actions: admin.approved_actions,
         grant_ids: admin.grant_ids,
-        bot_provision,
     })
 }
 
@@ -231,7 +223,7 @@ pub(super) fn validate_admin_install_events(
             || !matches!(
                 &grant.subject,
                 CapabilitySubject::Actor(subject)
-                    if subject == &ActorId::account(arkret_wire::AccountId::new(package.service_id.clone(), basis.target_station_id.clone()))
+                    if subject == &ActorId::service(package.service_id.clone())
             )
             || grant.resources.len() != 1
             || grant.resources[0] != expected_resource
@@ -274,294 +266,6 @@ pub(super) fn validate_admin_install_events(
     Ok(ValidatedAdminInstallEvents {
         approved_actions: approved_actions.into_iter().collect(),
         grant_ids,
-    })
-}
-
-fn validate_bot_actor_station(
-    bot_actor_id: &ActorId,
-    target_station_id: &arkret_identifiers::DidCoreId,
-) -> Result<(), AppError> {
-    if bot_actor_id.route_service_id() != target_station_id {
-        return Err(AppError::param_invalid(
-            "Applet bot actor is not bound to the target Station",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_bot_managed_actor_unit(
-    state: &AppState,
-    commit: &AppletInstallRequestBody,
-    grant_ids: &[GrantId],
-    station_id: &str,
-) -> Result<AppletManagedActorProvisionPayload, AppError> {
-    let basis = commit.authoring_request().basis.install().ok_or_else(|| {
-        AppError::param_invalid("install commit basis purpose is not install_bot")
-    })?;
-    let bundle = commit
-        .managed_actor_bundle()
-        .ok_or_else(|| AppError::param_invalid("install create requires a managed actor bundle"))?;
-    let provision_event = &bundle.managed_actor_provision_event;
-    let package = commit.applet_package();
-    let expected_applet_id = package.applet_id.clone();
-    let service_actor_id = ActorId::service(package.service_id.clone());
-    let bot_actor_id = package.bot_actor_id.clone();
-    validate_bot_actor_station(&bot_actor_id, &basis.target_station_id)?;
-    if provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
-        || provision_event.actor_id != service_actor_id
-        || provision_event.applet_id.as_ref() != Some(&expected_applet_id)
-        || provision_event.realm_id != *basis.effective_scope.realm_id()
-        || provision_event.producer_proof.is_none()
-    {
-        return Err(AppError::param_invalid(
-            "bot_actor_provision_event does not match the installed Applet service and scope",
-        )
-        .with_reason_code("applet_managed_actor_provision_invalid"));
-    }
-    let provision: AppletManagedActorProvisionPayload = serde_json::from_value(
-        serde_json::to_value(&provision_event.payload).map_err(|error| {
-            AppError::internal(format!(
-                "managed actor provision serialization failed: {error}"
-            ))
-        })?,
-    )
-    .map_err(|error| {
-        AppError::param_invalid(format!("managed actor provision payload invalid: {error}"))
-            .with_reason_code("applet_managed_actor_provision_invalid")
-    })?;
-    provision.validate().map_err(|error| {
-        AppError::param_invalid(format!("managed actor provision payload invalid: {error}"))
-            .with_reason_code("applet_managed_actor_provision_invalid")
-    })?;
-    if provision.actor_role != AppletManagedActorRole::Bot
-        || provision.applet_id != expected_applet_id
-        || provision.service_id != package.service_id
-        || provision.actor_id != bot_actor_id
-        || provision.actor_id.signing_principal_id() == &package.controller_principal_id
-        || provision.actor_id.route_service_id().as_str() != station_id
-        || provision.registration_ref != basis.registration_event.event_id
-        || !grant_ids.contains(&provision.applet_authority_ref)
-    {
-        return Err(AppError::param_invalid(
-            "Bot provision authority does not exactly bind the staged registration, grant, actor, or hosting Station",
-        )
-        .with_reason_code("applet_managed_actor_provision_invalid"));
-    }
-    validate_managed_actor_method_evidence(&provision)?;
-
-    let genesis = &bundle.pcr_genesis_event;
-    let expected_realm_id = RealmId::from_event_id(&genesis.event_id);
-    let genesis_object: arkret_models_collaboration::events_payloads::RealmGenesis =
-        serde_json::from_value(
-            genesis
-                .payload
-                .get("object")
-                .cloned()
-                .ok_or_else(|| AppError::param_missing("Bot PCR genesis object is required"))?,
-        )
-        .map_err(|error| {
-            AppError::param_invalid(format!("Bot PCR genesis object is invalid: {error}"))
-                .with_reason_code("applet_managed_pcr_genesis_invalid")
-        })?;
-    validate_hosted_applet_pcr_governance_station(
-        &genesis_object.governance_station_id,
-        &state.service_core_id(),
-    )?;
-    let provision_ref_count = genesis
-        .semantic_refs
-        .iter()
-        .filter(|reference| {
-            reference.role == "applet_managed_actor_provision"
-                && reference.critical
-                && reference.id == provision_event.event_id.as_str()
-        })
-        .count();
-    let provision_role_count = genesis
-        .semantic_refs
-        .iter()
-        .filter(|reference| reference.role == "applet_managed_actor_provision")
-        .count();
-    if genesis.kind != arkret_wire::EventKind::RealmCreate
-        || genesis.actor_id != bot_actor_id
-        || genesis.executed_by.as_ref() != Some(&service_actor_id)
-        || genesis.applet_id.as_ref() != Some(&expected_applet_id)
-        || genesis.realm_id != expected_realm_id
-        || genesis.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
-        || provision_role_count != 1
-        || provision_ref_count != 1
-        || genesis_object.purpose
-            != arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
-        || genesis_object.initial_resolution.as_ref() != Some(&provision.initial_resolution)
-    {
-        return Err(AppError::param_invalid(
-            "Bot PCR genesis does not exactly cross-bind its immutable provision authority",
-        )
-        .with_reason_code("applet_managed_pcr_genesis_invalid"));
-    }
-    let accountability = &bundle.accountability_grant_event;
-    let profile = &bundle.profile_event;
-    let registration_verification_method = package.webhook_auth.key_ref.as_str();
-    let profile_accountability_ref_count = profile
-        .semantic_refs
-        .iter()
-        .filter(|reference| {
-            reference.role == "accountability"
-                && reference.critical
-                && reference.id == accountability.event_id.as_str()
-        })
-        .count();
-    let profile_accountability_role_count = profile
-        .semantic_refs
-        .iter()
-        .filter(|reference| reference.role == "accountability")
-        .count();
-    if accountability.kind.as_str() != "ak.identity.accountability_grant"
-        || accountability.actor_id != service_actor_id
-        || accountability.applet_id.as_ref() != Some(&expected_applet_id)
-        || accountability.authorization_ref.as_deref()
-            != Some(provision.applet_authority_ref.as_str())
-        || profile.kind.as_str() != "ak.profile.create"
-        || profile.actor_id != bot_actor_id
-        || profile.realm_id != expected_realm_id
-        || profile.scope_ref
-            != (ScopeRef::Realm {
-                realm_id: expected_realm_id.clone(),
-            })
-        || profile.executed_by.as_ref() != Some(&service_actor_id)
-        || profile.applet_id.as_ref() != Some(&expected_applet_id)
-        || profile.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
-        || profile_accountability_role_count != 1
-        || profile_accountability_ref_count != 1
-        || accountability
-            .producer_proof
-            .iter()
-            .chain(profile.producer_proof.iter())
-            .any(|proof| proof.verification_method != registration_verification_method)
-    {
-        return Err(AppError::param_invalid(
-            "Bot accountability/profile Events do not close the managed actor creation unit",
-        )
-        .with_internal_reason("applet_managed_actor_profile_invalid"));
-    }
-
-    let grant: AccountabilityGrantPayload = serde_json::from_value(
-        serde_json::to_value(&accountability.payload).map_err(|error| {
-            AppError::param_invalid(format!(
-                "Bot accountability payload cannot be encoded: {error}"
-            ))
-        })?,
-    )
-    .map_err(|error| {
-        AppError::param_invalid(format!("Bot accountability payload is invalid: {error}"))
-            .with_internal_reason("applet_managed_actor_profile_invalid")
-    })?;
-    if grant.issuer_id != package.service_id
-        || grant.subject_id != *package.bot_actor_id.signing_principal_id()
-        || grant.accountability_scope
-            != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
-        || grant.grant_status != AccountabilityGrantStatus::Active
-        || grant.proof.verification_method != registration_verification_method
-    {
-        return Err(AppError::param_invalid(
-            "Bot accountability payload must be an active contracted-service grant from the Applet service to the canonical Bot",
-        )
-        .with_internal_reason("applet_managed_actor_profile_invalid"));
-    }
-    grant
-        .validate_lifecycle_at(chrono::Utc::now())
-        .map_err(|error| {
-            AppError::param_invalid(format!("Bot accountability payload is invalid: {error}"))
-                .with_internal_reason("applet_managed_actor_profile_invalid")
-        })?;
-    let proof_binding = grant.canonical_proof_binding_bytes().map_err(|error| {
-        AppError::param_invalid(format!(
-            "Bot accountability proof binding is invalid: {error}"
-        ))
-        .with_internal_reason("applet_managed_actor_profile_invalid")
-    })?;
-    verify_install_registration_epoch_payload_jws(
-        state,
-        &registration_epoch_evidence_from_event(&basis.registration_event)?,
-        &proof_binding,
-        &grant.proof.jws,
-        registration_verification_method,
-    )?;
-
-    let profile_payload: arkret_models_collaboration::events_payloads::ActorProfileCreatePayload =
-        serde_json::from_value(serde_json::to_value(&profile.payload).map_err(|error| {
-            AppError::param_invalid(format!("Bot profile payload cannot be encoded: {error}"))
-        })?)
-        .map_err(|error| {
-            AppError::param_invalid(format!("Bot profile payload is invalid: {error}"))
-                .with_internal_reason("applet_managed_actor_profile_invalid")
-        })?;
-    let actor_profile = profile_payload.object;
-    let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
-        && actor_profile.accountable_principal_ids[0].as_str() == package.service_id.as_str();
-    if actor_profile.principal_id != *package.bot_actor_id.signing_principal_id()
-        || actor_profile.actor_kind != arkret_wire::ActorKind::Bot
-        || actor_profile
-            .profile_fields
-            .get("managed_by_applet")
-            .and_then(Value::as_str)
-            != Some(package.applet_id.as_str())
-        || !has_exact_accountable_principal
-    {
-        return Err(AppError::param_invalid(
-            "Bot profile payload must bind the canonical Bot to exactly the installed Applet service",
-        )
-        .with_internal_reason("applet_managed_actor_profile_invalid"));
-    }
-    Ok(provision)
-}
-
-fn verify_install_registration_epoch_payload_jws(
-    state: &AppState,
-    evidence: &AppletRegistrationEpochEvidence,
-    canonical_bytes: &[u8],
-    jws: &str,
-    verification_method: &str,
-) -> Result<(), AppError> {
-    if !evidence.contains_signing_key(verification_method) {
-        return Err(AppError::capability_denied(
-            "Bot accountability proof key is outside the installed registration epoch",
-        )
-        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
-    }
-    let document =
-        crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
-            AppError::param_invalid("Applet service DID document could not be resolved")
-                .with_reason_detail(format!(
-                    "applet_registration_epoch_evidence_mismatch: {reason}"
-                ))
-        })?;
-    evidence
-        .validate_against_did_document(&document)
-        .map_err(|error| {
-            AppError::param_invalid("Applet registration-epoch DID evidence mismatch")
-                .with_reason_detail(format!(
-                    "applet_registration_epoch_evidence_mismatch: {error}"
-                ))
-        })?;
-    let verification_method =
-        arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
-            AppError::param_invalid(format!(
-                "Bot accountability proof verification method is invalid: {error}"
-            ))
-            .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
-        })?;
-    arkret_identity::verify_jws_with_document(
-        canonical_bytes,
-        jws,
-        &verification_method,
-        &evidence.did,
-        &document,
-    )
-    .map_err(|error| {
-        AppError::param_invalid(format!(
-            "Bot accountability payload proof JWS verification failed: {error}"
-        ))
-        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
     })
 }
 
@@ -673,8 +377,6 @@ pub(super) async fn register_package_install(
     recomputed_install_plan: AppletInstallPlan,
     idempotency_key: String,
     body_digest: String,
-    authoring_preview_subject_key: String,
-    authoring_request_digest: String,
     res: &mut Response,
 ) -> Result<AppletInstallOutcome, AppError> {
     let owner_actor =
@@ -685,14 +387,11 @@ pub(super) async fn register_package_install(
         validate_formal_install_events(state, &commit, &owner_actor, state.service_id())?;
     let approved_actions = validated_events.approved_actions;
     let capability_grant_refs = validated_events.grant_ids;
-    let basis = commit.authoring_request().basis.install().ok_or_else(|| {
-        AppError::param_invalid("install commit basis purpose is not install_bot")
-    })?;
+    let basis = &commit.authoring_request_basis;
     let registration_event = basis.registration_event.clone();
     let capability_grant_events = basis.capability_grant_events.clone();
-    let committed_request = arkret_models_integration::AppletManagedActorCommittedRequest::Install(
-        Box::new(commit.clone()),
-    );
+    let committed_request =
+        soland_storage::AppletAdmissionRequest::Install(Box::new(commit.clone()));
     let mut admin_producer_guards = Vec::with_capacity(1 + capability_grant_events.len());
     for event in std::iter::once(&registration_event).chain(capability_grant_events.iter()) {
         admin_producer_guards.push(
@@ -704,16 +403,11 @@ pub(super) async fn register_package_install(
     let epoch = registration_epoch_evidence_from_event(&registration_event)?;
     let service_did_document = crate::jws_verify::resolve_did_document(state, &epoch.did)
         .map_err(AppError::param_invalid)?;
-    let submitted_plan_digest = commit
-        .authoring_request()
-        .plan_digest
-        .as_ref()
-        .ok_or_else(|| AppError::param_invalid("install authoring request has no plan_digest"))?
-        .to_string();
+    let submitted_plan_digest = commit.plan_digest.to_string();
     let effective_scope = basis.effective_scope.clone();
     let actor_policy = basis.actor_policy.clone();
     let e2ee_policy = basis.e2ee_policy.clone();
-    let package = commit.applet_package().clone();
+    let package = commit.applet_package.clone();
     let typed_applet_id = package.applet_id.clone();
     let applet_id = package.applet_id.to_string();
     let target_station_id = basis.target_station_id.clone();
@@ -739,89 +433,32 @@ pub(super) async fn register_package_install(
     }
 
     let existing_identity = applet_identity(state, &applet_id, target_station_id.as_str()).await?;
-    let (identity, include_identity_events, expected_identity) = match commit {
-        AppletInstallRequestBody::Create(create) => {
-            if existing_identity.is_some() {
-                return Err(AppError::conflict(
-                    "applet identity already exists; install another scope with reuse_existing_managed_actor",
-                )
-                .with_internal_reason("applet_managed_actor_reuse_required"));
-            }
-            let bot_provision = validated_events.bot_provision.as_ref().ok_or_else(|| {
-                AppError::internal("validated create install has no Bot provision")
-            })?;
-            validate_managed_actor_current_method_evidence(state, bot_provision).await?;
-            let bundle = create.managed_actor_bundle;
-            (
-                AppletIdentityRecord {
-                    applet_id: package.applet_id.clone(),
-                    registry_id: package.controller_principal_id.clone(),
-                    bot_actor_id: bot_provision.actor_id.clone(),
-                    bot_actor_provision_ref: bundle.managed_actor_provision_event.event_id.clone(),
-                    bot_principal_control_realm_id: RealmId::from_event_id(
-                        &bundle.pcr_genesis_event.event_id,
-                    ),
-                    initial_package: package.clone(),
-                    initial_owner_actor_id: registration_event.actor_id.clone(),
-                    initial_effective_scope: effective_scope.clone(),
-                    initial_registration_event: registration_event.clone(),
-                    initial_capability_grant_refs: capability_grant_refs.clone(),
-                    bot_actor_provision_event: bundle.managed_actor_provision_event,
-                    bot_pcr_genesis_event: bundle.pcr_genesis_event,
-                    bot_accountability_grant_event: bundle.accountability_grant_event,
-                    bot_profile_event: bundle.profile_event,
-                    globally_fenced_at: None,
-                },
-                true,
-                None,
-            )
+    let (identity, expected_identity) = if let Some(existing) = existing_identity {
+        if package.applet_id != existing.initial_package.applet_id
+            || package.controller_principal_id != existing.initial_package.controller_principal_id
+            || package.service_id != existing.initial_package.service_id
+        {
+            return Err(AppError::conflict(
+                "Applet Service identity differs from its original installation",
+            ));
         }
-        AppletInstallRequestBody::Reuse(reuse) => {
-            let existing = existing_identity.ok_or_else(|| {
-                AppError::conflict("applet identity does not exist; first install must create it")
-                    .with_internal_reason("applet_managed_actor_reuse_invalid")
-            })?;
-            if existing.globally_fenced_at.is_some() {
-                return Err(crate::app_error!(
-                    AppletRevoked,
-                    "applet managed identity is globally fenced"
-                ));
-            }
-            let reference = reuse.reuse_existing_managed_actor;
-            let initial_package = &existing.initial_package;
-            if package.applet_id != initial_package.applet_id
-                || package.controller_principal_id != initial_package.controller_principal_id
-                || package.service_id != initial_package.service_id
-                || package.bot_actor_id != initial_package.bot_actor_id
-                || reference.actor_id != existing.bot_actor_id
-                || reference.managed_actor_provision_ref != existing.bot_actor_provision_ref
-                || reference.pcr_genesis_ref != existing.bot_pcr_genesis_event.event_id
-                || reference.accountability_grant_ref
-                    != existing.bot_accountability_grant_event.event_id
-                || reference.profile_event_ref != existing.bot_profile_event.event_id
-                || reference.initial_package_bot_actor_id != existing.bot_actor_id
-            {
-                return Err(AppError::conflict(
-                    "reuse_existing_managed_actor does not match the first accepted Applet identity",
-                )
-                .with_internal_reason("applet_managed_actor_reuse_invalid"));
-            }
-            let provision: AppletManagedActorProvisionPayload = serde_json::from_value(
-                serde_json::to_value(&existing.bot_actor_provision_event.payload).map_err(
-                    |error| {
-                        AppError::internal(format!(
-                            "stored Bot provision payload serialization failed: {error}"
-                        ))
-                    },
-                )?,
-            )
-            .map_err(|error| {
-                AppError::internal(format!("stored Bot provision payload is invalid: {error}"))
-            })?;
-            validate_managed_actor_current_method_evidence(state, &provision).await?;
-            let expected_identity = encode_applet_identity(&existing)?;
-            (existing, false, Some(expected_identity))
-        }
+        let expected = encode_applet_identity(&existing)?;
+        (existing, Some(expected))
+    } else {
+        (
+            AppletIdentityRecord {
+                applet_id: package.applet_id.clone(),
+                registry_id: package.controller_principal_id.clone(),
+                target_station_id: target_station_id.clone(),
+                initial_package: package.clone(),
+                initial_owner_actor_id: registration_event.actor_id.clone(),
+                initial_effective_scope: effective_scope.clone(),
+                initial_registration_event: registration_event.clone(),
+                initial_capability_grant_refs: capability_grant_refs.clone(),
+                globally_fenced_at: None,
+            },
+            None,
+        )
     };
     let identity_value = encode_applet_identity(&identity)?;
 
@@ -839,20 +476,6 @@ pub(super) async fn register_package_install(
         AppletInstallEffectiveStatus::PartiallyInstalled => "partially_installed",
     };
     let install_id = ids::generate_install_id();
-    let prior_managed_refs = if include_identity_events {
-        Vec::new()
-    } else {
-        let mut refs = Vec::with_capacity(4);
-        for event in [
-            &identity.bot_actor_provision_event,
-            &identity.bot_pcr_genesis_event,
-            &identity.bot_accountability_grant_event,
-            &identity.bot_profile_event,
-        ] {
-            refs.push(committed_install_ref(state, event).await?);
-        }
-        refs
-    };
     let station_verification_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
@@ -868,19 +491,18 @@ pub(super) async fn register_package_install(
         admin_producer_guards,
         expected_identity: expected_identity.clone(),
         expected_installation: None,
-        preview_subject_key: authoring_preview_subject_key,
-        request_digest: Hash::new(authoring_request_digest)
+        preview_subject_key: String::new(),
+        request_digest: Hash::new(body_digest.clone())
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
         canonical_request_hash: Hash::new(body_digest.clone())
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
         operation_id: "ak.self.applet.command.install".to_owned(),
         idempotency_key: idempotency_key.clone(),
-        prior_managed_refs,
+        prior_managed_refs: Vec::new(),
         prior_service_signer_evidence: None,
         accepted_at: now,
     };
     let audit_package = package.clone();
-    let audit_actor = identity.bot_actor_id.clone();
     let admin_actor = owner_actor.clone();
     let station_id = state.service_id().to_owned();
     let finalizer: soland_storage::AppletUnitFinalizer = std::sync::Arc::new(move |references| {
@@ -889,19 +511,11 @@ pub(super) async fn register_package_install(
             &registration_event,
         )?
         .event_id;
-        let bot_actor_provision_ref = crate::routing::events::event_log::applet_committed_ref(
-            references,
-            &identity.bot_actor_provision_event,
-        )?
-        .event_id;
         let response = AppletInstallOutcome {
             install_id: install_id.clone(),
             applet_id: package.applet_id.clone(),
             registration_event_ref,
             registration_epoch: package.registration_epoch.clone(),
-            bot_actor_id: identity.bot_actor_id.clone(),
-            bot_actor_provision_ref,
-            bot_principal_control_realm_id: identity.bot_principal_control_realm_id.clone(),
             capability_grant_refs: capability_grant_refs.clone(),
             e2ee_authorization_refs: e2ee_authorization_refs.clone(),
             widget_policy_ref: None,
@@ -942,6 +556,7 @@ pub(super) async fn register_package_install(
             capability_grant_events: capability_grant_events.clone(),
             install_execution: Value::Null,
             revoke_execution: None,
+            bots: Vec::new(),
             ghosts: Vec::new(),
         };
         record.install_execution = build_install_execution_record(
@@ -1006,7 +621,6 @@ pub(super) async fn register_package_install(
             "applet_id": audit_package.applet_id,
             "namespaces": &audit_package.namespaces,
             "service_id": audit_package.service_id,
-            "bot_actor_id": audit_actor,
             "registration_event_ref": response.registration_event_ref,
             "registration_epoch": audit_package.registration_epoch,
         }),
@@ -1065,12 +679,6 @@ fn install_produced_event_refs(
             .iter()
             .map(|event| event.event_id.to_string()),
     );
-    if record.registration_event.event_id == record.identity.initial_registration_event.event_id {
-        refs.push(record.bot_actor_provision_event.event_id.to_string());
-        refs.push(record.bot_pcr_genesis_event.event_id.to_string());
-        refs.push(record.bot_accountability_grant_event.event_id.to_string());
-        refs.push(record.bot_profile_event.event_id.to_string());
-    }
     if let Some(widget_policy_ref) = &response.widget_policy_ref {
         refs.push(widget_policy_ref.to_string());
     }
@@ -1114,31 +722,6 @@ fn install_execution_steps(
                 "registration_epoch": package.registration_epoch.to_string(),
             })),
         ));
-    }
-    if record.registration_event.event_id == record.identity.initial_registration_event.event_id {
-        let base = 1 + record.capability_grant_events.len();
-        for (offset, event) in [
-            &record.bot_actor_provision_event,
-            &record.bot_pcr_genesis_event,
-            &record.bot_accountability_grant_event,
-            &record.bot_profile_event,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            steps.push(install_execution_step(
-                base + offset,
-                event.kind.as_str(),
-                event.event_id.as_str(),
-                crate::util::canonical_digest(&serde_json::to_value(event).map_err(|error| {
-                    AppError::internal(format!(
-                        "Applet-managed actor Event serialization failed: {error}"
-                    ))
-                })?)?,
-                accepted,
-                None,
-            ));
-        }
     }
     Ok(steps)
 }
@@ -1471,7 +1054,6 @@ pub(super) fn registration_payload_from_package(
         "service_id": package.service_id,
         "controller_principal_id": package.controller_principal_id,
         "base_url": package.base_url,
-        "bot_actor_id": package.bot_actor_id,
         "claimed_profiles": package.claimed_profiles,
         "protocols": package.protocols,
         "namespaces": package.namespaces,
@@ -1533,39 +1115,6 @@ fn e2ee_authorization_refs_for_install(
         "applet E2EE MLS join has no registered independent authorization artifact",
     )
     .with_wire_code("applet_e2ee_join_unauthorized"))
-}
-
-/// Resolve an exact accepted authority result, without manufacturing a
-/// Commit coordinate from the producer's proposed Event id. A fresh Applet
-/// install cannot pass until the atomic writer owns response construction.
-async fn committed_install_ref(
-    state: &AppState,
-    event: &Event,
-) -> Result<arkret_wire::CommittedEventRef, AppError> {
-    let accepted = state
-        .persistence()
-        .committed_event(&event.event_id)
-        .await
-        .map_err(|error| AppError::internal(format!("Applet Commit lookup failed: {error}")))?
-        .ok_or_else(|| {
-            AppError::from_rejection(
-                soland_http::error::ErrorCode::ServiceUnavailable,
-                "Applet install atomic Event/Commit result construction is unavailable",
-            )
-            .with_rejection_code("service_unavailable")
-        })?;
-    if accepted.event != *event {
-        return Err(AppError::conflict(
-            "Applet Event id is committed with different canonical content",
-        )
-        .with_wire_code("duplicate_conflict"));
-    }
-    Ok(arkret_wire::CommittedEventRef {
-        event_id: event.event_id.clone(),
-        commit_id: accepted.commit.commit_id,
-        stream_ref: accepted.commit.stream_ref,
-        stream_position: accepted.commit.stream_position,
-    })
 }
 
 pub(super) fn widget_effect_for_package(package: &AppletPackage) -> WidgetEffect {
@@ -1696,7 +1245,7 @@ pub(super) fn ghost_actors_allowed_for_install(
     let scope_approved = approved_actions
         .iter()
         .any(|action| action == CapabilityActionId::APPLET_GHOST_PROVISION);
-    let actor_policy_allows = actor_policy.is_some_and(|policy| {
+    let actor_policy_allows = actor_policy.is_none_or(|policy| {
         matches!(
             policy.ghost_actor_mode,
             Some(AppletGhostActorMode::ControllerApproved | AppletGhostActorMode::PolicyDeclared)
@@ -1820,10 +1369,6 @@ mod tests {
             service_did.clone(),
             controller_principal_id.clone(),
             "https://test-applet.example".to_owned(),
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
-                service_id,
-            )),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
@@ -1965,10 +1510,6 @@ mod tests {
             service_did,
             DidCoreId::new("ak:did_core:web:test-registry.example".to_owned()).unwrap(),
             "https://test-applet.example".to_owned(),
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
-                arkret_wire::project_did_to_core_id(&test_applet_service_did()).unwrap(),
-            )),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],

@@ -277,7 +277,14 @@ async fn check_policy_cas_in_connection(
     if replay {
         return Ok(());
     }
-    let agent = matches!(&payload.value, PolicySetValue::Governance(p) if p.policy_kind == PolicyKind::Agent);
+    let management_kind = match &payload.value {
+        PolicySetValue::Governance(p)
+            if matches!(p.policy_kind, PolicyKind::Agent | PolicyKind::Applet) =>
+        {
+            Some(p.policy_kind.clone())
+        }
+        _ => None,
+    };
     let current = sql_query("SELECT realm_id,current_commit_id,current_stream_position,current_event_id,value FROM policy_current_results WHERE policy_id=$1 FOR UPDATE")
         .bind::<Text,_>(payload.policy_id.as_str()).get_result::<PolicyRevisionRow>(&mut *conn)
         .await.optional().map_err(PersistenceError::database)?;
@@ -287,21 +294,30 @@ async fn check_policy_cas_in_connection(
     {
         return Err(refused("Policy id belongs to another Realm"));
     }
-    let was_agent = sql_query("SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.state='committed' AND e.kind='ak.policy.set' AND e.envelope->'payload'->>'policy_id'=$1 AND e.envelope->'payload'->'value'->>'schema'='ak.schema.policy.v1' AND e.envelope->'payload'->'value'->>'policy_kind'='agent') AS present")
+    let was_management = sql_query("SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.state='committed' AND e.kind='ak.policy.set' AND e.envelope->'payload'->>'policy_id'=$1 AND e.envelope->'payload'->'value'->>'schema'='ak.schema.policy.v1' AND e.envelope->'payload'->'value'->>'policy_kind' IN ('agent','applet')) AS present")
         .bind::<Text,_>(payload.policy_id.as_str()).get_result::<Present>(&mut *conn)
         .await.map_err(PersistenceError::database)?.present;
-    let current_agent = current.as_ref().is_some_and(|row| {
-        row.value.get("schema").and_then(Value::as_str) == Some("ak.schema.policy.v1")
-            && row.value.get("policy_kind").and_then(Value::as_str) == Some("agent")
+    let current_kind = current.as_ref().and_then(|row| {
+        if row.value.get("schema").and_then(Value::as_str) != Some("ak.schema.policy.v1") {
+            return None;
+        }
+        match row.value.get("policy_kind").and_then(Value::as_str) {
+            Some("agent") => Some(PolicyKind::Agent),
+            Some("applet") => Some(PolicyKind::Applet),
+            _ => None,
+        }
     });
-    if !agent {
-        return if was_agent || current_agent {
+    if management_kind.is_none() {
+        return if was_management || current_kind.is_some() {
             Err(refused(
-                "Agent Policy id cannot change policy kind or family",
+                "Management Policy id cannot change policy kind or family",
             ))
         } else {
             Ok(())
         };
+    }
+    if current.is_some() && current_kind != management_kind {
+        return Err(refused("Management Policy id cannot change policy kind"));
     }
     if commit.realm_id != event.realm_id
         || commit.stream_ref
@@ -310,14 +326,14 @@ async fn check_policy_cas_in_connection(
             })
     {
         return Err(refused(
-            "Agent Policy CAS requires a held Realm governance stream",
+            "Management Policy CAS requires a held Realm governance stream",
         ));
     }
     let head = commit
         .stream_position
         .checked_sub(1)
         .and_then(|n| i64::try_from(n).ok())
-        .ok_or_else(|| refused("Agent Policy CAS needs an established governance prefix"))?;
+        .ok_or_else(|| refused("Management Policy CAS needs an established governance prefix"))?;
     let complete = sql_query(
         "WITH prefix AS (SELECT c.*,e.state,e.kind AS event_kind,e.realm_id AS event_realm,e.envelope, \
          LAG(c.commit_id) OVER (ORDER BY c.stream_position) AS predecessor \
@@ -338,7 +354,7 @@ async fn check_policy_cas_in_connection(
         .get_result::<Present>(&mut *conn).await.map_err(PersistenceError::database)?.present;
     if !complete {
         return Err(refused(
-            "Agent Policy current governance prefix is unavailable",
+            "Management Policy current governance prefix is unavailable",
         ));
     }
     let unresolved_stream = sql_query(
@@ -390,7 +406,7 @@ async fn check_policy_cas_in_connection(
         .transpose()?;
     if payload.expected_revision.as_ref() != Some(&revision) {
         return Err(refused(
-            "Agent Policy expected_revision differs from current",
+            "Management Policy expected_revision differs from current",
         ));
     }
     Ok(())
@@ -402,9 +418,12 @@ fn refused(e: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Conflict(format!("failed_precondition: {e}"))
 }
 fn require_supported_policy_kind(kind: arkret_wire::PolicyKind) -> PersistenceResult<()> {
-    if kind == arkret_wire::PolicyKind::Agent {
+    if matches!(
+        kind,
+        arkret_wire::PolicyKind::Agent | arkret_wire::PolicyKind::Applet
+    ) {
         return Err(refused(
-            "Agent management execution and delivery gates are not established",
+            "Management execution and delivery gates are not established",
         ));
     }
     Ok(())
@@ -438,6 +457,11 @@ mod admission_tests {
             panic!("expected governance policy");
         };
         assert!(require_supported_policy_kind(document.policy_kind).is_err());
+    }
+
+    #[test]
+    fn applet_policy_is_refused_until_execution_gates_are_established() {
+        assert!(require_supported_policy_kind(arkret_wire::PolicyKind::Applet).is_err());
     }
 
     #[test]
@@ -648,7 +672,7 @@ pub(crate) async fn commit_in_connection(
             let payload: PolicySetStatePayload = payload(event)?;
             payload.validate().map_err(schema)?;
             let value = serde_json::to_value(&payload.value).map_err(schema)?;
-            let count=sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(policy_id) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,current_event_id=EXCLUDED.current_event_id,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE policy_current_results.realm_id=EXCLUDED.realm_id AND policy_current_results.current_stream_position<EXCLUDED.current_stream_position AND (policy_current_results.value->>'schema' IS DISTINCT FROM 'ak.schema.policy.v1' OR policy_current_results.value->>'policy_kind' IS DISTINCT FROM 'agent' OR (EXCLUDED.value->>'schema'='ak.schema.policy.v1' AND EXCLUDED.value->>'policy_kind'='agent'))")
+            let count=sql_query("INSERT INTO policy_current_results(realm_id,policy_id,current_commit_id,current_stream_position,current_event_id,value,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(policy_id) DO UPDATE SET current_commit_id=EXCLUDED.current_commit_id,current_stream_position=EXCLUDED.current_stream_position,current_event_id=EXCLUDED.current_event_id,value=EXCLUDED.value,updated_at=EXCLUDED.updated_at WHERE policy_current_results.realm_id=EXCLUDED.realm_id AND policy_current_results.current_stream_position<EXCLUDED.current_stream_position AND (policy_current_results.value->>'schema' IS DISTINCT FROM 'ak.schema.policy.v1' OR COALESCE(policy_current_results.value->>'policy_kind','') NOT IN ('agent','applet') OR (EXCLUDED.value->>'schema'='ak.schema.policy.v1' AND EXCLUDED.value->>'policy_kind'=policy_current_results.value->>'policy_kind'))")
                 .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(payload.policy_id.as_str()).bind::<Text,_>(commit.commit_id.as_str())
                 .bind::<BigInt,_>(commit.stream_position as i64).bind::<Text,_>(event.event_id.as_str()).bind::<Jsonb,_>(&value)
                 .bind::<Timestamptz,_>(commit.committed_at).execute(&mut *conn).await.map_err(PersistenceError::database)?;

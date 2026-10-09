@@ -1393,6 +1393,7 @@ fn contract_applet_record_for_scope(
         "status": "installed",
         "revoked_at": null,
         "install_body_digest": format!("sha256:{install_marker:0>64}"),
+        "bots": [],
         "ghosts": ghosts,
     })
 }
@@ -1404,7 +1405,8 @@ fn contract_applet_identity(applet_id: &arkret_wire::AppletId) -> serde_json::Va
         .expect("typed Applet id has its registered prefix");
     serde_json::json!({
         "applet_id": applet_id,
-        "bot_actor_id": contract_applet_actor(&format!("ak:did_core:web:bot-{bot_suffix}.example"))
+        "target_station_id": "ak:did_core:webvh:z6mkcontractservice",
+        "service_id": format!("ak:did_core:web:service-{bot_suffix}.example")
     })
 }
 
@@ -1594,9 +1596,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     // the complete Event group when the identity fails this boundary.
     for case in ["foreign-station", "service-actor", "scalar-principal"] {
         let applet_id = contract_applet_id();
-        let identity = contract_applet_identity(&applet_id);
-        let actor: arkret_wire::ActorId = serde_json::from_value(identity["bot_actor_id"].clone())
-            .expect("contract Bot has a full Account Actor");
+        let actor = contract_applet_actor("ak:did_core:web:bot-invalid-identity.example");
         let invalid_actor = match case {
             "foreign-station" => {
                 serde_json::json!(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -1622,7 +1622,8 @@ pub async fn assert_applet_formal_commit_transaction_contract(
             None,
             contract_applet_record(&applet_id, "1", Vec::new()),
         );
-        batch.applet_record.as_mut().unwrap().identity.record["bot_actor_id"] = invalid_actor;
+        batch.applet_record.as_mut().unwrap().record["bots"] =
+            serde_json::json!([{"bot_actor_id": invalid_actor}]);
         let event_ids = contract_event_ids(&batch);
         stores
             .unit_of_work
@@ -2117,7 +2118,8 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     );
     let conflicting_identity = serde_json::json!({
         "applet_id": winner_applet_id,
-        "bot_actor_id": contract_applet_actor("ak:did_core:web:different-winner.example")
+        "target_station_id": "ak:did_core:webvh:z6mkcontractservice",
+        "service_id": "ak:did_core:web:different-winner.example"
     });
     let conflicting_mutation = conflicting_winner
         .applet_record

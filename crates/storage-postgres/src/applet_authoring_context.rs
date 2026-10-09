@@ -55,24 +55,31 @@ pub(crate) async fn materialize_context_in_connection(
     managed_public_key: &[u8; 32],
     attester: &AppletResolutionAttester,
 ) -> PersistenceResult<AppletManagedActorAuthoringContext> {
-    let request = match &input.request {
-        AppletManagedActorCommittedRequest::Install(request) => request.authoring_request(),
-        AppletManagedActorCommittedRequest::Ghost(request) => &request.authoring_request,
-    };
-    let portal_realm = match &input.request {
-        AppletManagedActorCommittedRequest::Install(request) => request
-            .authoring_request()
-            .basis
-            .install()
-            .ok_or_else(|| corrupt("missing Applet install basis"))?
-            .effective_scope
-            .realm_id(),
-        AppletManagedActorCommittedRequest::Ghost(request) => {
-            &request
-                .authoring_basis()
-                .ok_or_else(|| corrupt("missing Ghost authoring basis"))?
-                .realm_id
+    let committed_request = match &input.request {
+        soland_storage::AppletAdmissionRequest::Managed(request) => request,
+        _ => {
+            return Err(corrupt(
+                "Service-only installation has no managed authoring completion",
+            ));
         }
+    };
+    let (request, portal_realm) = match committed_request {
+        AppletManagedActorCommittedRequest::Bot(body) => (
+            &body.authoring_request,
+            body.authoring_request
+                .basis
+                .bot()
+                .ok_or_else(|| corrupt("missing Bot basis"))?
+                .effective_scope
+                .realm_id(),
+        ),
+        AppletManagedActorCommittedRequest::Ghost(body) => (
+            &body.authoring_request,
+            body.authoring_basis()
+                .ok_or_else(|| corrupt("missing Ghost basis"))?
+                .effective_scope
+                .realm_id(),
+        ),
     };
     if portal_head.stream_ref
         != (CommitStreamRef::Realm {
@@ -211,7 +218,7 @@ pub(crate) async fn materialize_context_in_connection(
     )
     .map_err(PersistenceError::database)?;
     let context = AppletManagedActorAuthoringContext {
-        committed_request: input.request.clone(),
+        committed_request: committed_request.clone(),
         realm_stream_head: portal_head.clone(),
         principal_control_commit,
         applet_service_signer_evidence: service_root,

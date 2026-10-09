@@ -1262,21 +1262,19 @@ async fn ensure_applet_admission_in_transaction(
     .optional()
     .map_err(PersistenceError::database)?
     .ok_or_else(fail)?;
-    let bot_actor = install
+    // The shared identity belongs to this hosting Station, not to the
+    // remote Service which signs its terminal grants and management Events.
+    let target = install
         .record
-        .pointer("/package/bot_actor_id")
-        .cloned()
-        .ok_or_else(fail)
-        .and_then(|value| {
-            serde_json::from_value::<arkret_wire::ActorId>(value).map_err(|_| fail())
-        })?;
-    let target = bot_actor.route_service_id();
+        .get("target_station_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(fail)?;
     let identity = sql_query(
         "SELECT record FROM applet_managed_identities \
          WHERE applet_id = $1 AND target_station_id = $2 FOR UPDATE",
     )
     .bind::<Text, _>(applet_id.as_str())
-    .bind::<Text, _>(target.as_str())
+    .bind::<Text, _>(target)
     .get_result::<AppletAdmissionRecordRow>(&mut *conn)
     .await
     .optional()
@@ -1317,21 +1315,7 @@ fn closed_applet_install_contains_event(
     if event_applet_id != Some(mutation.applet_id.as_str()) {
         return false;
     }
-    const IDENTITY_EVENT_FIELDS: &[&str] = &[
-        "bot_actor_provision_event",
-        "bot_pcr_genesis_event",
-        "bot_accountability_grant_event",
-        "bot_profile_event",
-    ];
-    IDENTITY_EVENT_FIELDS.iter().any(|field| {
-        mutation
-            .identity
-            .record
-            .get(*field)
-            .and_then(|event| event.get("event_id"))
-            .and_then(serde_json::Value::as_str)
-            == Some(event_id)
-    }) || mutation
+    mutation
         .record
         .get("registration_event")
         .and_then(|event| event.get("event_id"))
@@ -2260,11 +2244,20 @@ pub(crate) async fn commit_applet_record(
         .map_err(PersistenceError::database)?;
     let effective_scope_key =
         soland_storage::applet_effective_scope_key_from_record(&mutation.record)?;
-    if soland_storage::applet_id_from_record(&mutation.record)? != mutation.applet_id.as_str()
+    if mutation
+        .record
+        .get("target_station_id")
+        .and_then(serde_json::Value::as_str)
+        != Some(mutation.identity.target_station_id.as_str())
+        || soland_storage::applet_id_from_record(&mutation.record)? != mutation.applet_id.as_str()
         || soland_storage::applet_id_from_record(&mutation.identity.record)?
             != mutation.applet_id.as_str()
-        || soland_storage::applet_bot_account_from_identity(&mutation.identity.record)?.station_id
-            != mutation.identity.target_station_id
+        || mutation
+            .identity
+            .record
+            .get("target_station_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(mutation.identity.target_station_id.as_str())
     {
         return Err(PersistenceError::SchemaViolation(
             "Applet identity/installation key does not match its record".to_owned(),
@@ -2758,7 +2751,10 @@ async fn commit_prepared_event_inner(
     if event.kind == arkret_wire::EventKind::AgentInteractionSet {
         if !matches!(
             request.self_producer_guard,
-            Some(soland_storage::SelfProducerCommitGuard::HumanDevice(_))
+            Some(
+                soland_storage::SelfProducerCommitGuard::HumanDevice(_)
+                    | soland_storage::SelfProducerCommitGuard::HumanDeviceEvidence { .. }
+            )
         ) && request.forwarded_producer_evidence.is_none()
         {
             return Err(PersistenceError::Conflict(
@@ -2902,6 +2898,14 @@ async fn commit_prepared_event_inner(
         } else if let Some(fact) = prepared_human.as_ref() {
             crate::agent_producer_signer_keys::retain_prepared_human_in_connection(
                 conn, event, commit, fact,
+            )
+            .await?;
+            crate::account_device_committed_evidence::retain_from_guard(
+                conn,
+                event,
+                commit,
+                fact,
+                request.self_producer_guard.as_ref(),
             )
             .await?;
         } else {

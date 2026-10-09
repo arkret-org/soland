@@ -661,7 +661,7 @@ async fn require_non_event_registration_binding(
     let service = ActorId::service(registration.service_id.clone());
     let subject_bound = matches!(
         &body.subject,
-        CapabilitySubject::Actor(actor) if actor.signing_principal_id() == &registration.service_id
+        CapabilitySubject::Actor(actor) if actor == &service
     );
     if !subject_bound
         || !registration
@@ -681,6 +681,229 @@ async fn require_non_event_registration_binding(
         })
     {
         return Err(exceeds());
+    }
+    Ok(())
+}
+
+pub(crate) async fn managed_subject_role(
+    conn: &mut AsyncPgConnection,
+    event: &arkret_wire::Event,
+    subject: &CapabilitySubject,
+    issuer: &ActorId,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<
+    Option<arkret_models_collaboration::governance::grant_constraint::ManagedActorRole>,
+> {
+    let CapabilitySubject::Actor(subject) = subject else {
+        return Ok(None);
+    };
+    #[derive(QueryableByName)]
+    struct Accepted {
+        #[diesel(sql_type=Jsonb)]
+        envelope: serde_json::Value,
+    }
+    let rows=sql_query("SELECT e.envelope FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk WHERE e.state='committed' AND e.kind='ak.applet.managed_actor.provision' AND e.envelope#>'{payload,actor_id}'=$1")
+        .bind::<Jsonb,_>(serde_json::to_value(subject).map_err(PersistenceError::database)?).load::<Accepted>(&mut *conn).await.map_err(PersistenceError::database)?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    if rows.len() != 1 {
+        return Err(conflict("managed Account provision is ambiguous"));
+    }
+    let accepted: arkret_wire::Event =
+        serde_json::from_value(rows.into_iter().next().unwrap().envelope)
+            .map_err(PersistenceError::database)?;
+    let provision: arkret_models_integration::AppletManagedActorProvisionPayload =
+        serde_json::from_value(
+            serde_json::to_value(accepted.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(PersistenceError::database)?;
+    if issuer != &ActorId::service(provision.service_id.clone())
+        || event.applet_id.as_ref() != Some(&provision.applet_id)
+    {
+        return Err(conflict(
+            "managed Account cannot receive direct controller authority",
+        ));
+    }
+    // Identity qualification reopens the accepted PCR/Profile/accountability chain.
+    let mut qualification = event.clone();
+    qualification.actor_id = subject.clone();
+    qualification.executed_by = Some(issuer.clone());
+    crate::managed_message_actor::require_managed_actor_in_connection(conn, &qualification, at)
+        .await?;
+    Ok(Some(match provision.actor_role {
+        arkret_models_integration::AppletManagedActorRole::Bot => {
+            arkret_models_collaboration::governance::grant_constraint::ManagedActorRole::Bot
+        }
+        arkret_models_integration::AppletManagedActorRole::Ghost => {
+            arkret_models_collaboration::governance::grant_constraint::ManagedActorRole::Ghost
+        }
+    }))
+}
+
+fn managed_runtime_grant(
+    id: &GrantId,
+    issuer: &ActorId,
+    subject: &CapabilitySubject,
+    realm: &RealmId,
+    actions: &[String],
+    constraints: &[arkret_models_collaboration::governance::grant_constraint::GrantConstraint],
+    refs: &[IssuerAuthorityRef],
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<arkret_policy::authz::authority::Grant> {
+    let CapabilitySubject::Actor(subject) = subject else {
+        return Err(conflict("managed grant subject is not Actor"));
+    };
+    let constraints = constraints
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.constraint_kind,
+                GrantConstraintKind::AuthorityControl | GrantConstraintKind::Temporal
+            )
+        })
+        .map(|c| {
+            serde_json::from_value(serde_json::to_value(c).map_err(PersistenceError::database)?)
+                .map_err(PersistenceError::database)
+        })
+        .collect::<PersistenceResult<Vec<arkret_policy::authz::authority::GrantConstraint>>>()?;
+    Ok(arkret_policy::authz::authority::Grant {
+        grant_id: id.to_string(),
+        realm_id: realm.to_string(),
+        issuer_id: issuer.clone(),
+        subject_id: subject.clone(),
+        resource: realm.to_string(),
+        actions: actions.to_vec(),
+        constraints,
+        revoked: false,
+        created_at: at,
+        issuer_authority_refs: serde_json::from_value(
+            serde_json::to_value(refs).map_err(PersistenceError::database)?,
+        )
+        .map_err(PersistenceError::database)?,
+        authority_depth: 0,
+        authority_root_refs: vec![],
+    })
+}
+
+fn validate_managed_parent(
+    parent: &CapabilityGrant,
+    child: &arkret_models_collaboration::events_payloads::CapabilityGrantCreateBody,
+    role: arkret_models_collaboration::governance::grant_constraint::ManagedActorRole,
+    at: chrono::DateTime<chrono::Utc>,
+) -> PersistenceResult<()> {
+    for constraints in [&parent.constraints, &child.constraints] {
+        let bindings=constraints.iter().filter(|c| c.constraint_subkind==Some(
+            arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind::AppletAuthority)).collect::<Vec<_>>();
+        let [binding] = bindings.as_slice() else {
+            return Err(conflict("managed authority binding is not unique"));
+        };
+        if binding.constraint_kind != GrantConstraintKind::AuthorityControl
+            || binding.effect != GrantConstraintEffect::Allow
+            || binding.evaluation_class != Some(arkret_wire::EvaluationClass::GrantLocal)
+        {
+            return Err(conflict(
+                "managed authority binding must be allow and grant-local",
+            ));
+        }
+    }
+    let realm = parent
+        .realm_id
+        .as_ref()
+        .ok_or_else(|| conflict("managed parent Realm absent"))?;
+    let projected_parent = managed_runtime_grant(
+        &parent.id,
+        &parent.issuer_id,
+        &parent.subject,
+        realm,
+        &parent.actions,
+        &parent.constraints,
+        &parent.issuer_authority_refs,
+        parent.issued_at,
+    )?;
+    let projected_child = managed_runtime_grant(
+        &parent.id,
+        &child.issuer_id,
+        &child.subject,
+        realm,
+        &child.actions,
+        &child.constraints,
+        &child.issuer_authority_refs,
+        child.issued_at,
+    )?;
+    if !arkret_policy::authz::authority::validate_managed_service_child(
+        &projected_parent,
+        &projected_child,
+        role,
+        |_, _| {
+            child.resources.iter().all(|c| {
+                parent
+                    .resources
+                    .iter()
+                    .any(|p| resource_selector_covers(p, c))
+            })
+        },
+    ) {
+        return Err(conflict("managed Service child exceeds its parent"));
+    }
+    let binding=child.constraints.iter().find(|c|c.constraint_subkind==Some(arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind::AppletAuthority)).ok_or_else(||conflict("managed child Applet authority absent"))?;
+    let facts = soland_storage::OperationFacts {
+        applet_id: binding.applet_id.as_ref().map(ToString::to_string),
+        executed_by: Some(child.issuer_id.clone()),
+        registration_epoch: binding.registration_epoch.as_ref().map(ToString::to_string),
+        ..Default::default()
+    };
+    let actions = child.actions.iter().map(String::as_str).collect::<Vec<_>>();
+    for target in &child.resources {
+        if soland_storage::evaluate_grants(
+            &soland_storage::AuthorizationOperation {
+                actor: &child.issuer_id,
+                actions: &actions,
+                target,
+                at,
+                facts: &facts,
+            },
+            std::iter::once(parent),
+        )
+        .unreserved()
+        .is_empty()
+        {
+            return Err(conflict("managed child parent constraints unavailable"));
+        }
+    }
+    // Preserve the full typed constraint, including members not represented
+    // by the runtime projection. Only the formal terminal-control narrowing,
+    // Applet executor rebinding, and a shorter temporal window may differ.
+    let CapabilitySubject::Actor(child_actor) = &child.subject else {
+        return Err(conflict("managed child subject is not an Account"));
+    };
+    for constraint in &parent.constraints {
+        let retained=child.constraints.iter().any(|candidate| {
+            let mut expected=constraint.clone();
+            match (constraint.constraint_kind,constraint.constraint_subkind) {
+                (GrantConstraintKind::AuthorityControl,
+                    Some(arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind::AppletAuthority)) => {
+                    expected.executed_by=Some(child_actor.clone());
+                },
+                (GrantConstraintKind::AuthorityControl,None) => {
+                    if !candidate.allowed_managed_actor_roles.iter().all(|r|constraint.allowed_managed_actor_roles.contains(r)) {return false;}
+                    expected.max_authority_depth=Some(0);
+                    expected.authority_regrant_allowed=Some(false);
+                    expected.allowed_managed_actor_roles=candidate.allowed_managed_actor_roles.clone();
+                },
+                (GrantConstraintKind::Temporal,_) => {
+                    if constraint.expires_at.is_some_and(|expiry|candidate.expires_at.is_none_or(|v|v>expiry)) {return false;}
+                    if constraint.not_before.is_some_and(|from|candidate.not_before.is_none_or(|v|v<from)) {return false;}
+                    expected.expires_at=candidate.expires_at;
+                    expected.not_before=candidate.not_before;
+                },
+                _ => {},
+            }
+            &expected==candidate
+        });
+        if !retained {
+            return Err(conflict("managed child drops or widens parent constraints"));
+        }
     }
     Ok(())
 }
@@ -713,6 +936,26 @@ async fn materialize_capability_grant_inner(
     }
     body.validate_owned_agent_shape()
         .map_err(|error| schema_violation(error.to_string()))?;
+    let managed_role = managed_subject_role(
+        conn,
+        event,
+        &body.subject,
+        &body.issuer_id,
+        commit.committed_at,
+    )
+    .await?;
+    if managed_role.is_some()
+        && (!matches!(body.issuer_id, ActorId::Service { .. })
+            || body.issuer_authority_refs.len() != 1
+            || !matches!(
+                body.issuer_authority_refs[0],
+                IssuerAuthorityRef::Grant { .. }
+            ))
+    {
+        return Err(conflict(
+            "managed Account authority must come from its Applet Service parent",
+        ));
+    }
     let child_expiry = finite_global_expiry(&body.constraints);
     if child_expiry.is_some_and(|expires_at| expires_at <= commit.committed_at) {
         return Err(conflict("grant_exceeds_issuer_authority"));
@@ -833,7 +1076,11 @@ async fn materialize_capability_grant_inner(
                 {
                     return Err(conflict("grant_exceeds_issuer_authority"));
                 }
-                validate_parent_constraints(parent, &body)?;
+                if let Some(role) = managed_role {
+                    validate_managed_parent(parent, &body, role, commit.committed_at)?;
+                } else {
+                    validate_parent_constraints(parent, &body)?;
+                }
                 deepest = deepest.max(parent.authority_depth);
                 roots.extend(parent.authority_root_refs.iter().cloned());
                 parent_ids.push(parent_id.clone());
@@ -963,33 +1210,7 @@ async fn commit_capability_grant_current_result_inner(
     let Some(mutation) = mutation_for_event(event)? else {
         return Ok(());
     };
-    // Grant and revoke are capability-gated: the same-cut evaluator requires
-    // a joined actor holding the kind's action (the root controller through
-    // its effective `ak.realm.owner`). Relinquish is subject-only and needs
-    // no action; it still decides at the Realm authority lock, under the
-    // Realm lifecycle gates.
-    let cut = match event.kind {
-        arkret_wire::EventKind::CapabilityRelinquish => {
-            crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id)
-                .await?;
-            crate::realm_authorization_cut::RealmAuthorizationCut::read(
-                conn,
-                &event.realm_id,
-                &event.actor_id,
-            )
-            .await?
-            .require_open_lifecycle(event)?;
-            None
-        }
-        _ => Some(
-            crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
-                conn,
-                event,
-                commit.committed_at,
-            )
-            .await?,
-        ),
-    };
+    crate::realm_authorization_cut::lock_realm_authorization_cut(conn, &event.realm_id).await?;
     let grant_id = match &mutation {
         CapabilityGrantCurrentMutation::Create { grant_id, .. }
         | CapabilityGrantCurrentMutation::Close { grant_id, .. } => grant_id.clone(),
@@ -1016,6 +1237,63 @@ async fn commit_capability_grant_current_result_inner(
     .map_err(PersistenceError::database)?
     .map(decode_row)
     .transpose()?;
+
+    // Applet management is sourced by the accepted Service parent and the
+    // terminal-child contract, independently of conversation membership.
+    // Ordinary grant/revoke writers retain their joined-member action gate.
+    let native_service = event.applet_id.is_some()
+        && matches!(event.actor_id, ActorId::Service { .. })
+        && event.executed_by.is_none();
+    let managed_management = if native_service {
+        match (&mutation, current.as_ref()) {
+            (CapabilityGrantCurrentMutation::Create { body, .. }, _) => managed_subject_role(
+                conn,
+                event,
+                &body.subject,
+                &body.issuer_id,
+                commit.committed_at,
+            )
+            .await?
+            .is_some(),
+            (
+                CapabilityGrantCurrentMutation::Close {
+                    status: CapabilityGrantCurrentStatus::Revoked,
+                    ..
+                },
+                Some(target),
+            ) if target.value.issuer_id == event.actor_id => managed_subject_role(
+                conn,
+                event,
+                &target.value.subject,
+                &target.value.issuer_id,
+                commit.committed_at,
+            )
+            .await?
+            .is_some(),
+            _ => false,
+        }
+    } else {
+        false
+    };
+    let cut = if event.kind == arkret_wire::EventKind::CapabilityRelinquish || managed_management {
+        crate::realm_authorization_cut::RealmAuthorizationCut::read(
+            conn,
+            &event.realm_id,
+            &event.actor_id,
+        )
+        .await?
+        .require_open_lifecycle(event)?;
+        None
+    } else {
+        Some(
+            crate::realm_authorization_cut::authorize_capability_gated_event_in_connection(
+                conn,
+                event,
+                commit.committed_at,
+            )
+            .await?,
+        )
+    };
 
     let (status, value) = match (mutation, current.as_ref()) {
         (CapabilityGrantCurrentMutation::Create { grant_id, body }, None) => (

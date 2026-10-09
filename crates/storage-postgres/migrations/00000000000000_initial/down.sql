@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS account_device_committed_evidence;
 DROP TABLE IF EXISTS agent_origin_control_source_candidates;
 DROP TABLE IF EXISTS agent_origin_commit_histories;
 DROP TABLE IF EXISTS agent_origin_control_sources;
@@ -285,6 +286,7 @@ DROP TABLE IF EXISTS public.messages CASCADE;
 DROP TABLE IF EXISTS public.device_keys CASCADE;
 DROP TABLE IF EXISTS public.one_time_keys CASCADE;
 DROP TABLE IF EXISTS public.applet_registration_current_results CASCADE;
+DROP TABLE IF EXISTS public.applet_registration_instances CASCADE;
 DROP TABLE IF EXISTS public.member_identity_updates_current_results CASCADE;
 DROP TABLE IF EXISTS public.member_identity_handle_claims CASCADE;
 DROP TABLE IF EXISTS public.history_key_response_tombstones;

@@ -17,9 +17,7 @@ mod ordinary_realm;
 
 use diesel::sql_types::{BigInt, Text};
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
-use ordinary_realm::{
-    STATION, bootstrap_unit_with_join_rule, founder, message_payload, next_request,
-};
+use ordinary_realm::message_payload;
 use soland_storage::{
     AuthorityCommitStore, AuthorityCommitTransaction, ConflictCode, EventCommitRequest,
     EventCommitUnitOfWork,
@@ -27,33 +25,44 @@ use soland_storage::{
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
-fn local(label: &str) -> arkret_wire::ActorId {
-    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(format!("ak:did_core:web:{label}.example")).unwrap(),
-        arkret_wire::DidCoreId::new(STATION).unwrap(),
-    ))
+fn local<'a>(
+    pool: &'a PgPool,
+    label: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = arkret_wire::ActorId> + Send + 'a>> {
+    Box::pin(async move {
+        arkret_wire::ActorId::account(
+            ordinary_realm::human_profile::admit(pool, &ordinary_realm::station(), label).await,
+        )
+    })
 }
 
 fn founder_actor() -> arkret_wire::ActorId {
-    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        founder(),
-        arkret_wire::DidCoreId::new(STATION).unwrap(),
+    arkret_wire::ActorId::account(ordinary_realm::human_profile::account(
+        &ordinary_realm::station(),
+        "ordinary-founder",
     ))
 }
 
-fn by(
-    previous: &AuthorityCommitTransaction,
+fn by<'a>(
+    pool: &'a PgPool,
+    previous: &'a AuthorityCommitTransaction,
     kind: arkret_wire::EventKind,
-    actor: &arkret_wire::ActorId,
+    actor: &'a arkret_wire::ActorId,
     payload: serde_json::Value,
-) -> EventCommitRequest {
-    ordinary_realm::next_request_for_actor(
-        previous,
-        kind,
-        actor.clone(),
-        payload,
-        previous.commit.committed_at,
-    )
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + Send + 'a>> {
+    Box::pin(async move {
+        ordinary_realm::source_request(
+            pool,
+            ordinary_realm::next_request_for_actor(
+                previous,
+                kind,
+                actor.clone(),
+                payload,
+                previous.commit.committed_at,
+            ),
+        )
+        .await
+    })
 }
 
 /// An open Realm with an active default discussion Strand and a joined
@@ -65,65 +74,39 @@ struct Discussion {
     head: EventCommitRequest,
 }
 
-async fn discussion(pool: &PgPool, seed: &str, member: &arkret_wire::ActorId) -> Discussion {
-    let unit = bootstrap_unit_with_join_rule(seed, "public");
-    unit.validate().unwrap();
-    PgAuthorityCommitStore { pool: pool.clone() }
-        .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
-        .await
-        .expect("admit ordinary Realm bootstrap");
-    let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let last = unit.transactions.last().unwrap();
-    let at = last.commit.committed_at;
-    let realm_id = last.event.realm_id.clone();
-    let strand = next_request(
-        last,
-        arkret_wire::EventKind::StrandCreate,
-        &founder(),
-        serde_json::json!({"object": {
-            "schema":"ak.schema.strand.v1",
-            "realm_id":realm_id,
-            "tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
-            "metadata":{"title":"Constraint discussion"},
-            "state":"active",
-            "created_by":founder_actor(),
-            "created_at":at,
-        }}),
-        at,
-    );
-    uow.commit_event(strand.clone()).await.unwrap();
-    let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
-    let default = next_request(
-        &strand.authority_commit,
-        arkret_wire::EventKind::RealmSetDefaultStrand,
-        &founder(),
-        serde_json::json!({
-            "realm_id": realm_id,
-            "strand_id": strand_id,
-            "expected_default_strand_id": null,
-        }),
-        at,
-    );
-    uow.commit_event(default.clone()).await.unwrap();
-    let join = by(
-        &default.authority_commit,
-        arkret_wire::EventKind::MemberState,
-        member,
-        serde_json::json!({
-            "realm_id": realm_id,
-            "member_id": member,
-            "membership": "join",
-            "reason": "fixture join",
-        }),
-    );
-    uow.commit_event(join.clone()).await.unwrap();
-    let root_event_ref = root_event_ref(pool, &realm_id).await;
-    Discussion {
-        realm_id,
-        strand_id,
-        root_event_ref,
-        head: join,
-    }
+fn discussion<'a>(
+    pool: &'a PgPool,
+    seed: &'a str,
+    member: &'a arkret_wire::ActorId,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Discussion> + Send + 'a>> {
+    Box::pin(async move {
+        let opened = ordinary_realm::open_human_discussion(pool, seed).await;
+        let uow = PgEventCommitUnitOfWork::new(pool.clone());
+        let realm_id = opened.realm_id().clone();
+        let strand_id = opened.strand_id.clone();
+        let default = opened.head;
+        let join = by(
+            &pool,
+            &default.authority_commit,
+            arkret_wire::EventKind::MemberState,
+            member,
+            serde_json::json!({
+                "realm_id": realm_id,
+                "member_id": member,
+                "membership": "join",
+                "reason": "fixture join",
+            }),
+        )
+        .await;
+        uow.commit_event(join.clone()).await.unwrap();
+        let root_event_ref = root_event_ref(pool, &realm_id).await;
+        Discussion {
+            realm_id,
+            strand_id,
+            root_event_ref,
+            head: join,
+        }
+    })
 }
 
 async fn root_event_ref(pool: &PgPool, realm_id: &arkret_wire::RealmId) -> String {
@@ -145,60 +128,70 @@ async fn root_event_ref(pool: &PgPool, realm_id: &arkret_wire::RealmId) -> Strin
 
 /// The root controller's grant of `actions` over the whole Realm to
 /// `subject` with `constraints`.
-fn grant(
-    discussion: &Discussion,
-    previous: &AuthorityCommitTransaction,
-    subject: &arkret_wire::ActorId,
-    actions: &[&str],
+fn grant<'a>(
+    pool: &'a PgPool,
+    discussion: &'a Discussion,
+    previous: &'a AuthorityCommitTransaction,
+    subject: &'a arkret_wire::ActorId,
+    actions: &'a [&'a str],
     constraints: serde_json::Value,
-) -> EventCommitRequest {
-    let realm_id = &discussion.realm_id;
-    let mut payload = serde_json::json!({
-            "grant": {
-                "schema": "ak.schema.capability.v1",
-                "realm_id": realm_id,
-                "issuer_id": founder_actor(),
-                "subject": subject,
-                "actions": actions,
-                "resources": [{"kind": "realm", "realm_id": realm_id}],
-                "constraints": constraints,
-                "issuer_authority_refs": [{
-                    "kind": "realm_root",
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + Send + 'a>> {
+    Box::pin(async move {
+        let realm_id = &discussion.realm_id;
+        let mut payload = serde_json::json!({
+                "grant": {
+                    "schema": "ak.schema.capability.v1",
                     "realm_id": realm_id,
-                    "authority_event_ref": discussion.root_event_ref,
-                    "authority_generation": 0
-                }],
-                "issued_at": arkret_canonical::format_timestamp_canonical(
-                    previous.commit.committed_at
-                ),
-            }
-    });
-    if constraints.as_array().is_some_and(Vec::is_empty) {
-        payload["grant"]
-            .as_object_mut()
-            .unwrap()
-            .remove("constraints");
-    }
-    by(
-        previous,
-        arkret_wire::EventKind::CapabilityGrant,
-        &founder_actor(),
-        payload,
-    )
+                    "issuer_id": founder_actor(),
+                    "subject": subject,
+                    "actions": actions,
+                    "resources": [{"kind": "realm", "realm_id": realm_id}],
+                    "constraints": constraints,
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": realm_id,
+                        "authority_event_ref": discussion.root_event_ref,
+                        "authority_generation": 0
+                    }],
+                    "issued_at": arkret_canonical::format_timestamp_canonical(
+                        previous.commit.committed_at
+                    ),
+                }
+        });
+        if constraints.as_array().is_some_and(Vec::is_empty) {
+            payload["grant"]
+                .as_object_mut()
+                .unwrap()
+                .remove("constraints");
+        }
+        by(
+            &pool,
+            previous,
+            arkret_wire::EventKind::CapabilityGrant,
+            &founder_actor(),
+            payload,
+        )
+        .await
+    })
 }
 
-fn message(
-    discussion: &Discussion,
-    previous: &AuthorityCommitTransaction,
-    author: &arkret_wire::ActorId,
-    body: &str,
-) -> EventCommitRequest {
-    by(
-        previous,
-        arkret_wire::EventKind::MessageCreate,
-        author,
-        message_payload(&discussion.strand_id, body),
-    )
+fn message<'a>(
+    pool: &'a PgPool,
+    discussion: &'a Discussion,
+    previous: &'a AuthorityCommitTransaction,
+    author: &'a arkret_wire::ActorId,
+    body: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = EventCommitRequest> + Send + 'a>> {
+    Box::pin(async move {
+        by(
+            &pool,
+            previous,
+            arkret_wire::EventKind::MessageCreate,
+            author,
+            message_payload(&discussion.strand_id, body),
+        )
+        .await
+    })
 }
 
 async fn assert_refused(
@@ -240,9 +233,10 @@ async fn a_rate_quota_is_reserved_with_the_event_it_admits() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let alice = local("quota-alice");
+    let alice = local(&pool, "quota-alice").await;
     let discussion = discussion(&pool, "quota-realm", &alice).await;
     let quota = grant(
+        &pool,
         &discussion,
         &discussion.head.authority_commit,
         &alice,
@@ -255,9 +249,10 @@ async fn a_rate_quota_is_reserved_with_the_event_it_admits() {
             "period": "P1D",
             "constraint_scope": "per_realm"
         }]),
-    );
+    )
+    .await;
     uow.commit_event(quota.clone()).await.unwrap();
-    let first = message(&discussion, &quota.authority_commit, &alice, "first");
+    let first = message(&pool, &discussion, &quota.authority_commit, &alice, "first").await;
     uow.commit_event(first.clone()).await.unwrap();
     assert_eq!(quota_consumed(&pool).await, 1);
     // An exact retry of the admitted Event does not count again.
@@ -266,18 +261,29 @@ async fn a_rate_quota_is_reserved_with_the_event_it_admits() {
     assert_refused(
         &pool,
         &uow,
-        message(&discussion, &first.authority_commit, &alice, "second"),
+        message(
+            &pool,
+            &discussion,
+            &first.authority_commit,
+            &alice,
+            "second",
+        )
+        .await,
         ConflictCode::RateLimited,
     )
     .await;
     assert_eq!(quota_consumed(&pool).await, 1);
     // The root controller's owner aggregate owes no quota.
-    uow.commit_event(message(
-        &discussion,
-        &first.authority_commit,
-        &founder_actor(),
-        "owner",
-    ))
+    uow.commit_event(
+        message(
+            &pool,
+            &discussion,
+            &first.authority_commit,
+            &founder_actor(),
+            "owner",
+        )
+        .await,
+    )
     .await
     .unwrap();
     assert_eq!(quota_consumed(&pool).await, 1);
@@ -288,19 +294,22 @@ async fn a_deny_constraint_of_any_grant_refuses_and_recurrence_bounds_a_grant() 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let alice = local("deny-alice");
+    let alice = local(&pool, "deny-alice").await;
     let discussion = discussion(&pool, "deny-realm", &alice).await;
     let open = grant(
+        &pool,
         &discussion,
         &discussion.head.authority_commit,
         &alice,
         &["ak.message.create"],
         serde_json::json!([]),
-    );
+    )
+    .await;
     uow.commit_event(open.clone()).await.unwrap();
-    let hello = message(&discussion, &open.authority_commit, &alice, "hello");
+    let hello = message(&pool, &discussion, &open.authority_commit, &alice, "hello").await;
     uow.commit_event(hello.clone()).await.unwrap();
     let denying = grant(
+        &pool,
         &discussion,
         &hello.authority_commit,
         &alice,
@@ -310,20 +319,29 @@ async fn a_deny_constraint_of_any_grant_refuses_and_recurrence_bounds_a_grant() 
             "effect": "deny",
             "denied_strand_ids": [discussion.strand_id]
         }]),
-    );
+    )
+    .await;
     uow.commit_event(denying.clone()).await.unwrap();
     assert_refused(
         &pool,
         &uow,
-        message(&discussion, &denying.authority_commit, &alice, "denied"),
+        message(
+            &pool,
+            &discussion,
+            &denying.authority_commit,
+            &alice,
+            "denied",
+        )
+        .await,
         ConflictCode::CapabilityDenied,
     )
     .await;
 
     // Bob's only grant is valid on a weekday hour the accepting commit is
     // not in: its window is never satisfied.
-    let bob = local("deny-bob");
+    let bob = local(&pool, "deny-bob").await;
     let bob_join = by(
+        &pool,
         &denying.authority_commit,
         arkret_wire::EventKind::MemberState,
         &bob,
@@ -333,7 +351,8 @@ async fn a_deny_constraint_of_any_grant_refuses_and_recurrence_bounds_a_grant() 
             "membership": "join",
             "reason": "fixture join",
         }),
-    );
+    )
+    .await;
     uow.commit_event(bob_join.clone()).await.unwrap();
     let committed_at = bob_join.authority_commit.commit.committed_at;
     let closed_hour = (committed_at + chrono::TimeDelta::hours(12))
@@ -343,6 +362,7 @@ async fn a_deny_constraint_of_any_grant_refuses_and_recurrence_bounds_a_grant() 
         .format("%H:00")
         .to_string();
     let windowed = grant(
+        &pool,
         &discussion,
         &bob_join.authority_commit,
         &bob,
@@ -358,12 +378,20 @@ async fn a_deny_constraint_of_any_grant_refuses_and_recurrence_bounds_a_grant() 
                 "timezone": "UTC"
             }
         }]),
-    );
+    )
+    .await;
     uow.commit_event(windowed.clone()).await.unwrap();
     assert_refused(
         &pool,
         &uow,
-        message(&discussion, &windowed.authority_commit, &bob, "off hours"),
+        message(
+            &pool,
+            &discussion,
+            &windowed.authority_commit,
+            &bob,
+            "off hours",
+        )
+        .await,
         ConflictCode::CapabilityDenied,
     )
     .await;
@@ -374,27 +402,38 @@ async fn an_archived_realm_admits_only_its_exemption_set() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let alice = local("archive-alice");
+    let alice = local(&pool, "archive-alice").await;
     let discussion = discussion(&pool, "archive-realm", &alice).await;
     let admin = grant(
+        &pool,
         &discussion,
         &discussion.head.authority_commit,
         &alice,
         &["ak.message.create"],
         serde_json::json!([]),
-    );
+    )
+    .await;
     uow.commit_event(admin.clone()).await.unwrap();
     let archive = by(
+        &pool,
         &admin.authority_commit,
         arkret_wire::EventKind::RealmArchive,
         &founder_actor(),
         serde_json::json!({"reason": "fixture archive"}),
-    );
+    )
+    .await;
     uow.commit_event(archive.clone()).await.unwrap();
     assert_refused(
         &pool,
         &uow,
-        message(&discussion, &archive.authority_commit, &alice, "archived"),
+        message(
+            &pool,
+            &discussion,
+            &archive.authority_commit,
+            &alice,
+            "archived",
+        )
+        .await,
         ConflictCode::RealmFrozen,
     )
     .await;
@@ -402,17 +441,20 @@ async fn an_archived_realm_admits_only_its_exemption_set() {
         &pool,
         &uow,
         grant(
+            &pool,
             &discussion,
             &archive.authority_commit,
             &alice,
             &["ak.realm.admin"],
             serde_json::json!([]),
-        ),
+        )
+        .await,
         ConflictCode::RealmFrozen,
     )
     .await;
     // Revocation is in the exemption set.
     let revoke = by(
+        &pool,
         &archive.authority_commit,
         arkret_wire::EventKind::CapabilityRevoke,
         &founder_actor(),
@@ -423,21 +465,28 @@ async fn an_archived_realm_admits_only_its_exemption_set() {
                 "stream_position": admin.authority_commit.commit.stream_position,
             },
         }),
-    );
+    )
+    .await;
     uow.commit_event(revoke.clone()).await.unwrap();
     let restore = by(
+        &pool,
         &revoke.authority_commit,
         arkret_wire::EventKind::RealmRestore,
         &founder_actor(),
         serde_json::json!({"reason": "fixture restore"}),
-    );
+    )
+    .await;
     uow.commit_event(restore.clone()).await.unwrap();
-    uow.commit_event(message(
-        &discussion,
-        &restore.authority_commit,
-        &founder_actor(),
-        "restored",
-    ))
+    uow.commit_event(
+        message(
+            &pool,
+            &discussion,
+            &restore.authority_commit,
+            &founder_actor(),
+            "restored",
+        )
+        .await,
+    )
     .await
     .unwrap();
 }
@@ -447,15 +496,17 @@ async fn an_admission_waiting_on_the_realm_lock_observes_a_concurrent_revocation
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let alice = local("lock-alice");
+    let alice = local(&pool, "lock-alice").await;
     let discussion = discussion(&pool, "lock-realm", &alice).await;
     let writer = grant(
+        &pool,
         &discussion,
         &discussion.head.authority_commit,
         &alice,
         &["ak.message.create"],
         serde_json::json!([]),
-    );
+    )
+    .await;
     uow.commit_event(writer.clone()).await.unwrap();
     let grant_id = arkret_wire::GrantId::from_event_id(&writer.authority_commit.event.event_id);
 
@@ -479,7 +530,14 @@ async fn an_admission_waiting_on_the_realm_lock_observes_a_concurrent_revocation
     .await
     .unwrap();
 
-    let waiting = message(&discussion, &writer.authority_commit, &alice, "racing");
+    let waiting = message(
+        &pool,
+        &discussion,
+        &writer.authority_commit,
+        &alice,
+        "racing",
+    )
+    .await;
     let event_id = waiting.authority_commit.event.event_id.clone();
     let task_pool = pool.clone();
     let admission = tokio::spawn(async move {
@@ -512,10 +570,11 @@ async fn an_admission_waiting_on_the_realm_lock_observes_a_concurrent_revocation
 async fn strand_patch_exact_resource_and_field_grant_are_decided_at_the_pg_cut() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let member = local("strand-field-editor");
+    let member = local(&pool, "strand-field-editor").await;
     let discussion = discussion(&pool, "strand-field-grant-cut", &member).await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let mut permission = grant(
+        &pool,
         &discussion,
         &discussion.head.authority_commit,
         &member,
@@ -525,7 +584,8 @@ async fn strand_patch_exact_resource_and_field_grant_are_decided_at_the_pg_cut()
             "effect":"allow",
             "allowed_write_fields":["metadata.title"]
         }]),
-    );
+    )
+    .await;
     permission
         .authority_commit
         .event
@@ -541,8 +601,10 @@ async fn strand_patch_exact_resource_and_field_grant_are_decided_at_the_pg_cut()
         permission.authority_commit.event,
         discussion.head.authority_commit.commit.committed_at,
     );
+    permission = ordinary_realm::source_request(&pool, permission).await;
     uow.commit_event(permission.clone()).await.unwrap();
     let allowed = by(
+        &pool,
         &permission.authority_commit,
         arkret_wire::EventKind::StrandUpdate,
         &member,
@@ -550,7 +612,8 @@ async fn strand_patch_exact_resource_and_field_grant_are_decided_at_the_pg_cut()
             "target_ref": discussion.strand_id,
             "patch":{"metadata.title":{"$op":"set","value":"Authorized title"}}
         }),
-    );
+    )
+    .await;
     uow.commit_event(allowed.clone()).await.unwrap();
     let before = PgAuthorityCommitStore { pool: pool.clone() }
         .realm_state_snapshot_material(&discussion.realm_id)
@@ -568,11 +631,13 @@ async fn strand_patch_exact_resource_and_field_grant_are_decided_at_the_pg_cut()
         }),
     ] {
         let refused = by(
+            &pool,
             &allowed.authority_commit,
             arkret_wire::EventKind::StrandUpdate,
             &member,
             payload,
-        );
+        )
+        .await;
         #[derive(diesel::QueryableByName, Debug, PartialEq)]
         struct Counts {
             #[diesel(sql_type = BigInt)]

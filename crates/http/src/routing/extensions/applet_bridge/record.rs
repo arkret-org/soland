@@ -17,6 +17,11 @@ fn decode_applet_record(
         serde_json::from_value(installation).map_err(|error| {
             AppError::internal(format!("stored applet installation is invalid: {error}"))
         })?;
+    if installation.target_station_id != identity.target_station_id {
+        return Err(AppError::internal(
+            "stored Applet installation target differs from identity",
+        ));
+    }
     let record = AppletRecord::from_stored(identity, installation);
     record.validate_stored_bindings().map_err(|error| {
         AppError::internal(format!(
@@ -117,26 +122,6 @@ pub(crate) async fn applet_records(state: &AppState) -> Result<Vec<AppletRecord>
     Ok(records)
 }
 
-pub(super) async fn applet_record_for_realm(
-    state: &AppState,
-    applet_id: &str,
-    realm_id: &arkret_wire::RealmId,
-) -> Result<Option<AppletRecord>, AppError> {
-    let mut matches = applet_records(state).await?.into_iter().filter(|record| {
-        record.applet_id.as_str() == applet_id
-            && &record.portal_realm_id == realm_id
-            && record.revoked_at.is_none()
-    });
-    let result = matches.next();
-    if matches.next().is_some() {
-        return Err(AppError::conflict(
-            "multiple Applet installs share this realm; an exact effective scope is required",
-        )
-        .with_internal_reason("applet_effective_scope_ambiguous"));
-    }
-    Ok(result)
-}
-
 pub(super) async fn persist_applet_record(
     state: &AppState,
     expected: &AppletRecord,
@@ -195,7 +180,7 @@ pub(super) async fn fence_applet_record(
         .fence_applet_installation(
             replacement.applet_id.as_str(),
             &effective_scope_key,
-            replacement.bot_actor_id.route_service_id().as_str(),
+            replacement.target_station_id.as_str(),
             &expected_value,
             replacement_value,
             fenced_at,

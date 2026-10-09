@@ -1,20 +1,7 @@
 //! Applet-managed delegated device authority.
 //!
-//! `device-lifecycle.md` 5.2.3 gives an Applet-managed Bot or Ghost the only
-//! device-authorization branch it can reach, and 15 binds the resulting device
-//! to the exact install that created the principal. Both rules need state the
-//! SDK cannot hold: whether the principal's provision and
-//! `applet_managed_control` PCR genesis are accepted, and whether that install
-//! is still active.
-//!
-//! Every answer here comes from the same durable pair the install transaction
-//! writes: the per-`applet_id` managed-identity winner row, which freezes the
-//! accepted `ak.applet.managed_actor.provision` and PCR genesis Events, and the
-//! per-`(applet_id, effective_scope)` installation row, which carries the 4b
-//! revoke fence. The PCR device directory is deliberately not consulted -- when
-//! the delegated authorize is admitted that directory is still empty, which is
-//! exactly why 5.3 resolves the signer from the provisioned current resolution
-//! cell instead.
+//! Creation provenance is immutable. New business use is bounded by the
+//! current installation at the actual scope, separately from native PCR control.
 
 use arkret_wire::{AppletId, DidCoreId, EventId, RealmId, ScopeRef};
 use soland_http::error::AppError;
@@ -48,8 +35,7 @@ pub struct ManagedPrincipalAuthority {
 /// 4b fences future writes from the first accepted revoke Event, not from saga
 /// completion.
 fn install_fenced(record: &AppletRecord) -> bool {
-    record.identity.globally_fenced_at.is_some()
-        || record.revoked_at.is_some()
+    record.revoked_at.is_some()
         || !matches!(record.status.as_str(), "installed" | "partially_installed")
 }
 
@@ -59,40 +45,35 @@ pub async fn managed_principal_authority(
     state: &AppState,
     principal_id: &DidCoreId,
 ) -> Result<Option<ManagedPrincipalAuthority>, AppError> {
-    for record in applet_records(state).await? {
-        if record.bot_actor_id.signing_principal_id() == principal_id {
-            // 4b freezes the managed-Bot anchors at the first accepted install
-            // and makes every later scope reuse them, so several installation
-            // rows name this same Bot. Only the row whose effective scope is
-            // the frozen initial scope is the install that created it; another
-            // scope of the same Applet is a different install and MUST NOT
-            // stand in for its fence.
-            if record.effective_scope != record.initial_effective_scope {
-                continue;
-            }
-            return Ok(Some(ManagedPrincipalAuthority {
-                applet_id: record.applet_id.clone(),
-                effective_scope: record.effective_scope.clone(),
-                principal_control_realm_id: record.bot_principal_control_realm_id.clone(),
-                provision_event_id: record.bot_actor_provision_event.event_id.clone(),
-                pcr_genesis_event_id: record.bot_pcr_genesis_event.event_id.clone(),
-                fenced: install_fenced(&record),
-            }));
-        }
-        // A Ghost is provisioned into exactly one installation row, so the row
-        // holding it is its exact install by construction.
-        if let Some(ghost) = record
-            .ghosts
+    let records = applet_records(state).await?;
+    for record in &records {
+        let anchors = record
+            .bots
             .iter()
-            .find(|ghost| ghost.ghost_actor_id.signing_principal_id() == principal_id)
-        {
+            .find(|bot| bot.bot_actor_id.signing_principal_id() == principal_id)
+            .map(|bot| (&bot.managed_actor_provision_event, &bot.pcr_genesis_event))
+            .or_else(|| {
+                record
+                    .ghosts
+                    .iter()
+                    .find(|ghost| ghost.ghost_actor_id.signing_principal_id() == principal_id)
+                    .map(|ghost| {
+                        (
+                            &ghost.managed_actor_provision_event,
+                            &ghost.pcr_genesis_event,
+                        )
+                    })
+            });
+        if let Some((provision, pcr)) = anchors {
             return Ok(Some(ManagedPrincipalAuthority {
                 applet_id: record.applet_id.clone(),
-                effective_scope: record.effective_scope.clone(),
-                principal_control_realm_id: ghost.principal_control_realm_id(),
-                provision_event_id: ghost.managed_actor_provision_event.event_id.clone(),
-                pcr_genesis_event_id: ghost.pcr_genesis_event.event_id.clone(),
-                fenced: install_fenced(&record),
+                effective_scope: provision.scope_ref.clone(),
+                principal_control_realm_id: RealmId::from_event_id(&pcr.event_id),
+                provision_event_id: provision.event_id.clone(),
+                pcr_genesis_event_id: pcr.event_id.clone(),
+                fenced: !records.iter().any(|candidate| {
+                    candidate.applet_id == record.applet_id && !install_fenced(candidate)
+                }),
             }));
         }
     }

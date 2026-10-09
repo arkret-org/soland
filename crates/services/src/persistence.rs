@@ -34,6 +34,21 @@ pub struct PersistenceHandle {
 }
 
 impl PersistenceHandle {
+    pub async fn applet_authority_material(
+        &self,
+        applet: &arkret_wire::AppletId,
+        service: &arkret_wire::DidCoreId,
+        station: &arkret_wire::DidCoreId,
+        request: &arkret_models_collaboration::applet_installation_authority::AppletAuthorityMaterialRequestBody,
+    ) -> PersistenceResult<
+        arkret_models_collaboration::applet_installation_authority::AppletAuthorityMaterialOutcome,
+    > {
+        self.persistence
+            .applets()
+            .authority_material(applet, service, station, request)
+            .await
+    }
+
     pub async fn accepted_realm_organization_relationships(&self, realm_id: &arkret_wire::RealmId, at: chrono::DateTime<chrono::Utc>) -> PersistenceResult<Vec<arkret_models_collaboration::governance::realm_governance::RealmOrganizationRelationshipRow>>{
         self.persistence
             .realm_organization_statements()

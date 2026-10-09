@@ -385,6 +385,12 @@ pub(super) async fn account_device_producer_key(
             "Event producer device authorization is not its current confirmed instance",
         ));
     }
+    let (evidence, _) =
+        crate::routing::identity::keys::issue_current_account_device_signer_evidence(
+            state, account, &device_id, &facet,
+        )
+        .await?
+        .ok_or_else(|| rejected("native original Account Device root is unavailable"))?;
     let multibase = authorization
         .device_public_key_did
         .as_str()
@@ -394,7 +400,10 @@ pub(super) async fn account_device_producer_key(
         arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
             value: multibase.to_owned(),
         },
-        SelfProducerCommitGuard::HumanDevice(selector),
+        SelfProducerCommitGuard::HumanDeviceEvidence {
+            selector,
+            evidence: Box::new(evidence),
+        },
     ))
 }
 
@@ -494,9 +503,29 @@ mod tests {
     /// device is refused with a registered code, never a bare conflict.
     #[tokio::test]
     async fn another_active_device_of_the_session_principal_may_sign() {
-        let state = AppState::new(
-            crate::config::AppConfig::test_default(),
-            soland_storage_postgres::Db { pool: None },
+        // Complete native Service history is part of issuing the ordinary
+        // Account Device root; a bare test AppState has no durable identity.
+        let mut fixture_config = soland_test_support::app_config();
+        fixture_config.notary_signing_key_seed = Some([83; 32]);
+        fixture_config.seed_demo_data = false;
+        let (leased_state, pool) = soland_test_support::app_state_with_pool(fixture_config.clone());
+        let state = AppState::new_with_service_identity(
+            crate::config::AppConfig {
+                public_base_url: fixture_config.public_base_url.clone(),
+                notary_signing_key_seed: fixture_config.notary_signing_key_seed,
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db {
+                pool: Some(pool.clone()),
+            },
+            std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(pool)),
+            soland_test_support::fixture_service_identity(&fixture_config),
+            leased_state
+                .service_resolution_commitment()
+                .as_ref()
+                .clone(),
+            [83; 32],
         );
         let persistence = state.test_persistence();
         let mut fixture =
@@ -531,7 +560,7 @@ mod tests {
         )
         .await
         .expect("a second active device of the same principal signs a self Event");
-        let SelfProducerCommitGuard::HumanDevice(selector) = guard else {
+        let Some(selector) = guard.human_device_selector() else {
             panic!("a human producer yields a device guard");
         };
         assert_eq!(selector.device_id, second.authorization.device_id);

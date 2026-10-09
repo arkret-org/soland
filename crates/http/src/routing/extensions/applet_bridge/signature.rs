@@ -23,6 +23,99 @@ pub(super) struct VerifiedAppletServiceSignature {
     pub(super) delivery_authentication_record_digest: String,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct VerifiedAppletAuthorityService {
+    pub applet_id: arkret_wire::AppletId,
+    pub service_id: arkret_wire::DidCoreId,
+    pub effective_scope: arkret_wire::ScopeRef,
+}
+
+/// Authentication remains required after a fence; audit authority is checked
+/// separately against only this Service's explicitly requested grant rows.
+#[handler]
+pub(super) async fn require_authority_material_signature(
+    req: &mut Request,
+    depot: &mut Depot,
+    res: &mut Response,
+    ctrl: &mut FlowCtrl,
+) {
+    let verification=async {
+        let state=depot.get_typed::<AppState>().expect("state injected");
+        if !inbound_transaction_signature_present(req) { return Err(applet_signature_error_required("Applet authority reads require Service RFC 9421 authentication")); }
+        http_signature::reject_content_encoding(req, || applet_signature_error_invalid("signed JSON cannot use Content-Encoding"))?;
+        let bytes=req.payload().await.map_err(|e|AppError::json_invalid(e.to_string()))?.to_vec();
+        let body: arkret_models_collaboration::applet_installation_authority::AppletAuthorityMaterialRequestBody=serde_json::from_slice(&bytes).map_err(|e|AppError::json_invalid(e.to_string()))?;
+        body.validate().map_err(|e|AppError::param_invalid(e.to_string()))?;
+        let source=applet_required_header(req,"source-service-id")?;
+        if applet_required_header(req,"destination-service-id")?!=*state.service_id() { return Err(applet_signature_error_invalid("destination does not identify this Station")); }
+        let applet=applet_id_param(req)?;
+        let record=select_one_signed_scope_candidate(applet_records(state).await?.into_iter().filter(|r|r.applet_id.as_str()==applet && r.package.service_id.as_str()==source && r.effective_scope==body.effective_scope))?.ok_or_else(||AppError::not_found("requested authority material unavailable"))?;
+        let signature_input=http_signature::parse_signature_input_header(req).map_err(applet_verification_error)?;
+        let mut conditional=vec!["content-digest"];
+        if req.headers().contains_key("idempotency-key") { conditional.push("idempotency-key"); }
+        let policy=SignatureVerificationPolicy::for_scenario(HttpSignatureScenario::ServiceToServiceV1,&conditional).map_err(|e|applet_verification_error(HttpMessageVerificationError::Policy(e)))?;
+        // Audit access authenticates the Service's current assertion method;
+        // the immutable installation method remains a creation/delivery fence.
+        let did = arkret_identity::verification_method_did(&signature_input.key_id)
+            .map_err(|_| applet_signature_error_invalid("Service keyid must be a DID URL"))?;
+        let core = arkret_wire::project_did_to_core_id(&did)
+            .map_err(|_| applet_signature_error_invalid("Service keyid cannot project"))?;
+        if signature_input.label != "sig1" || core.as_str() != source {
+            return Err(applet_signature_error_invalid("Service keyid must identify this exact source Service"));
+        }
+        let key=authority_material_current_service_key(state,&source,&signature_input.key_id).await?;
+        http_signature::verify_signed_canonical_json_request(req,&crate::routing::federation::signature_target_uri(req,state),&crate::routing::federation::signature_authority(req,state),&bytes,&key,&policy).map_err(applet_verification_error)?;
+        Ok(VerifiedAppletAuthorityService { applet_id:record.applet_id, service_id:record.package.service_id, effective_scope:body.effective_scope })
+    }.await;
+    match verification {
+        Ok(verified) => {
+            depot.insert_typed(verified);
+            ctrl.call_next(req, depot, res).await;
+        }
+        Err(error) => error.write(req, depot, res).await,
+    }
+}
+
+async fn authority_material_current_service_key(
+    state: &AppState,
+    source: &str,
+    verification_method: &str,
+) -> Result<ed25519_dalek::VerifyingKey, AppError> {
+    if source != state.service_id() {
+        return crate::routing::federation::verifying_key_for_service_id(
+            state,
+            source,
+            verification_method,
+            false,
+        )
+        .await;
+    }
+    // A local Service must prove its published native history as well. The
+    // federation transport's fixed notary-key shortcut is not an assertion
+    // relationship and must not authorize an Applet material read.
+    let authenticated =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await?;
+    let document: arkret_identity::DidDocument = serde_json::from_value(
+        serde_json::to_value(authenticated.normalized_did_document)
+            .map_err(|e| applet_signature_error_invalid(e.to_string()))?,
+    )
+    .map_err(|e| applet_signature_error_invalid(e.to_string()))?;
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|e| applet_signature_error_invalid(e.to_string()))?;
+    let method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|e| applet_signature_error_invalid(e.to_string()))?;
+    arkret_identity::validate_verification_method_relationship(
+        &document,
+        &method,
+        &did,
+        arkret_identity::DidVerificationRelationship::AssertionMethod,
+    )
+    .map_err(|e| applet_signature_error_invalid(e.to_string()))?;
+    arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+        .map_err(|e| applet_signature_error_invalid(e.to_string()))
+}
+
 #[handler]
 pub(super) async fn require_inbound_transaction_signature(
     req: &mut Request,
@@ -110,7 +203,7 @@ pub(super) async fn require_ghost_provision_signature(
                 AppError::json_invalid(format!("unable to read Ghost provisioning body: {error}"))
             })?
             .to_vec();
-        let is_preview = req.uri().path().ends_with("/ghosts/provision/preview");
+        let is_preview = req.uri().path().ends_with("/provision/preview");
         verify_inbound_applet_service_signature(
             &state,
             req,
@@ -118,10 +211,10 @@ pub(super) async fn require_ghost_provision_signature(
             &idempotency_key,
             (!is_preview).then_some("/authoring_request/basis/service_id"),
             (!is_preview).then_some("/authoring_request/basis/applet_id"),
-            SignedAppletScopeCarrier::RealmPointer(if is_preview {
-                "/realm_id"
+            SignedAppletScopeCarrier::ScopePointer(if is_preview {
+                "/effective_scope"
             } else {
-                "/authoring_request/basis/realm_id"
+                "/authoring_request/basis/effective_scope"
             }),
         )
         .await
@@ -308,13 +401,12 @@ async fn verify_inbound_applet_service_signature(
 #[derive(Clone, Copy, Debug)]
 enum SignedAppletScopeCarrier {
     TransactionEvents,
-    RealmPointer(&'static str),
+    ScopePointer(&'static str),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum SignedAppletScopeSelector {
     Exact(arkret_wire::ScopeRef),
-    Realm(arkret_wire::RealmId),
 }
 
 fn signed_applet_scope_selector(
@@ -357,20 +449,17 @@ fn signed_applet_scope_selector(
                 )
             })
         }
-        SignedAppletScopeCarrier::RealmPointer(pointer) => {
-            let realm_id = request_body
-                .pointer(pointer)
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    applet_signature_error_invalid(format!(
-                        "signed Applet service request body requires {pointer}"
-                    ))
-                })?;
-            arkret_wire::RealmId::new(realm_id.to_owned())
-                .map(SignedAppletScopeSelector::Realm)
+        SignedAppletScopeCarrier::ScopePointer(pointer) => {
+            let scope = request_body.pointer(pointer).cloned().ok_or_else(|| {
+                applet_signature_error_invalid(
+                    "signed managed actor request requires effective_scope",
+                )
+            })?;
+            serde_json::from_value(scope)
+                .map(SignedAppletScopeSelector::Exact)
                 .map_err(|error| {
                     applet_signature_error_invalid(format!(
-                        "signed Applet service request realm is invalid: {error}"
+                        "invalid exact managed actor scope: {error}"
                     ))
                 })
         }
@@ -408,11 +497,10 @@ async fn active_install_for_service_id(
 fn signed_scope_selector_matches(
     selector: &SignedAppletScopeSelector,
     effective_scope: &arkret_wire::ScopeRef,
-    portal_realm_id: &arkret_wire::RealmId,
+    _portal_realm_id: &arkret_wire::RealmId,
 ) -> bool {
     match selector {
         SignedAppletScopeSelector::Exact(scope) => effective_scope == scope,
-        SignedAppletScopeSelector::Realm(realm_id) => portal_realm_id == realm_id,
     }
 }
 
@@ -667,18 +755,22 @@ mod tests {
         .unwrap();
         assert_eq!(selected, Some("did:web:service#epoch-2"));
 
-        let realm_only = SignedAppletScopeSelector::Realm(realm_id.clone());
-        let error = select_one_signed_scope_candidate(
+        let exact_realm = SignedAppletScopeSelector::Exact(realm_scope.clone());
+        let selected = select_one_signed_scope_candidate(
             epochs
                 .iter()
-                .filter(|(scope, _)| signed_scope_selector_matches(&realm_only, scope, &realm_id))
+                .filter(|(scope, _)| signed_scope_selector_matches(&exact_realm, scope, &realm_id))
                 .map(|(_, key)| *key),
         )
-        .expect_err("realm-only signed carrier must fail closed across two keys");
-        assert_eq!(error.wire_code(), "conflict");
-        assert_eq!(
-            error.reason_detail.as_deref(),
-            Some("applet_effective_scope_ambiguous")
+        .unwrap();
+        assert_eq!(selected, Some("did:web:service#epoch-1"));
+        assert!(
+            signed_applet_scope_selector(
+                &serde_json::json!({"effective_scope":realm_id}),
+                SignedAppletScopeCarrier::ScopePointer("/effective_scope")
+            )
+            .is_err(),
+            "Realm id alone is not fullScope"
         );
     }
 }

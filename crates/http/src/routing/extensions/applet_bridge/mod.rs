@@ -4,9 +4,12 @@
 //! caller-authored protocol Events. Soland never mints Applet-managed actor
 //! identities and exposes no deployment-local Applet protocol.
 
+mod authority_material;
+mod bot;
 mod delegated_device;
 mod endpoints;
 mod ghost;
+mod ghost_reuse;
 mod install;
 pub(crate) mod record;
 mod signature;

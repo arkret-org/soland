@@ -29,6 +29,7 @@ pub mod schema;
 pub use db::{Db, PgPool, PoolTuning};
 pub(crate) use query_rows::{ExistsRow, JsonPayloadRow, MaxSeqRow};
 
+mod account_device_committed_evidence;
 mod account_device_signer_evidence;
 mod account_status;
 mod account_stream_scan;
@@ -50,6 +51,7 @@ mod agent_producer_signer_keys;
 mod agent_provisioning;
 mod agents;
 mod applet_admission;
+mod applet_authority_material;
 mod applet_current_results;
 mod applet_widget_tokens;
 mod applets;

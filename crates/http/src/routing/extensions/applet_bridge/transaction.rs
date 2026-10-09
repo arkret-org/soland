@@ -265,7 +265,11 @@ fn validate_transaction_event_binding(
             Err("applet_service_cannot_delegate_to_itself")
         };
     }
-    if event.actor_id == install.bot_actor_id {
+    if install
+        .bots
+        .iter()
+        .any(|bot| bot.bot_actor_id == event.actor_id)
+    {
         return Ok(());
     }
     if install
@@ -275,7 +279,7 @@ fn validate_transaction_event_binding(
     {
         return Ok(());
     }
-    let matched = event.actor_id.route_service_id() == install.bot_actor_id.route_service_id()
+    let matched = event.actor_id.route_service_id() == &install.target_station_id
         && install.package.namespaces.actors.iter().any(|entry| {
             !namespace_pattern_is_wildcard(&entry.pattern)
                 && namespace_pattern_matches(

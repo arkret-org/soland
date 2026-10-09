@@ -103,8 +103,8 @@ async fn require_applet_producer_inner(
         .validate_against_did_document(&guard.service_did_document)
         .map_err(denied)?;
     let scope = soland_storage::applet_effective_scope_key(&event.scope_ref)?;
-    let install=sql_query("SELECT record AS value FROM applet_installations WHERE applet_id=$1 AND effective_scope_key=$2 FOR UPDATE")
-        .bind::<Text,_>(registration.applet_id.as_str()).bind::<Text,_>(scope)
+    let install=sql_query("SELECT i.record AS value FROM applet_installations i JOIN applet_registration_current_results r ON r.realm_id=$3 AND r.applet_id=i.applet_id JOIN applet_registration_instances a ON a.realm_id=r.realm_id AND a.applet_id=r.applet_id AND a.instance_event_ref=r.instance_event_ref AND a.registration_event_ref=i.record#>>'{registration_event,event_id}' WHERE i.applet_id=$1 AND i.effective_scope_key=$2 FOR UPDATE OF i")
+        .bind::<Text,_>(registration.applet_id.as_str()).bind::<Text,_>(scope).bind::<Text,_>(event.realm_id.as_str())
         .get_result::<ValueRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(||denied("Applet is not installed on this exact scope"))?;
     if install
@@ -192,20 +192,60 @@ async fn require_applet_producer_inner(
             ));
         }
     }
-    let installation_account = ActorId::account(arkret_wire::AccountId::new(
-        registration.service_id.clone(),
-        registration.bot_actor_id.route_service_id().clone(),
-    ));
-    let grant_actor = if native_service {
-        &installation_account
+    // Grant authority belongs to the actual original producer. A Service
+    // executing an Account-shaped Event cannot borrow that Account's terminal
+    // child; this is the same coordinate used by the SDK Applet admission.
+    let grant_actor = event.executed_by.as_ref().unwrap_or(&event.actor_id);
+    if grant_actor != &event.actor_id {
+        let account_self = matches!(
+            event.kind.as_str(),
+            "ak.invite.accept"
+                | "ak.invite.decline"
+                | "ak.profile.create"
+                | "ak.profile.update"
+                | "ak.capability.relinquish"
+        ) || (event.kind == EventKind::MemberState
+            && event.payload.get("member_id")
+                == serde_json::to_value(&event.actor_id).ok().as_ref());
+        if account_self {
+            return Err(denied(
+                "Applet Service cannot sign the managed Account's own consent or identity control",
+            ));
+        }
+    }
+    // Closing one's own accepted terminal child is issuer control. It does
+    // not spend or revive a revoked/expired business parent.
+    let revoking_own_child = if native_service && event.kind == EventKind::CapabilityRevoke {
+        let payload: arkret_models_collaboration::events_payloads::CapabilityRevokePayload =
+            serde_json::from_value(
+                serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+            )
+            .map_err(denied)?;
+        if let Some(target) = grants.get(&payload.grant_id) {
+            target.issuer_id == service
+                && matches!(target.issuer_authority_refs.as_slice(),
+                    [arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant {grant_id:parent}]
+                        if parent==&grant_id)
+                && crate::capability_grant_current_results::managed_subject_role(
+                    conn,
+                    event,
+                    &target.subject,
+                    &target.issuer_id,
+                    at,
+                )
+                .await?
+                .is_some()
+        } else {
+            false
+        }
     } else {
-        &event.actor_id
+        false
     };
-    if !grant_is_active_at(grant, at)
+    if (!grant_is_active_at(grant, at) && !revoking_own_child)
         || !matches!(&grant.subject,CapabilitySubject::Actor(actor) if actor==grant_actor)
     {
         return Err(denied(
-            "Applet authorization grant is not active for the exact actor",
+            "Applet authorization grant is not active for the exact original producer",
         ));
     }
     if matches!(
@@ -313,25 +353,74 @@ async fn require_applet_producer_inner(
             ));
         }
     }
+    if !native_service {
+        let [
+            arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant {
+                grant_id: parent_id,
+            },
+        ] = grant.issuer_authority_refs.as_slice()
+        else {
+            return Err(denied("managed Actor grant lacks exact Service parent"));
+        };
+        let parent = grants
+            .get(parent_id)
+            .ok_or_else(|| denied("managed Actor parent absent"))?;
+        if !matches!(&parent.subject,CapabilitySubject::Actor(actor) if actor==&service)
+            || grant.issuer_id != service
+        {
+            return Err(denied("managed Actor permission source differs"));
+        }
+        let facts = soland_storage::OperationFacts {
+            applet_id: Some(registration.applet_id.to_string()),
+            executed_by: Some(service.clone()),
+            registration_epoch: Some(registration.registration_epoch.to_string()),
+            ..Default::default()
+        };
+        let actions = grant.actions.iter().map(String::as_str).collect::<Vec<_>>();
+        if soland_storage::evaluate_grants(
+            &soland_storage::AuthorizationOperation {
+                actor: &service,
+                actions: &actions,
+                target: &resource,
+                at,
+                facts: &facts,
+            },
+            std::iter::once(parent),
+        )
+        .unreserved()
+        .is_empty()
+        {
+            return Err(denied(
+                "managed Actor parent current constraints unavailable",
+            ));
+        }
+    }
     let root=sql_query("SELECT realm_id,controller_actor_id,controller_epoch,authority_generation,authority_event_ref FROM realm_authority_root_current_results WHERE realm_id=$1")
         .bind::<Text,_>(event.realm_id.as_str()).get_result::<RealmAuthorityRootReadRow>(&mut *conn).await.map_err(PersistenceError::database)?;
-    validate_ancestor_graph(
-        &GrantId::from_event_id(&event.event_id),
-        &grant_id,
-        &grants,
-        &decode_authority_root(root)?,
-        &event.realm_id,
-        at,
-        &mut BTreeSet::new(),
-        0,
-    )?;
+    if !revoking_own_child {
+        validate_ancestor_graph(
+            &GrantId::from_event_id(&event.event_id),
+            &grant_id,
+            &grants,
+            &decode_authority_root(root)?,
+            &event.realm_id,
+            at,
+            &mut BTreeSet::new(),
+            0,
+        )?;
+    }
     #[derive(diesel::QueryableByName)]
     struct CommitSource {
         #[diesel(sql_type=Jsonb)]
         commit_json: Value,
     }
-    let registration_commit = sql_query("SELECT c.commit_json FROM applet_registration_current_results r JOIN realm_commits c ON c.commit_id=r.current_commit_id AND c.stream_position=r.current_stream_position AND c.realm_id=r.realm_id WHERE r.realm_id=$1 AND r.applet_id=$2")
-        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(registration.applet_id.as_str()).get_result::<CommitSource>(&mut *conn).await.map_err(PersistenceError::database)?;
+    let registration_ref = install
+        .value
+        .pointer("/registration_event/event_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| denied("exact installation registration anchor absent"))?;
+    let registration_commit = sql_query("SELECT c.commit_json FROM applet_registration_instances a JOIN realm_commits c ON c.commit_id=a.accepted_commit_id WHERE a.realm_id=$1 AND a.applet_id=$2 AND a.registration_event_ref=$3")
+        .bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(registration.applet_id.as_str()).bind::<Text,_>(registration_ref).get_result::<CommitSource>(&mut *conn).await.map_err(PersistenceError::database)?;
     let authorization_event = grant_id.as_str().replacen("ak:grant:", "ak:event:", 1);
     let grant_commit = sql_query("SELECT c.commit_json FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.envelope->>'event_id'=$1 AND e.realm_id=$2 AND e.kind='ak.capability.grant' AND e.state='committed'")
         .bind::<Text,_>(authorization_event).bind::<Text,_>(event.realm_id.as_str()).get_result::<CommitSource>(&mut *conn).await.map_err(PersistenceError::database)?;
@@ -396,6 +485,11 @@ pub(crate) async fn require_managed_actor_in_connection(
         .actor_id
         .as_account_id()
         .ok_or_else(|| denied("managed Message actor is not an Account"))?;
+    let inactive=sql_query("SELECT to_jsonb(EXISTS(SELECT 1 FROM account_lifecycle l JOIN accounts a ON a.pk=l.account_pk WHERE a.principal_id=$1 AND a.station_id=$2 AND l.state<>'active')) AS value")
+        .bind::<Text,_>(account.principal_id.as_str()).bind::<Text,_>(account.station_id.as_str()).get_result::<ValueRow>(&mut *conn).await.map_err(PersistenceError::database)?;
+    if inactive.value.as_bool() != Some(false) {
+        return Err(denied("managed Account lifecycle is not active"));
+    }
     let service = ActorId::service(registration.service_id.clone());
     if event.executed_by.as_ref() != Some(&service) || event.payload.contains_key("agent_context") {
         return Err(denied(
@@ -472,10 +566,7 @@ pub(crate) async fn require_managed_actor_in_connection(
     .map_err(PersistenceError::database)?;
     let profile_kind_matches_role = match provision.actor_role {
         AppletManagedActorRole::Bot => profile.actor_kind == arkret_wire::ActorKind::Bot,
-        AppletManagedActorRole::Ghost => matches!(
-            profile.actor_kind,
-            arkret_wire::ActorKind::Integration | arkret_wire::ActorKind::Bot
-        ),
+        AppletManagedActorRole::Ghost => profile.actor_kind == arkret_wire::ActorKind::Integration,
     };
     if provision_event.kind != EventKind::AppletManagedActorProvision
         || provision.actor_id != event.actor_id

@@ -69,7 +69,7 @@ async fn revoke_applet_record_inner(
         "extensions.applet.revoke",
         json!({
             "applet_id": record.applet_id.clone(),
-            "bot_actor_id": record.bot_actor_id,
+            "bot_actor_ids": record.bots.iter().map(|bot| &bot.bot_actor_id).collect::<Vec<_>>(),
             "ghost_count": record.ghosts.len(),
             "globally_fenced": globally_fenced,
         }),
@@ -80,7 +80,11 @@ async fn revoke_applet_record_inner(
         applet_id: record.applet_id.clone(),
         status: "revoked".to_owned(),
         revoked_at: now,
-        bot_actor_id: record.bot_actor_id.signing_principal_id().to_string(),
+        bot_actor_ids: record
+            .bots
+            .iter()
+            .map(|bot| bot.bot_actor_id.signing_principal_id().to_string())
+            .collect(),
         ghost_actor_ids: record
             .ghosts
             .iter()
@@ -103,11 +107,18 @@ pub(super) fn validate_ghost_actor_provision_request(
             AppError::param_invalid(format!("Ghost authoring request is invalid: {error}"))
         })?;
     provision
-        .managed_actor_bundle
-        .validate_bindings(&provision.authoring_request)
-        .map_err(|error| {
-            AppError::param_invalid(format!("Ghost managed actor bundle is invalid: {error}"))
-        })?;
+        .validate()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    if basis.existing_managed_actor != provision.existing_managed_actor {
+        return Err(AppError::param_invalid(
+            "reuse anchors must match the signed preview",
+        ));
+    }
+    if let Some(bundle) = &provision.managed_actor_bundle {
+        bundle
+            .validate_bindings(&provision.authoring_request)
+            .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    }
     if basis.applet_id.as_str() != path_applet_id {
         return Err(AppError::param_invalid(
             "authoring basis applet_id must match applet_id path segment",
@@ -162,7 +173,7 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
             "Ghost authoring basis does not match the installed Applet authority",
         ));
     }
-    if record.portal_realm_id != basis.realm_id {
+    if record.effective_scope != basis.effective_scope {
         return Err(
             AppError::conflict("realm_id does not match installed applet effective scope")
                 .with_internal_reason("applet_effective_scope_mismatch"),
@@ -222,8 +233,16 @@ pub(super) async fn validate_signed_ghost_provision_events(
     let basis = provision.authoring_basis().ok_or_else(|| {
         AppError::param_invalid("Ghost provision authoring purpose must be provision_ghost")
     })?;
-    let accountability = &provision.managed_actor_bundle.accountability_grant_event;
-    let profile = &provision.managed_actor_bundle.profile_event;
+    let accountability = &provision
+        .managed_actor_bundle
+        .as_ref()
+        .ok_or_else(|| AppError::conflict("Ghost reuse does not carry creation Events"))?
+        .accountability_grant_event;
+    let profile = &provision
+        .managed_actor_bundle
+        .as_ref()
+        .ok_or_else(|| AppError::conflict("Ghost reuse does not carry creation Events"))?
+        .profile_event;
     let service_actor_id = ActorId::service(basis.service_id.clone());
     let authorization_ref = ghost_provision_authorization_ref(record)?;
     let managed_provision =
@@ -240,7 +259,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
             && event.authorization_ref.as_deref() == Some(authorization_ref.as_str())
     };
     if accountability.kind != arkret_wire::EventKind::IdentityAccountabilityGrant
-        || accountability.realm_id != basis.realm_id
+        || &accountability.realm_id != basis.effective_scope.realm_id()
         || accountability.actor_id != service_actor_id
         || accountability.executed_by.is_some()
         || !applet_matches(accountability)
@@ -252,7 +271,12 @@ pub(super) async fn validate_signed_ghost_provision_events(
     // Profile state is principal-scoped: it lives in the Ghost's own principal
     // control Realm, founded by the unit's PCR genesis, never in the portal.
     let principal_control_realm_id = arkret_wire::RealmId::from_event_id(
-        &provision.managed_actor_bundle.pcr_genesis_event.event_id,
+        &provision
+            .managed_actor_bundle
+            .as_ref()
+            .ok_or_else(|| AppError::conflict("Ghost reuse does not carry creation Events"))?
+            .pcr_genesis_event
+            .event_id,
     );
     if profile.kind != arkret_wire::EventKind::ProfileCreate
         || profile.realm_id != principal_control_realm_id
@@ -396,12 +420,16 @@ async fn validate_ghost_managed_actor_unit(
     let basis = request.authoring_basis().ok_or_else(|| {
         AppError::param_invalid("Ghost provision authoring purpose must be provision_ghost")
     })?;
-    let event = &request.managed_actor_bundle.managed_actor_provision_event;
+    let event = &request
+        .managed_actor_bundle
+        .as_ref()
+        .ok_or_else(|| AppError::conflict("Ghost reuse does not carry creation Events"))?
+        .managed_actor_provision_event;
     let service_actor_id = ActorId::service(basis.service_id.clone());
     if event.kind.as_str() != "ak.applet.managed_actor.provision"
         || event.actor_id != service_actor_id
         || event.applet_id.as_ref() != Some(&basis.applet_id)
-        || event.realm_id != basis.realm_id
+        || &event.realm_id != basis.effective_scope.realm_id()
         || event.producer_proof.is_none()
     {
         return Err(AppError::param_invalid(
@@ -427,7 +455,10 @@ async fn validate_ghost_managed_actor_unit(
         || payload.applet_id != basis.applet_id
         || payload.service_id != basis.service_id
         || payload.actor_id.signing_principal_id() == &record.package.controller_principal_id
-        || payload.actor_id == record.package.bot_actor_id
+        || record
+            .bots
+            .iter()
+            .any(|bot| payload.actor_id == bot.bot_actor_id)
         || payload.actor_id.route_service_id().as_str() != state.service_id()
         || record.install_response.registration_event_ref != payload.registration_ref
         || payload.applet_authority_ref.as_str() != authorization_ref
@@ -455,7 +486,11 @@ async fn validate_ghost_managed_actor_unit(
         .with_reason_code("applet_namespace_mismatch"));
     }
 
-    let genesis = &request.managed_actor_bundle.pcr_genesis_event;
+    let genesis = &request
+        .managed_actor_bundle
+        .as_ref()
+        .ok_or_else(|| AppError::conflict("Ghost reuse does not carry creation Events"))?
+        .pcr_genesis_event;
     let expected_realm_id = arkret_wire::RealmId::from_event_id(&genesis.event_id);
     let genesis_object: arkret_models_collaboration::events_payloads::RealmGenesis =
         serde_json::from_value(

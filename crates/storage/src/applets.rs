@@ -1,6 +1,19 @@
 use super::{PersistenceResult, Value, async_trait};
 #[async_trait]
 pub trait AppletStore: Send + Sync {
+    async fn authority_material(
+        &self,
+        _applet: &arkret_wire::AppletId,
+        _service: &arkret_wire::DidCoreId,
+        _station: &arkret_wire::DidCoreId,
+        _request: &arkret_models_collaboration::applet_installation_authority::AppletAuthorityMaterialRequestBody,
+    ) -> PersistenceResult<
+        arkret_models_collaboration::applet_installation_authority::AppletAuthorityMaterialOutcome,
+    > {
+        Err(super::PersistenceError::Conflict(
+            "failed_precondition: Applet authority material is unavailable".into(),
+        ))
+    }
     /// Host-local issuance; adapters validate the accepted approval and declared
     /// scope while holding the exact install row lock.
     async fn issue_widget_token(
@@ -180,9 +193,16 @@ pub fn applet_transaction_replay_select_sql() -> &'static str {
 }
 
 /// Internal transaction input; all protocol values use their SDK contracts.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(untagged)]
+pub enum AppletAdmissionRequest {
+    Install(Box<arkret_models_integration::AppletInstallRequestBody>),
+    Managed(arkret_models_integration::AppletManagedActorCommittedRequest),
+}
+
 #[derive(Clone, Debug)]
 pub struct AppletAuthoringUnitWrite {
-    pub request: arkret_models_integration::AppletManagedActorCommittedRequest,
+    pub request: AppletAdmissionRequest,
     pub package: arkret_models_integration::AppletPackage,
     pub recomputed_install_plan: Option<arkret_models_integration::AppletInstallPlan>,
     pub service_did_document: arkret_identity::DidDocument,
@@ -211,8 +231,11 @@ pub type AppletCommitAuthor = std::sync::Arc<
             Option<&arkret_wire::CommitStreamHead>,
             chrono::DateTime<chrono::Utc>,
             Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
-        ) -> PersistenceResult<arkret_wire::RealmCommit>
-        + Send
+            Option<&arkret_models_crypto::DeviceProjectionAttestationCore>,
+        ) -> PersistenceResult<(
+            arkret_wire::RealmCommit,
+            Option<arkret_models_identity::AccountDeviceSignerEvidence>,
+        )> + Send
         + Sync,
 >;
 

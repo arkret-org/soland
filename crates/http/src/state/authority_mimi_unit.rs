@@ -113,7 +113,8 @@ pub(crate) async fn mimi_reporter_device_guard(
     arkret_signatures::verify_ed25519_detached_jws_payload_proof(&proof, &bytes, &key)
         .map_err(|e| ServiceError::Conflict(format!("MIMI reporter proof invalid: {e}")))?;
     match guard {
-        SelfProducerCommitGuard::HumanDevice(selector) => Ok(selector),
+        SelfProducerCommitGuard::HumanDevice(selector)
+        | SelfProducerCommitGuard::HumanDeviceEvidence { selector, .. } => Ok(selector),
         _ => Err(ServiceError::Conflict(
             "MIMI reporter device authority unavailable".into(),
         )),
