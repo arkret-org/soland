@@ -2,10 +2,13 @@
 //! Circle create and self-membership edges. Unsupported Circle branches remain
 //! closed; no projection table is an authorization source.
 
+use arkret_event_draft::EventPayloadExt as _;
 use arkret_models_collaboration::events_payloads::circle::{
     CircleCreatePayload, CircleMemberStatePayload,
 };
-use arkret_models_collaboration::governance::circle::{CircleMembership, CircleState};
+use arkret_models_collaboration::governance::circle::{
+    Circle, CircleJoinRule, CircleMembership, CircleState,
+};
 use arkret_wire::{
     CircleId, CircleMemberStateCurrent, CommitStreamRef, Event, EventKind, MembershipState,
     RealmCommit, SchemaId, ScopeRef, WirePresence,
@@ -151,7 +154,8 @@ fn schema(detail: &str) -> PersistenceError {
 }
 
 fn member_state_payload(event: &Event) -> PersistenceResult<CircleMemberStatePayload> {
-    serde_json::from_value(json!(&event.payload))
+    event
+        .as_circle_member_state()
         .map_err(|error| schema(&format!("Circle membership payload is invalid: {error}")))
 }
 
@@ -193,7 +197,8 @@ pub(crate) async fn admit_in_connection(
             {
                 return Err(schema("Circle create must be on the Realm stream"));
             }
-            let payload: CircleCreatePayload = serde_json::from_value(json!(&event.payload))
+            let payload = event
+                .as_circle_create()
                 .map_err(|_| schema("Circle create payload is invalid"))?;
             let object = payload.object;
             if object.schema != SchemaId::CIRCLE_V1
@@ -254,18 +259,17 @@ pub(crate) async fn admit_in_connection(
             else {
                 return Err(schema("Circle membership needs a Circle stream"));
             };
+            let payload = member_state_payload(event)?;
             if realm_id != &event.realm_id
                 || commit.stream_ref
                     != (CommitStreamRef::Circle {
                         realm_id: realm_id.clone(),
                         circle_id: circle_id.clone(),
                     })
-                || event.payload.get("circle_id").and_then(Value::as_str)
-                    != Some(circle_id.as_str())
+                || payload.circle_id != *circle_id
             {
                 return Err(schema("Circle membership scope and payload differ"));
             }
-            let payload = member_state_payload(event)?;
             let member = payload.member_id.clone();
             if member != event.actor_id {
                 return Err(conflict(
@@ -310,15 +314,15 @@ pub(crate) async fn admit_in_connection(
             .optional()
             .map_err(PersistenceError::database)?
             .ok_or_else(|| PersistenceError::NotFound("Circle is not available".to_owned()))?;
-            if circle.value.get("state").and_then(Value::as_str) != Some("active") {
+            let circle: Circle = serde_json::from_value(circle.value)
+                .map_err(|error| schema(&format!("stored Circle is invalid: {error}")))?;
+            if circle.state != CircleState::Active {
                 return Err(conflict(
                     ConflictCode::FailedPrecondition,
                     "circle_not_active",
                 ));
             }
-            if next == "join"
-                && circle.value.get("join_rule").and_then(Value::as_str) != Some("public")
-            {
+            if next == "join" && circle.join_rule != CircleJoinRule::Public {
                 return Err(conflict(
                     ConflictCode::UnsupportedFeature,
                     "Circle self-entry requires a public Circle",
@@ -450,4 +454,52 @@ pub(crate) async fn commit_in_connection(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod typed_membership_tests {
+    use super::*;
+
+    fn event(kind: EventKind, payload: Value) -> Event {
+        let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [1; 32],
+        ));
+        arkret_wire::test_support::raw_event_for_actor_at(
+            kind.as_str(),
+            ScopeRef::Realm { realm_id: realm },
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:circle-member.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:circle-station.example").unwrap(),
+            )),
+            payload,
+            chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn membership_projection_checks_kind_and_closed_payload_before_admission() {
+        let circle = CircleId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [2; 32],
+        ));
+        let actor = event(EventKind::CircleMemberState, json!({})).actor_id;
+        let payload = json!({"circle_id": circle, "member_id": actor, "membership": "leave"});
+        let accepted =
+            member_state_payload(&event(EventKind::CircleMemberState, payload.clone())).unwrap();
+        assert_eq!(accepted.circle_id, circle);
+        assert_eq!(accepted.membership, CircleMembership::Leave);
+        assert!(member_state_payload(&event(EventKind::MemberState, payload.clone())).is_err());
+        let mut extra = payload;
+        extra["unexpected"] = json!(true);
+        assert!(member_state_payload(&event(EventKind::CircleMemberState, extra)).is_err());
+        assert!(
+            member_state_payload(&event(
+                EventKind::CircleMemberState,
+                json!({"circle_id": circle, "membership": "leave"})
+            ))
+            .is_err()
+        );
+    }
 }
