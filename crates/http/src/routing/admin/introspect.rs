@@ -12,7 +12,7 @@
 //! 2. [`require_admin_scope`] is the production-mode gate: it introspects the caller's bearer token
 //!    and rejects the request unless the granted `admin_scopes` include the requested scope.
 //!
-//! In `development_mode` (no introspection URL configured) the helpers
+//! In an explicit development harness (no introspection URL configured) the helpers
 //! return a synthetic introspection asserting every well-known admin
 //! scope for any stable ID in `admin_principal_ids` — keeps local smoke
 //! tests working without an IdP dependency.
@@ -166,9 +166,10 @@ fn session_credential_from_request(req: &Request) -> Option<String> {
         .map(|token| token.trim().to_owned())
 }
 
-/// Synthetic introspection used in development mode when no upstream IdP
+/// Synthetic introspection in an explicitly compiled harness when no upstream IdP
 /// is configured. Grants every well-known admin scope to any DID listed
 /// in `admin_principal_ids` (or any principal in development_mode).
+#[cfg(any(test, feature = "conformance-harness"))]
 fn synthetic_dev_admin_scopes() -> Vec<String> {
     use arkret_models_identity::admin_grant::admin_scopes::*;
     vec![
@@ -179,6 +180,7 @@ fn synthetic_dev_admin_scopes() -> Vec<String> {
     ]
 }
 
+#[cfg(any(test, feature = "conformance-harness"))]
 fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
     let principal_id =
         arkret_identifiers::DidCoreId::new(session.actor.clone()).unwrap_or_else(|_| {
@@ -201,7 +203,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
     }
 }
 
-/// Resolve the caller's [`SessionGrantIntrospection`]. Development mode
+/// Resolve the caller's [`SessionGrantIntrospection`]. An explicit development harness
 /// uses a local synthetic grant even when the joint harness also wires a
 /// coauth introspection URL; dev-login bearers are local soland sessions,
 /// not upstream session-grant tokens. Production mode POSTs the caller's
@@ -211,13 +213,14 @@ pub(crate) async fn introspect_admin_scopes(
     req: &Request,
     session: &SessionRecord,
 ) -> Result<SessionGrantIntrospection, AppError> {
-    if state.config().development_mode {
+    #[cfg(any(test, feature = "conformance-harness"))]
+    if state.config().development_harness_enabled() {
         return Ok(synthetic_dev_grant(state, session));
     }
 
     let Some(url) = state.config().session_grant_introspection_url.as_deref() else {
         return Err(crate::app_error!(CapabilityDenied,
-            "admin scope check requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode"
+            "admin scope check requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside the explicit development harness"
                 .to_owned(),
         ));
     };

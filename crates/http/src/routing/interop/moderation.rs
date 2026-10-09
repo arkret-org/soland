@@ -774,7 +774,6 @@ mod report_safety_tests {
                     std::env::temp_dir().join("soland-moderation-tests"),
                 ),
                 development_mode: true,
-                jws_replay_window_seconds: 0,
                 ..AppConfig::test_default()
             },
             Db { pool: None },

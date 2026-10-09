@@ -1,6 +1,5 @@
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use salvo::prelude::Request;
-use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
@@ -124,14 +123,6 @@ fn request_headers(req: &Request) -> Vec<(String, String)> {
                 .map(|value| (name.as_str().to_owned(), value.to_owned()))
         })
         .collect()
-}
-
-pub fn deterministic_development_signing_key(domain: &[u8], key_material: &str) -> SigningKey {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    hasher.update(key_material.as_bytes());
-    let seed: [u8; 32] = hasher.finalize().into();
-    SigningKey::from_bytes(&seed)
 }
 
 #[cfg(test)]

@@ -131,7 +131,6 @@ fn next(
 async fn history_scenario(history: &str, via_invite: bool) {
     let (state, pool) = soland_test_support::app_state_with_pool(AppConfig {
         development_mode: true,
-        jws_replay_window_seconds: 0,
         ..soland_test_support::app_config()
     });
     let human =

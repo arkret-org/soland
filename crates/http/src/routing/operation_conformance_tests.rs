@@ -21,7 +21,6 @@ fn test_state() -> AppState {
             // Tests use fixed-time HLC fixtures (`0189c4d2af00...`) which
             // are years in the past relative to wall-clock; disable
             // replay-window enforcement so they pass.
-            jws_replay_window_seconds: 0,
             seed_demo_data: true,
             ..AppConfig::test_default()
         },

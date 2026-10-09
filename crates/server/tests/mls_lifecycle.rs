@@ -67,7 +67,6 @@ fn test_config() -> AppConfig {
     AppConfig {
         development_mode: true,
         embedded_webvh_registration_bearer: Some(REGISTRATION_BEARER.to_owned()),
-        jws_replay_window_seconds: 0,
         ..soland_test_support::app_config()
     }
 }

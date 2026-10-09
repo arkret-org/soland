@@ -1172,8 +1172,9 @@ async fn controller_agent_discussion(
     // Match the accepted-controller fixture's real local account registration.
     // This establishes account presence/continuity, while ownership still comes
     // from accepted Agent provision and controller-bound membership Events.
-    use soland_storage::IdentityStoreRegistry as _;
-    use soland_storage::{AuthorityCommitStore as _, EventCommitUnitOfWork as _};
+    use soland_storage::{
+        AuthorityCommitStore as _, EventCommitUnitOfWork as _, IdentityStoreRegistry as _,
+    };
     let controller_pcr = agent
         .store
         .committed_event(&agent.controller.events[0].event_id)

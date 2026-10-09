@@ -1514,17 +1514,6 @@ async fn account_authority_assertion_key(config: &AppConfig) -> anyhow::Result<O
     // Account Authority's standard OIDC discovery and keyset documents, not
     // Arkret operations, and the typed client rejects any path the operation
     // registry does not name.
-    let mut client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none());
-    if config.development_mode {
-        // Local stacks front the Account Authority with a development CA this
-        // process does not trust. What is read is a public key: it is checked
-        // structurally here and has to prove itself by signing afterwards, so
-        // a relaxed handshake cannot make a wrong key work - only make a local
-        // stack reachable.
-        client = client.danger_accept_invalid_certs(true);
-    }
     let unreachable = |what: &str, error: String| {
         anyhow::anyhow!(
             "reading the Account Authority {what} at {authority_url} failed: {error}. The \
@@ -1533,10 +1522,17 @@ async fn account_authority_assertion_key(config: &AppConfig) -> anyhow::Result<O
              SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE."
         )
     };
-    let client = client
-        .build()
-        .map_err(|error| unreachable("client", error.to_string()))?;
     let fetch = async |url: url::Url, what: &str| -> anyhow::Result<serde_json::Value> {
+        // Discovery establishes the initial trust key. Validate each exact URL
+        // and certificate against the operator CA store; signing with a fetched
+        // key cannot authenticate an otherwise untrusted discovery connection.
+        let (url, client) = soland_http::security::validate_http_url_for_egress_with_pinned_client(
+            url.as_str(),
+            what,
+            config.development_mode,
+            std::time::Duration::from_secs(10),
+        )
+        .map_err(|error| unreachable(what, error))?;
         client
             .get(url)
             .send()
@@ -3931,6 +3927,114 @@ mod tests {
 #[cfg(test)]
 mod account_authority_keyset_tests {
     use super::*;
+
+    /// Uses the existing outbox TLS fixture and the actual operator CA input.
+    /// The development network policy permits loopback, but never disables
+    /// certificate identity verification. No global environment is mutated.
+    #[tokio::test]
+    async fn authority_discovery_uses_operator_ca_and_rejects_wrong_certificate_identity() {
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+
+        let expected_ca = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/outbox-test-ca.pem")
+            .canonicalize()
+            .unwrap();
+        let configured_ca = std::env::var_os("SSL_CERT_FILE")
+            .and_then(|path| std::path::Path::new(&path).canonicalize().ok());
+        assert_eq!(
+            configured_ca.as_deref(),
+            Some(expected_ca.as_path()),
+            "run with SSL_CERT_FILE={}",
+            expected_ca.display()
+        );
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let authority = format!("https://127.0.0.1:{port}");
+        let discovery = serde_json::json!({"jwks_uri": format!("{authority}/keys")}).to_string();
+        let raw = [7u8; 32];
+        use base64::Engine as _;
+        let keyset = serde_json::json!({"keys": [{
+            "kid": ACCOUNT_AUTHORITY_JWK_KID, "kty": "OKP", "crv": "Ed25519",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+        }]})
+        .to_string();
+        let tls = Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![rustls::pki_types::CertificateDer::from(
+                    include_bytes!("../tests/fixtures/outbox-test-cert.der").to_vec(),
+                )],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(
+                    rustls::pki_types::PrivatePkcs8KeyDer::from(
+                        include_bytes!("../tests/fixtures/outbox-test-key.der").to_vec(),
+                    ),
+                ),
+            )
+            .unwrap(),
+        );
+        // First connection has the wrong DNS identity and must fail its TLS
+        // handshake; the next two are real discovery and keyset HTTP reads.
+        let peer = std::thread::spawn(move || {
+            for (index, body) in [String::new(), discovery, keyset].into_iter().enumerate() {
+                let (socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut stream = rustls::StreamOwned::new(
+                    rustls::ServerConnection::new(tls.clone()).unwrap(),
+                    socket,
+                );
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    match stream.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buffer[..n]),
+                    }
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                if index == 0 {
+                    assert!(
+                        request.is_empty(),
+                        "wrong certificate identity reached HTTP"
+                    );
+                    continue;
+                }
+                let request = String::from_utf8(request).unwrap();
+                assert!(request.starts_with(if index == 1 {
+                    "GET /.well-known/openid-configuration "
+                } else {
+                    "GET /keys "
+                }));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let mut config = AppConfig {
+            development_mode: true,
+            account_authority_url: Some(format!("https://localhost:{port}")),
+            ..soland_test_support::app_config()
+        };
+        assert!(account_authority_assertion_key(&config).await.is_err());
+        config.account_authority_url = Some(authority);
+        assert_eq!(
+            account_authority_assertion_key(&config).await.unwrap(),
+            Some(arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(&raw))
+        );
+        peer.join().unwrap();
+    }
 
     #[test]
     fn keyset_selection_is_by_kid_and_round_trips_to_the_did_document_encoding() {

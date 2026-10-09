@@ -437,7 +437,6 @@ fn outbox_test_config() -> AppConfig {
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-outbox-test")),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-        jws_replay_window_seconds: 0,
         trust_domain: arkret_identifiers::TrustDomainId::new("ak:trust_domain:soland-outbox.local")
             .unwrap(),
         ..soland_test_support::app_config()

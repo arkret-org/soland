@@ -1,3 +1,4 @@
+#[cfg(any(test, feature = "conformance-harness"))]
 use soland_services::identity::{
     DeviceIdentity, FindAccountByActorQuery, RegisterAccountCommand, SaveDeviceCommand,
     SessionIdentityState,
@@ -13,6 +14,7 @@ use super::*;
 /// yet" as authorization would mint exactly the row §5 calls a projection
 /// integrity failure — `verified` with no `device_authorize_event_id` — which
 /// every revocation-gate read then has to reject as an internal fault.
+#[cfg(any(test, feature = "conformance-harness"))]
 fn initial_session_device_verification_state<'a>(
     existing_devices: &'a [soland_services::identity::DeviceIdentity],
     device_id: &str,
@@ -27,6 +29,7 @@ fn initial_session_device_verification_state<'a>(
     }
 }
 
+#[cfg(any(test, feature = "conformance-harness"))]
 fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {
     account_new_session_tuple(state, actor).map(|(_status, code, reason_detail, message)| {
         AppError::capability_denied(message)
@@ -105,6 +108,7 @@ pub(crate) fn account_existing_session_error(
     }
 }
 
+#[cfg(any(test, feature = "conformance-harness"))]
 #[salvo::oapi::endpoint(operation_id = "org.arkret.soland.auth.dev_login", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.auth.dev_login"))]
 pub(super) async fn dev_login(
@@ -112,7 +116,7 @@ pub(super) async fn dev_login(
     body: JsonBody<DevLoginRequestBody>,
 ) -> JsonResult<SessionLoginOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    if !state.config().development_mode {
+    if !state.config().development_harness_enabled() {
         return Err(AppError::not_found("endpoint not available"));
     }
     let body = body.into_inner();
@@ -250,6 +254,7 @@ pub(super) async fn dev_login(
 /// material projected from `ak.device.authorize`. Development login is also
 /// used by integration clients to obtain a bearer for an already-authorized
 /// device, so it must not erase keys, authority bindings, or generation fences.
+#[cfg(any(test, feature = "conformance-harness"))]
 fn session_device_inventory_record(
     existing_devices: &[DeviceIdentity],
     actor: &str,

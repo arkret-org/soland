@@ -4458,7 +4458,6 @@ mod tests {
             object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
             development_mode: true,
             did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-            jws_replay_window_seconds: 0,
             trust_domain: arkret_identifiers::TrustDomainId::new("ak:trust_domain:recipient.local")
                 .unwrap(),
             ..AppConfig::test_default()

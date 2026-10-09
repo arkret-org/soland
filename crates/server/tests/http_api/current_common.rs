@@ -181,7 +181,6 @@ pub(crate) fn test_config() -> AppConfig {
         embedded_webvh_registration_bearer: Some(ACCOUNT_REGISTER_BEARER.to_owned()),
         // Tests use fixed-time HLC fixtures; window=0 disables replay-window
         // enforcement so they keep passing.
-        jws_replay_window_seconds: 0,
         resumable_upload_dir: std::env::temp_dir().join("soland-test-resumable-uploads"),
         seed_demo_data: true,
         ..soland_test_support::app_config()

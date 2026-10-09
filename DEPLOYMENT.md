@@ -130,8 +130,9 @@ SOLAND_MAX_REQUEST_SIZE=1048576
 DATABASE_URL=postgres://soland:<password>@db.internal:5432/soland?sslmode=verify-full
 
 # `SOLAND_DEVELOPMENT_MODE` is unset (defaults to false). Enabling it in
-# production exposes `dev_login`, the admin snapshot endpoints, and a relaxed
-# DID-document validation path — never set this in a real deploy.
+# production permits local network egress and development diagnostics; it never
+# relaxes formal signature/DID validation. Synthetic login/admin credentials
+# exist only in explicitly compiled conformance-harness builds, not default binaries.
 
 RUST_LOG=soland=info,salvo=info,warn
 ```
@@ -214,7 +215,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_ICE_STUN_URLS` | `stun:stun.l.google.com:19302` | Comma-separated STUN URLs advertised in signed ICE configs. |
 | `SOLAND_ICE_TTL_SECONDS` | `300` | Lifetime of an issued ICE config / TURN credential before refresh; non-positive falls back to default. |
 | `SOLAND_ICE_REFRESH_LEAD_SECONDS` | `75` | Lead time before TTL at which clients should refresh the ICE config. |
-| `SOLAND_JWS_REPLAY_WINDOW_SECONDS` | `300` | Accepted JWS replay window; `0` disables replay-window enforcement. |
 | `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT` | spec default | Per-principal daily key-backup download limit. |
 | `SOLAND_NOTARY_SIGNING_KEY` | unset | Base64 (standard or url-safe-no-pad) 32-byte NotaryWorker signing seed. Required outside development mode unless a durable `SOLAND_KEYSTORE_BACKEND` is configured; an ephemeral notary key breaks the Seal signature chain across restarts. |
 | `SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials. |
