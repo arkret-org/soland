@@ -148,6 +148,7 @@ fn window_entry(
     realm: &RealmId,
     window: soland_storage::AccountRealmWindow,
     cursor: &str,
+    baseline_revision: Option<u64>,
 ) -> RealmSyncEntry {
     let mut windows = vec![window.window];
     windows.extend(window.additional_windows);
@@ -155,6 +156,18 @@ fn window_entry(
         arkret_canonical::canonical_json_bytes(&entry.stream_ref).unwrap_or_default()
     });
     RealmSyncEntry {
+        baseline: baseline_revision.map(|cut_revision| {
+            arkret_models_collaboration::sync_frames::account_subscribe::RealmDetailBaseline {
+                snapshot_cursor: format!("ak:cursor:{}", uuid::Uuid::now_v7().as_simple()),
+                cut_revision,
+                coverage: arkret_models_collaboration::sync_frames::current_results::AccountCurrentCoverage {
+                    realm_id: realm.clone(),
+                    stream_heads: window.current_stream_heads.clone(),
+                    complete_for_authorized_streams: true,
+                },
+                complete: true,
+            }
+        }),
         streams: Some(windows),
         streams_limited: window.streams_limited.then_some(true),
         window_snapshot_cursor: Some(cursor.to_owned()),
@@ -219,6 +232,11 @@ async fn freeze(
         delivered_heads,
         selected_stream_refs,
     };
+    let baseline_revision = if request.delivered_heads.is_empty() {
+        Some(u64::try_from(retained_revision).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
     let verification_method = state
         .service_verification_method("notary-key")
         .map_err(|error| error.to_string())?;
@@ -251,7 +269,7 @@ async fn freeze(
                 streams_limited: window.streams_limited,
             };
             Ok(Freeze::Window(
-                window_entry(realm, window, window_cursor.as_str()),
+                window_entry(realm, window, window_cursor.as_str(), baseline_revision),
                 progress,
             ))
         }
