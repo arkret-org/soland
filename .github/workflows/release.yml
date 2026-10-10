@@ -63,6 +63,13 @@ jobs:
           path: floria
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Arkret Spec
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/arkret-spec
+          path: arkret-spec
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: Configure Windows OpenSSL
         if: runner.os == 'Windows'
         shell: pwsh

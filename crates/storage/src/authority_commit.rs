@@ -369,7 +369,7 @@ pub enum SelfProducerCommitGuard {
         reporter_authority: Option<serde_json::Value>,
         submit_request: Option<serde_json::Value>,
         mapping_receipt: Option<serde_json::Value>,
-        reporter_device_guard: Option<crate::DeviceRevocationGateSelector>,
+        reporter_device_guard: Option<Box<crate::DeviceRevocationGateSelector>>,
     },
     HumanDevice(crate::DeviceRevocationGateSelector),
     /// Original native regular root frozen with the accepting Event Commit.
@@ -941,8 +941,9 @@ pub enum MlsMemberRosterSelectorRead {
     NotFound,
     RevisionUnavailable,
     Authorized {
-        request:
+        request: Box<
             arkret_models_collaboration::mls_roster_authority::MlsRosterAuthorityReadRequestBody,
+        >,
         governance_station_id: arkret_wire::DidCoreId,
     },
 }
@@ -1349,7 +1350,7 @@ pub enum MlsMemberGroupStateMaterialRead {
     NotFound,
     RevisionUnavailable,
     Authorized {
-        genesis: Option<arkret_wire::CommittedEventFullView>,
+        genesis: Option<Box<arkret_wire::CommittedEventFullView>>,
     },
 }
 

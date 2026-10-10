@@ -177,7 +177,7 @@ pub struct AppletTransactionReplayRecord {
 #[derive(Clone, Debug)]
 pub enum AppletTransactionReplayBegin {
     Fresh,
-    Existing(AppletTransactionReplayRecord),
+    Existing(Box<AppletTransactionReplayRecord>),
 }
 #[doc(hidden)]
 pub fn applet_registration_select_sql(suffix: &str) -> String {

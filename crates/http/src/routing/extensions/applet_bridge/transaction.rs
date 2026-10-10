@@ -54,7 +54,7 @@ pub(super) async fn process_verified_transaction(
     match begin {
         AppletTransactionReplayResult::Fresh => {}
         AppletTransactionReplayResult::Existing(existing) => {
-            return replayed_transaction_outcome(existing, &verified);
+            return replayed_transaction_outcome(*existing, &verified);
         }
     }
 

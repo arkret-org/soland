@@ -55,6 +55,13 @@ jobs:
           path: floria
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Arkret Spec
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/arkret-spec
+          path: arkret-spec
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: Windows OpenSSL configuration regression tests
         if: runner.os == 'Windows'
         shell: pwsh
@@ -189,6 +196,13 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/floria
           path: floria
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
+      - name: Checkout Arkret Spec
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/arkret-spec
+          path: arkret-spec
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Install Rust 1.98
@@ -326,6 +340,13 @@ jobs:
           path: floria
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Arkret Spec
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/arkret-spec
+          path: arkret-spec
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -385,6 +406,13 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/floria
           path: floria
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
+      - name: Checkout Arkret Spec
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/arkret-spec
+          path: arkret-spec
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Install Rust

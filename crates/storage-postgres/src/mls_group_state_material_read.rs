@@ -469,10 +469,10 @@ pub(crate) async fn read_in_connection(
         return Ok(Read::NotFound);
     }
     Ok(Read::Authorized {
-        genesis: Some(arkret_wire::CommittedEventFullView {
+        genesis: Some(Box::new(arkret_wire::CommittedEventFullView {
             commit: genesis_commit,
             event: genesis_event,
-        }),
+        })),
     })
 }
 

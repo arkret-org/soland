@@ -1248,7 +1248,7 @@ pub(super) async fn mimi_report_abuse(
         ),
         submit_request: None,
         mapping_receipt: None,
-        reporter_device_guard: Some(selector),
+        reporter_device_guard: Some(Box::new(selector)),
     };
     let idempotency = soland_services::events::IdempotentResponse {
         authenticated_actor: authenticated_actor.clone(),

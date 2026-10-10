@@ -153,7 +153,7 @@ async fn member_selector_in_connection(
         return Ok(Selected::RevisionUnavailable);
     };
     Ok(Selected::Authorized {
-        request: peer,
+        request: Box::new(peer),
         governance_station_id,
     })
 }

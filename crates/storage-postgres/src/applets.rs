@@ -511,7 +511,7 @@ impl AppletStore for PgAppletStore {
                     .to_owned(),
             ));
         }
-        Ok(AppletTransactionReplayBegin::Existing(existing))
+        Ok(AppletTransactionReplayBegin::Existing(Box::new(existing)))
     }
 
     async fn complete_transaction_replay(

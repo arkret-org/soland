@@ -143,7 +143,7 @@ async fn recheck_self_cut(
         soland_storage::MlsMemberRosterSelectorRead::Authorized {
             request,
             governance_station_id,
-        } if &request == selected && governance_station_id == authority.service_id => {}
+        } if request.as_ref() == selected && governance_station_id == authority.service_id => {}
         _ => return Err(unavailable()),
     }
     if state
