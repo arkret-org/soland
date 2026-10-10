@@ -136,9 +136,36 @@ async fn realm_streams(req: &mut Request, depot: &Depot, res: &mut Response) {
             "limit must be an integer in 1..=500",
         );
     }
-    if req.query::<String>("cursor").is_some() {
+    if let Some(token) = req.query::<String>("cursor") {
+        if let Err(error) = arkret_server::CursorAuthority::decode_stream(&token) {
+            match error {
+                arkret_server::CursorAuthorityError::ParamInvalid(message) => {
+                    crate::error::render_error_with_reason_code(
+                        res,
+                        crate::error::error_http_status(ErrorCode::ParamInvalid),
+                        ErrorCode::ParamInvalid.as_str(),
+                        &message,
+                        arkret_wire::ReasonCode::INVALID_CURSOR,
+                        None,
+                    )
+                }
+                arkret_server::CursorAuthorityError::Expired => crate::error::render_error_code(
+                    ErrorCode::CursorExpired,
+                    res,
+                    "cursor has expired",
+                ),
+                arkret_server::CursorAuthorityError::IntegrityInvalid => {
+                    crate::error::render_error_code(
+                        ErrorCode::CursorIntegrityInvalid,
+                        res,
+                        "cursor issuance cannot be proved",
+                    )
+                }
+            }
+            return;
+        }
         return crate::error::render_error_code(
-            ErrorCode::CursorInvalid,
+            ErrorCode::CursorIntegrityInvalid,
             res,
             "the cursor was not issued for this enumeration; restart it",
         );

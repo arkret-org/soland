@@ -913,11 +913,15 @@ async fn get_device_messages(
         .await
         {
             Ok(position) => position,
+            Err(SyncCursorError::Unavailable(message)) => {
+                return Err(crate::app_error!(TemporarilyUnavailable, message));
+            }
             Err(SyncCursorError::Expired) => {
                 return Err(crate::app_error!(CursorExpired, "cursor has expired",));
             }
             Err(SyncCursorError::Invalid(message)) => {
-                return Err(AppError::param_invalid(message));
+                return Err(AppError::param_invalid(message)
+                    .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR));
             }
             Err(SyncCursorError::Mismatch(message)) => {
                 return Err(crate::app_error!(CursorIntegrityInvalid, message));

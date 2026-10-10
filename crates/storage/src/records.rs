@@ -260,19 +260,18 @@ pub struct BackupSeriesEraseProgressRecord {
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
 /// `cursor_digest`; `same_device` / `same_session` match any cursor that
 /// resolves to the same authenticated `(account_id, device_id)` binding —
-/// soland's stateful cursor binds exact account + device (not a finer session
-/// handle), so `same_session` is enforced at the same `(account, device)`
-/// granularity as `same_device`. Entries are dropped once `expires_at` passes
-/// (the revoked cursor's maximum possible TTL).
+/// Revocation binds the exact account and immutable issuance identity. Group
+/// scopes additionally distinguish device and private issuing-session identity.
 #[derive(Clone, Debug)]
 pub struct CursorRevocation {
-    /// sha256 hex of the exact revoked `ak:cursor:` token (used by `this_cursor`).
+    /// sha256 hex of the verified immutable handle (used by `this_cursor`).
     pub cursor_digest: String,
     /// Exact authenticated account that requested the revocation.
     pub account_id: arkret_wire::AccountId,
     /// Bound device for `same_device` / `same_session` scope (the caller's
     /// session device); `None` for `this_cursor`.
     pub device_id: Option<String>,
+    pub session_id: Option<String>,
     /// `this_cursor` | `same_device` | `same_session`.
     pub scope: String,
     /// Client-supplied revocation reason (audited).

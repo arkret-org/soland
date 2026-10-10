@@ -212,6 +212,7 @@ struct EventsQueryParts {
 
 pub(super) fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
     match error {
+        SyncCursorError::Unavailable(message) => crate::app_error!(TemporarilyUnavailable, message),
         SyncCursorError::Expired => crate::app_error!(CursorExpired, "cursor has expired",),
         // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
         // `param_invalid` code with reason `invalid_cursor`.

@@ -28,7 +28,9 @@ pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::time::Duration;
 
 pub(crate) use arkret_identifiers::RealmId;
+#[cfg(test)]
 pub(crate) use base64::Engine;
+#[cfg(test)]
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(crate) use bytes::Bytes;
 pub(crate) use chrono::{DateTime, Utc};
@@ -58,10 +60,8 @@ pub(crate) use crate::wire::SyncRequestBody;
 /// Shared by `account_subscribe` (subscribe.rs) and `events_subscribe`
 /// (events_query.rs).
 pub(crate) const SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 10_000;
-/// Maximum lifetime of an issued sync cursor (mirrors the 1h TTL minted by
-/// [`sync_token_for_client_sync`]). A revocation record is retained for at
-/// least this long so a leaked cursor cannot outlive its revocation.
-pub(crate) const CURSOR_MAX_TTL_SECONDS: i64 = 3600;
+/// Group revocations cover all issuances until the stream TTL hard cap.
+pub(crate) const CURSOR_MAX_TTL_SECONDS: i64 = arkret_hlc::Cursor::STREAM_TTL_MAX_MS / 1000;
 /// `account_data_tombstone_retention_ms` is 90 days. This dominates the
 /// one-hour cursor TTL, so Station-CAS change records cannot be collected
 /// before every valid cursor that could name them has expired.

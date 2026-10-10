@@ -43,11 +43,9 @@ pub struct AccountGlobalVersion {
 
 /// Stateful sync-cursor handle binding (`cursor.schema.json` `h`).
 ///
-/// One row per distinct cursor content: the handle is an HMAC digest of the
-/// binding (subject, device, service, filter, purpose, positions/target),
-/// so re-minting an unchanged cursor upserts the same row instead of growing
-/// the table. Durable so a server restart does not invalidate every client's
-/// resume cursor with `cursor_integrity_invalid`.
+/// Each handle addresses an immutable issuance instance, including timestamps,
+/// progress and private issuing-session identity. A renewal gets a fresh handle.
+/// Durable records keep older retry authorities valid until their original expiry.
 ///
 /// `binding_subject` / `device_id` / `filter_digest` are `None` for generic
 /// service-level cursors (`sync_token_for_state`), which bind no session and
@@ -57,6 +55,7 @@ pub struct SyncCursorRecord {
     pub handle: String,
     pub binding_subject: Option<String>,
     pub device_id: Option<String>,
+    pub session_id: Option<String>,
     pub service_id: arkret_identifiers::DidCoreId,
     pub filter_digest: Option<String>,
     pub purpose: String,
@@ -67,7 +66,7 @@ pub struct SyncCursorRecord {
 }
 /// Durable handle table behind the stateful sync cursor.
 ///
-/// Reminted handles retain their original identity and extend retention only.
+/// Repeated insertion must match every immutable issuance field.
 /// Presenting another cursor never revokes older immutable retry authorities.
 #[async_trait]
 pub trait SyncCursorStore: Send + Sync {

@@ -348,6 +348,11 @@ async fn global_storage_failure_returns_503_without_reset_or_new_delivery_materi
         serde_json::to_value(frame).unwrap()["kind"],
         json!("resync_required")
     );
+    let before_corruption = diesel::sql_query(EFFECTS)
+        .get_result::<JsonRow>(&mut conn)
+        .await
+        .unwrap()
+        .value;
     assert!(
         diesel::sql_query(
             "UPDATE sync_cursor_handles SET expires_at_ms=0 WHERE purpose='realm_list'"
@@ -361,13 +366,37 @@ async fn global_storage_failure_returns_503_without_reset_or_new_delivery_materi
         "after": token, "catchup": true, "realm_list": {"after": list_token},
     }))
     .unwrap();
-    let frame = super::build_sync_snapshot(&state, Some(&session), &body, &after)
+    let refused = super::build_sync_snapshot(&state, Some(&session), &body, &after)
         .await
-        .unwrap();
-    frame.validate().unwrap();
+        .expect_err("a changed stored deadline cannot authorize a baseline reset");
+    assert_eq!(refused.status, 503);
+    let mut response = Response::new();
+    super::subscribe::account_response(
+        &mut Depot::new(),
+        &Request::new(),
+        &mut response,
+        state.clone(),
+        session,
+        body,
+        None,
+    )
+    .await;
+    let problem: arkret_wire::Problem = response.take_json().await.unwrap();
     assert_eq!(
-        serde_json::to_value(frame).unwrap()["kind"],
-        json!("resync_required")
+        problem.error_code(),
+        Some(arkret_wire::ErrorCode::CursorIntegrityInvalid)
+    );
+    assert_eq!(
+        problem.status,
+        arkret_wire::ErrorCode::CursorIntegrityInvalid.http_status()
+    );
+    assert_eq!(
+        diesel::sql_query(EFFECTS)
+            .get_result::<JsonRow>(&mut conn)
+            .await
+            .unwrap()
+            .value,
+        before_corruption
     );
 }
 
@@ -378,81 +407,6 @@ fn roster_actor(principal: &str) -> arkret_wire::ActorId {
     ))
 }
 
-fn stream_cursor_handle_binding(
-    principal_id: &str,
-    device_id: &str,
-    service_id: &str,
-    filter_digest: &str,
-    realms_positions: &BTreeMap<String, i64>,
-    account_realms_positions: &BTreeMap<String, i64>,
-    to_device_position: i64,
-) -> Vec<u8> {
-    let account_id = arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(principal_id.to_owned()).unwrap(),
-        arkret_wire::DidCoreId::new(service_id.to_owned()).unwrap(),
-    );
-    account_cursor_handle_binding(
-        Some(&account_id),
-        device_id,
-        filter_digest,
-        realms_positions,
-        account_realms_positions,
-        to_device_position,
-    )
-}
-
-#[test]
-fn account_cursor_binding_separates_same_core_at_different_stations() {
-    let principal_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
-    let station_a = arkret_wire::DidCoreId::new("ak:did_core:web:station-a.example").unwrap();
-    let station_b = arkret_wire::DidCoreId::new("ak:did_core:web:station-b.example").unwrap();
-    let account_a = arkret_wire::AccountId::new(principal_id.clone(), station_a);
-    let account_b = arkret_wire::AccountId::new(principal_id, station_b);
-    let positions = BTreeMap::new();
-    let bind = |account_id| {
-        account_cursor_handle_binding(
-            Some(account_id),
-            "ak:device:01904100-0000-7000-8000-000000000001",
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            &positions,
-            &positions,
-            0,
-        )
-    };
-    assert_eq!(bind(&account_a), bind(&account_a));
-    assert_ne!(bind(&account_a), bind(&account_b));
-}
-
-#[test]
-fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
-    let key = b"test-cursor-key-0123456789abcdef";
-    let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
-    let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
-    let binding = stream_cursor_handle_binding(
-        "ak:did_core:web:alice.example",
-        "ak:device:1",
-        "ak:did_core:web:host.example",
-        "fd0",
-        &realms,
-        &account_realms,
-        3,
-    );
-    let h1 = derive_cursor_handle(key, &binding);
-    let h2 = derive_cursor_handle(key, &binding);
-    assert_eq!(h1, h2, "same binding -> same handle");
-    assert!(
-        h1.len() >= arkret_hlc::CURSOR_HANDLE_MIN_LEN,
-        "handle >= 22 base64url chars"
-    );
-    assert!(
-        h1.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
-        "handle is base64url alphabet"
-    );
-}
-
-/// Wire-form token whose body carries `handle` as `h`, bypassing the encode-side
-/// validation so the decode chain is exercised with out-of-schema handles.
 fn cursor_token_with_handle(handle: &str, now: chrono::DateTime<chrono::Utc>) -> String {
     let issued_at = arkret_canonical::normalize_timestamp_canonical(now);
     let expires_at =
@@ -504,112 +458,6 @@ fn sync_cursor_decode_rejects_low_entropy_or_padded_handles() {
         "padded handle is not unpadded base64url"
     );
 }
-
-#[test]
-fn derive_cursor_handle_excludes_devices_timestamp() {
-    // The per-mint `devices` timestamp must NOT enter the binding, so two
-    // mints at different wall-clock times but identical realm/to_device
-    // positions yield the SAME handle (determinism / dedup).
-    let key = b"test-cursor-key-0123456789abcdef";
-    let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
-    let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
-    let a = stream_cursor_handle_binding(
-        "ak:did_core:web:principal.example",
-        "d",
-        "ak:did_core:web:station.example",
-        "f",
-        &realms,
-        &account_realms,
-        3,
-    );
-    let b = stream_cursor_handle_binding(
-        "ak:did_core:web:principal.example",
-        "d",
-        "ak:did_core:web:station.example",
-        "f",
-        &realms,
-        &account_realms,
-        3,
-    );
-    assert_eq!(derive_cursor_handle(key, &a), derive_cursor_handle(key, &b));
-}
-
-#[test]
-fn derive_cursor_handle_separates_bindings_and_keys() {
-    let realms = BTreeMap::from([("ak:realm:a".to_owned(), 7i64)]);
-    let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
-    let advanced_account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 12i64)]);
-    let base = stream_cursor_handle_binding(
-        "ak:did_core:web:principal.example",
-        "d",
-        "ak:did_core:web:station.example",
-        "f",
-        &realms,
-        &account_realms,
-        3,
-    );
-    let other_device = stream_cursor_handle_binding(
-        "ak:did_core:web:principal.example",
-        "d2",
-        "ak:did_core:web:station.example",
-        "f",
-        &realms,
-        &account_realms,
-        3,
-    );
-    let advanced = stream_cursor_handle_binding(
-        "ak:did_core:web:principal.example",
-        "d",
-        "ak:did_core:web:station.example",
-        "f",
-        &realms,
-        &account_realms,
-        4,
-    );
-    let advanced_account = stream_cursor_handle_binding(
-        "ak:did_core:web:principal.example",
-        "d",
-        "ak:did_core:web:station.example",
-        "f",
-        &realms,
-        &advanced_account_realms,
-        3,
-    );
-    let k1 = b"key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let k2 = b"key-bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    assert_ne!(
-        derive_cursor_handle(k1, &base),
-        derive_cursor_handle(k1, &other_device),
-        "different device -> different handle (no cross-device forgery)"
-    );
-    assert_ne!(
-        derive_cursor_handle(k1, &base),
-        derive_cursor_handle(k1, &advanced),
-        "advanced to_device position -> different handle"
-    );
-    assert_ne!(
-        derive_cursor_handle(k1, &base),
-        derive_cursor_handle(k1, &advanced_account),
-        "advanced account projection position -> different handle"
-    );
-    assert_ne!(
-        derive_cursor_handle(k1, &base),
-        derive_cursor_handle(k2, &base),
-        "different server key -> different handle (unguessable without key)"
-    );
-}
-
-// ── Signal rail (`sync/signal.md`) ─────────────────────────────────────
-//
-// v1 has no presence or typing projection to test. `signal.md` section 1 makes
-// `signal_class` the only server-visible classification and puts the presence /
-// typing / receipt payload inside the Signal ciphertext, so the server cannot
-// aggregate device statuses or re-emit a "presence delta" — it has nothing to
-// aggregate. What replaced those projections is the relay delivery contract: a
-// per-subscriber-device watermark (deliver-once), the class TTL (section 2)
-// after which a record is no longer delivered, and the rule that a device never
-// receives its own Signal back. The tests below restate the old presence and
-// typing coverage against exactly those rules.
 
 fn signal_envelope(
     realm_id: &str,
@@ -1790,7 +1638,7 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
         parse_and_validate_events_query_cursor(&token, &state, Some(&session), &filter_b, now_ms)
             .await
             .expect_err("changed query-scope digest must reject cursor replay");
-    assert!(matches!(error, SyncCursorError::Mismatch(_)));
+    assert!(matches!(error, SyncCursorError::Integrity(_)));
 
     let error = parse_and_validate_sync_cursor(&token, &state, Some(&session), None, now_ms)
         .await
@@ -1859,7 +1707,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
 }
 
 #[tokio::test]
-async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_valid() {
+async fn renewed_issuance_uses_fresh_handle_and_keeps_old_token_valid() {
     let state = test_state();
     let session = roster_session(&state, "ak:did_core:web:alice.example");
     let positions = BTreeMap::from([("ak:realm:dedup-test".to_owned(), 7i64)]);
@@ -1889,10 +1737,10 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
             .expect("handle")
             .to_owned()
     };
-    assert_eq!(
+    assert_ne!(
         handle_of(&first),
         handle_of(&second),
-        "unchanged frontier re-mints the SAME deterministic handle (no churn)"
+        "new issuance cannot renew an old handle"
     );
 
     // Frontier advances -> a different handle; the OLD token still
@@ -1980,7 +1828,7 @@ async fn account_cursor_is_bound_to_its_account_and_filter() {
             parse_and_validate_sync_cursor(&token, &state, Some(session), Some(filter), now_ms)
                 .await
                 .expect_err("another Account or filter must not reuse the cursor");
-        assert!(matches!(error, SyncCursorError::Mismatch(_)), "{error:?}");
+        assert!(matches!(error, SyncCursorError::Integrity(_)), "{error:?}");
     }
 }
 
@@ -2000,8 +1848,7 @@ async fn presenting_a_newer_cursor_preserves_older_retry_authority() {
         1,
     )
     .await;
-    // Deterministic issued_at_ms is stamped at first mint; ensure the
-    // second mint lands strictly later on the ms clock.
+    // Keep the two issuance instants distinct for this retry test.
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let new_token =
         sync_token_for_client_sync(&state, Some(&session), None, positions, BTreeMap::new(), 2)
@@ -2024,9 +1871,10 @@ async fn presenting_a_newer_cursor_preserves_older_retry_authority() {
 #[tokio::test]
 async fn revoked_cursor_returns_revoked_error() {
     let state = test_state();
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
     let token = sync_token_for_client_sync(
         &state,
-        None,
+        Some(&session),
         None,
         BTreeMap::from([("ak:realm:revoke-test".to_owned(), 3)]),
         BTreeMap::new(),
@@ -2034,26 +1882,29 @@ async fn revoked_cursor_returns_revoked_error() {
     )
     .await;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+    parse_and_validate_sync_cursor(&token, &state, Some(&session), None, now_ms)
         .await
         .expect("freshly issued cursor validates");
 
     state
         .sync()
-        .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
-            cursor_digest: sha256_hex(token.as_bytes()),
+        .record_cursor_revocation(&soland_services::sync::CursorRevocationState {
+            cursor_digest: sha256_hex(arkret_hlc::Cursor::decode(&token).unwrap().h.as_bytes()),
             account_id: arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
                 state.service_core_id(),
             ),
             device_id: None,
+            session_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "compromised".to_owned(),
             revoked_at: now(),
             expires_at: now() + chrono::Duration::seconds(CURSOR_MAX_TTL_SECONDS),
-        });
+        })
+        .await
+        .unwrap();
 
-    let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+    let error = parse_and_validate_sync_cursor(&token, &state, Some(&session), None, now_ms)
         .await
         .expect_err("revoked cursor must fail validation");
     assert!(
@@ -2063,11 +1914,532 @@ async fn revoked_cursor_returns_revoked_error() {
 }
 
 #[tokio::test]
-async fn expired_revocation_entry_is_pruned_and_does_not_block() {
+async fn cursor_issuance_and_revocation_security_boundaries() {
     let state = test_state();
+    let mut first = roster_session(&state, "ak:did_core:web:alice.example");
+    first.token_hash = "session-one".into();
+    let mut second = first.clone();
+    second.token_hash = "session-two".into();
     let token = sync_token_for_client_sync(
         &state,
+        Some(&first),
         None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        7,
+    )
+    .await;
+    let other = sync_token_for_client_sync(
+        &state,
+        Some(&second),
+        None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        7,
+    )
+    .await;
+    let decoded = arkret_hlc::Cursor::decode(&token).unwrap();
+    let original = state.sync().cursor(&decoded.h).await.unwrap().unwrap();
+    assert_eq!(original.session_id.as_deref(), Some("session-one"));
+    let mut changed = original.clone();
+    changed.expires_at_ms += 1_000;
+    assert!(state.sync().upsert_cursor(&changed).await.is_err());
+    assert_eq!(
+        state
+            .sync()
+            .cursor(&decoded.h)
+            .await
+            .unwrap()
+            .unwrap()
+            .expires_at_ms,
+        original.expires_at_ms
+    );
+    let mut tampered = decoded.clone();
+    tampered.expires_at += chrono::Duration::seconds(1);
+    let error = parse_and_validate_sync_cursor(
+        &tampered.encode().unwrap(),
+        &state,
+        Some(&first),
+        None,
+        Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, SyncCursorError::Integrity(_)), "{error:?}");
+    let at = arkret_canonical::normalize_timestamp_canonical(Utc::now());
+    let revocation = soland_services::sync::CursorRevocationState {
+        cursor_digest: sha256_hex(decoded.h.as_bytes()),
+        account_id: arkret_wire::AccountId::new(
+            first.actor.clone().parse().unwrap(),
+            state.service_core_id(),
+        ),
+        device_id: Some(first.require_human_device_id().clone()),
+        session_id: Some(first.token_hash.clone()),
+        scope: "same_session".into(),
+        reason_code: "compromised".into(),
+        revoked_at: at,
+        expires_at: at + chrono::Duration::days(7),
+    };
+    state
+        .sync()
+        .record_cursor_revocation(&revocation)
+        .await
+        .unwrap();
+    let mut repeated = revocation.clone();
+    repeated.revoked_at += chrono::Duration::seconds(1);
+    repeated.expires_at += chrono::Duration::seconds(1);
+    state
+        .sync()
+        .record_cursor_revocation(&repeated)
+        .await
+        .unwrap();
+    let ledger = state.sync().active_cursor_revocations(at).await.unwrap();
+    assert_eq!(ledger.len(), 1);
+    assert_eq!(ledger[0].expires_at, revocation.expires_at);
+    assert_eq!(ledger[0].session_id.as_deref(), Some("session-one"));
+    assert!(matches!(
+        parse_and_validate_sync_cursor(
+            &token,
+            &state,
+            Some(&first),
+            None,
+            Utc::now().timestamp_millis()
+        )
+        .await,
+        Err(SyncCursorError::Revoked)
+    ));
+    parse_and_validate_sync_cursor(
+        &other,
+        &state,
+        Some(&second),
+        None,
+        Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap();
+    let foreign = roster_session(&state, "ak:did_core:web:bob.example");
+    assert!(matches!(
+        parse_and_validate_sync_cursor(
+            &token,
+            &state,
+            Some(&foreign),
+            None,
+            Utc::now().timestamp_millis()
+        )
+        .await,
+        Err(SyncCursorError::Integrity(_))
+    ));
+    assert_eq!(
+        state
+            .sync()
+            .cursor(&decoded.h)
+            .await
+            .unwrap()
+            .unwrap()
+            .positions,
+        original.positions
+    );
+}
+
+#[tokio::test]
+async fn barrier_cursor_requires_readable_exact_committed_history() {
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+    let state = test_state();
+    let store = state.test_persistence();
+    let genesis = PcrGenesisFixture::new(state.service_did());
+    let device = genesis.admit_founding_device(store.as_ref()).await.unwrap();
+    let account = genesis.history.account.clone();
+    let mut session = roster_session(&state, account.principal_id.as_str());
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: device.device_id,
+    };
+    let realm = CommittedRealm::bootstrap(
+        store.as_ref(),
+        &account,
+        state.service_verification_method("notary-key").unwrap(),
+    )
+    .await;
+    let target = realm.head.event.event_id.to_string();
+    let barrier = arkret_hlc::Cursor::new_at(Utc::now(), 60_000)
+        .unwrap()
+        .with_barrier();
+    let record = CursorState {
+        handle: barrier.h.clone(),
+        binding_subject: Some(
+            String::from_utf8(arkret_canonical::canonical_json_bytes(&account).unwrap()).unwrap(),
+        ),
+        device_id: Some(session.require_human_device_id().clone()),
+        session_id: Some(session.token_hash.clone()),
+        service_id: state.service_core_id(),
+        filter_digest: None,
+        purpose: "barrier".into(),
+        positions: None,
+        target: Some(json!({"event_id":target})),
+        issued_at_ms: barrier.issued_at.timestamp_millis(),
+        expires_at_ms: barrier.expires_at.timestamp_millis(),
+    };
+    state.sync().upsert_cursor(&record).await.unwrap();
+    let token = barrier.encode().unwrap();
+    assert_eq!(
+        parse_and_validate_barrier_cursor(&token, &state, &session, Utc::now().timestamp_millis())
+            .await
+            .unwrap(),
+        target
+    );
+    let mut other = session.clone();
+    other.actor = "ak:did_core:web:foreign.example".into();
+    assert!(matches!(
+        parse_and_validate_barrier_cursor(&token, &state, &other, Utc::now().timestamp_millis())
+            .await,
+        Err(SyncCursorError::Integrity(_))
+    ));
+    let missing = arkret_hlc::Cursor::new_at(Utc::now(), 60_000)
+        .unwrap()
+        .with_barrier();
+    let mut missing_record = record;
+    missing_record.handle = missing.h.clone();
+    missing_record.issued_at_ms = missing.issued_at.timestamp_millis();
+    missing_record.expires_at_ms = missing.expires_at.timestamp_millis();
+    missing_record.target = Some(
+        json!({"event_id":arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, arkret_canonical::sha256_bytes(b"missing-barrier-event"))}),
+    );
+    state.sync().upsert_cursor(&missing_record).await.unwrap();
+    assert!(matches!(
+        parse_and_validate_barrier_cursor(
+            &missing.encode().unwrap(),
+            &state,
+            &session,
+            Utc::now().timestamp_millis()
+        )
+        .await,
+        Err(SyncCursorError::Integrity(_))
+    ));
+}
+
+#[tokio::test]
+async fn barrier_revoked_during_projection_timeout_refuses_without_issuing() {
+    use diesel::sql_types::{Jsonb, Text};
+    use diesel_async::RunQueryDsl as _;
+    use salvo::test::ResponseExt;
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
+    #[derive(diesel::QueryableByName)]
+    struct JsonRow {
+        #[diesel(sql_type = Jsonb)]
+        value: Value,
+    }
+    const EFFECTS: &str = "SELECT jsonb_build_object('cursors',(SELECT count(*) FROM sync_cursor_handles),'snapshots',(SELECT count(*) FROM realm_state_snapshot_issuances),'windows',(SELECT count(*) FROM realm_state_snapshot_window_reservations),'device_acks',(SELECT count(*) FROM device_message_ack_tokens),'agent_acks',(SELECT count(*) FROM agent_recipient_delivery_ack_tokens)) AS value";
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new_with_persistence(
+        config,
+        soland_storage_postgres::Db { pool: None },
+        std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(
+            pool.clone(),
+        )),
+    );
+    database.bind_device_inventory_station(state.service_id());
+    let store = state.test_persistence();
+    let genesis = PcrGenesisFixture::new(state.service_did());
+    let device = genesis.admit_founding_device(store.as_ref()).await.unwrap();
+    let account = genesis.history.account.clone();
+    let mut session = roster_session(&state, account.principal_id.as_str());
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: device.device_id,
+    };
+    let realm = CommittedRealm::bootstrap(
+        store.as_ref(),
+        &account,
+        state.service_verification_method("notary-key").unwrap(),
+    )
+    .await;
+    let target = realm.head.event.event_id.to_string();
+    let barrier = arkret_hlc::Cursor::new_at(Utc::now(), 60_000)
+        .unwrap()
+        .with_barrier();
+    state
+        .sync()
+        .upsert_cursor(&CursorState {
+            handle: barrier.h.clone(),
+            binding_subject: Some(
+                String::from_utf8(arkret_canonical::canonical_json_bytes(&account).unwrap())
+                    .unwrap(),
+            ),
+            device_id: Some(session.require_human_device_id().clone()),
+            session_id: Some(session.token_hash.clone()),
+            service_id: state.service_core_id(),
+            filter_digest: None,
+            purpose: "barrier".into(),
+            positions: None,
+            target: Some(json!({"event_id": target})),
+            issued_at_ms: barrier.issued_at.timestamp_millis(),
+            expires_at_ms: barrier.expires_at.timestamp_millis(),
+        })
+        .await
+        .unwrap();
+    let token = barrier.encode().unwrap();
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("DELETE FROM projection_events WHERE event_pk IN (SELECT pk FROM canonical_events WHERE envelope->>'event_id'=$1)")
+        .bind::<Text, _>(&target).execute(&mut conn).await.unwrap();
+    assert!(
+        state
+            .event_queries()
+            .projected_event(&target)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    parse_and_validate_barrier_cursor(&token, &state, &session, Utc::now().timestamp_millis())
+        .await
+        .unwrap();
+    let before = diesel::sql_query(EFFECTS)
+        .get_result::<JsonRow>(&mut conn)
+        .await
+        .unwrap()
+        .value;
+    let mut depot = Depot::new();
+    depot.insert_typed(soland_http::openapi_routes::WaitForSyncToken(token));
+    let mut response = Response::new();
+    let request = Request::new();
+    let body = serde_json::from_value(json!({"catchup": true})).unwrap();
+    let started = tokio::time::Instant::now();
+    tokio::join!(
+        Box::pin(super::subscribe::account_response(
+            &mut depot,
+            &request,
+            &mut response,
+            state.clone(),
+            session.clone(),
+            body,
+            None
+        )),
+        async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let at = arkret_canonical::normalize_timestamp_canonical(Utc::now());
+            state
+                .sync()
+                .record_cursor_revocation(&soland_services::sync::CursorRevocationState {
+                    cursor_digest: sha256_hex(barrier.h.as_bytes()),
+                    account_id: account,
+                    device_id: None,
+                    session_id: Some(session.token_hash.clone()),
+                    scope: "this_cursor".into(),
+                    reason_code: "compromised".into(),
+                    revoked_at: at,
+                    expires_at: barrier.expires_at,
+                })
+                .await
+                .unwrap();
+        }
+    );
+    assert!(started.elapsed() >= Duration::from_secs(25));
+    let problem: arkret_wire::Problem = response.take_json().await.unwrap();
+    assert_eq!(
+        problem.error_code(),
+        Some(arkret_wire::ErrorCode::CursorRevoked)
+    );
+    assert_eq!(
+        problem.status,
+        arkret_wire::ErrorCode::CursorRevoked.http_status()
+    );
+    assert_eq!(
+        diesel::sql_query(EFFECTS)
+            .get_result::<JsonRow>(&mut conn)
+            .await
+            .unwrap()
+            .value,
+        before
+    );
+}
+
+#[tokio::test]
+async fn cursor_revoke_http_rejects_unowned_unknown_and_tampered_targets_without_writes() {
+    use arkret_models_identity::account::{AccountCursorRevokeRequestBody, CursorRevokeScope};
+    use salvo::test::{ResponseExt, TestClient};
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+    let state = test_state();
+    let store = state.test_persistence();
+    let genesis = PcrGenesisFixture::new(state.service_did());
+    let device = genesis.admit_founding_device(store.as_ref()).await.unwrap();
+    let account = genesis.history.account.clone();
+    state
+        .identities()
+        .save_account(soland_services::identity::AccountProfileState {
+            pk: soland_storage::AccountPk(0),
+            principal_id: account.principal_id.clone(),
+            account_id: account.clone(),
+            localpart: "cursor-revoker".into(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let mut session = roster_session(&state, account.principal_id.as_str());
+    session.account_pk = Some(
+        state
+            .identities()
+            .account(&account)
+            .await
+            .unwrap()
+            .unwrap()
+            .pk,
+    );
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: device.device_id,
+    };
+    session.token_hash = crate::routing::identity::auth::session_credential_hash(
+        "cursor-revoker",
+        state.service_id(),
+    );
+    state
+        .sessions()
+        .create_session(session.clone())
+        .await
+        .unwrap();
+    let token = sync_token_for_client_sync(
+        &state,
+        Some(&session),
+        None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        7,
+    )
+    .await;
+    let decoded = arkret_hlc::Cursor::decode(&token).unwrap();
+    let mut foreign_session = session.clone();
+    foreign_session.actor = "ak:did_core:web:foreign.example".into();
+    let foreign = sync_token_for_client_sync(
+        &state,
+        Some(&foreign_session),
+        None,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        7,
+    )
+    .await;
+    let mut unknown = decoded.clone();
+    unknown.h = arkret_hlc::generate_cursor_handle().unwrap();
+    let mut tampered = decoded.clone();
+    tampered.expires_at += chrono::Duration::seconds(1);
+    let mut expired = decoded.clone();
+    expired.issued_at =
+        arkret_canonical::normalize_timestamp_canonical(Utc::now() - chrono::Duration::seconds(2));
+    expired.expires_at = expired.issued_at + chrono::Duration::seconds(1);
+    let post = |target: String| {
+        let body = AccountCursorRevokeRequestBody {
+            cursor: target,
+            reason_code: arkret_wire::ReasonCode::from_wire(
+                arkret_wire::ReasonCode::INVALID_CURSOR,
+            ),
+            revoke_scope: CursorRevokeScope::ThisCursor,
+        };
+        TestClient::post("http://localhost/_arkret/self/account/cursor/revoke")
+            .add_header("Authorization", "Bearer cursor-revoker", true)
+            .add_header("Content-Type", "application/json", true)
+            .body(
+                String::from_utf8(arkret_canonical::canonical_json_bytes(&body).unwrap()).unwrap(),
+            )
+    };
+    let router = || {
+        Router::with_path("_arkret/self/account/cursor/revoke")
+            .hoop(salvo::affix_state::inject(state.clone()))
+            .post(cursor::account_cursor_revoke)
+    };
+    let mut malformed = post("ak:cursor:01".into()).send(router()).await;
+    assert_eq!(malformed.status_code, Some(StatusCode::BAD_REQUEST));
+    let problem: Value = malformed.take_json().await.unwrap();
+    assert_eq!(problem["reason_code"], "invalid_cursor");
+    assert!(
+        state
+            .sync()
+            .active_cursor_revocations(Utc::now())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for target in [
+        foreign,
+        unknown.encode().unwrap(),
+        tampered.encode().unwrap(),
+    ] {
+        let response = post(target).send(router()).await;
+        assert_eq!(
+            response.status_code,
+            Some(soland_http::error::error_http_status(
+                soland_http::error::ErrorCode::CursorIntegrityInvalid
+            ))
+        );
+        assert!(
+            state
+                .sync()
+                .active_cursor_revocations(Utc::now())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        parse_and_validate_sync_cursor(
+            &token,
+            &state,
+            Some(&session),
+            None,
+            Utc::now().timestamp_millis(),
+        )
+        .await
+        .unwrap();
+    }
+    let response = post(expired.encode().unwrap()).send(router()).await;
+    assert_eq!(
+        response.status_code,
+        Some(soland_http::error::error_http_status(
+            soland_http::error::ErrorCode::CursorExpired
+        ))
+    );
+    assert!(
+        state
+            .sync()
+            .active_cursor_revocations(Utc::now())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        post(token.clone()).send(router()).await.status_code,
+        Some(StatusCode::OK)
+    );
+    let first = state
+        .sync()
+        .active_cursor_revocations(Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        first[0].expires_at.timestamp_millis(),
+        decoded.expires_at.timestamp_millis()
+    );
+    assert_eq!(
+        post(token).send(router()).await.status_code,
+        Some(StatusCode::OK)
+    );
+    let repeated = state
+        .sync()
+        .active_cursor_revocations(Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(repeated.len(), 1);
+    assert_eq!(repeated[0].expires_at, first[0].expires_at);
+}
+
+#[tokio::test]
+async fn expired_revocation_entry_is_pruned_and_does_not_block() {
+    let state = test_state();
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
+    let token = sync_token_for_client_sync(
+        &state,
+        Some(&session),
         None,
         BTreeMap::from([("ak:realm:revoke-gc".to_owned(), 1)]),
         BTreeMap::new(),
@@ -2077,25 +2449,33 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
     let now_ms = chrono::Utc::now().timestamp_millis();
     state
         .sync()
-        .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
-            cursor_digest: sha256_hex(token.as_bytes()),
+        .record_cursor_revocation(&soland_services::sync::CursorRevocationState {
+            cursor_digest: sha256_hex(arkret_hlc::Cursor::decode(&token).unwrap().h.as_bytes()),
             account_id: arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
                 state.service_core_id(),
             ),
             device_id: None,
+            session_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "stale".to_owned(),
             revoked_at: now() - chrono::Duration::seconds(2 * CURSOR_MAX_TTL_SECONDS),
             expires_at: now() - chrono::Duration::seconds(CURSOR_MAX_TTL_SECONDS),
-        });
+        })
+        .await
+        .unwrap();
 
-    parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
+    parse_and_validate_sync_cursor(&token, &state, Some(&session), None, now_ms)
         .await
         .expect("expired revocation entry must be pruned, not block a valid cursor");
     assert!(
-        state.sync().cached_cursor_revocation_count() == 0,
-        "expired revocation entry should have been pruned"
+        state
+            .sync()
+            .active_cursor_revocations(now())
+            .await
+            .unwrap()
+            .is_empty(),
+        "expired revocations must not appear in the active durable ledger"
     );
 }
 
@@ -2247,8 +2627,12 @@ async fn realm_list_snapshot_identity_is_stable_and_never_renews_its_deadline() 
         global_watermark,
         expires_at_ms: chrono::Utc::now().timestamp_millis() + 3_600_000,
         after: None,
+        snapshot_cursor: None,
     };
     let first = realm_list_token(&state, &session, &position).await.unwrap();
+    position = parse_realm_list_cursor(&state, &session, first.as_str())
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(5)).await;
     let repeated = realm_list_token(&state, &session, &position).await.unwrap();
     assert_eq!(

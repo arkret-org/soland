@@ -1342,13 +1342,11 @@ impl PersistenceHandle {
         &self,
         runtime_settings: Arc<dyn RuntimeSettingsPort>,
         runtime_health: Arc<dyn RuntimeHealthPort>,
-        sync_cursor_hmac_key: [u8; 32],
     ) -> PersistenceOperationalServices {
         build_persistence_operational_services(
             self.persistence.clone(),
             runtime_settings,
             runtime_health,
-            sync_cursor_hmac_key,
         )
     }
 

@@ -1,4 +1,4 @@
-//! Stateful sync-cursor lifecycle: token minting, HMAC handle derivation,
+//! Stateful sync-cursor lifecycle: immutable token minting,
 //! durable handle persistence, parse/validate, revocation, and the EventsSubscribe
 //! dropped/resync frame helper. Shared with sibling routing modules through
 //! `sync.rs` re-exports.
@@ -38,6 +38,7 @@ pub enum SyncCursorError {
     Invalid(&'static str),
     Mismatch(&'static str),
     Integrity(&'static str),
+    Unavailable(&'static str),
     Expired,
     /// The cursor authority was revoked via `ak.self.account.command.revoke_cursor.v1`.
     /// Surfaced as `cursor_revoked`; MUST be raised before any server-side
@@ -60,20 +61,16 @@ pub(crate) async fn committed_stream_cursor(
 ) -> Result<String, SyncCursorError> {
     let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
     let target = json!({"endpoint":endpoint});
-    let binding = arkret_canonical::canonical_json_bytes(&json!({
-        "purpose":COMMITTED_STREAM_CURSOR_PURPOSE,"subject":subject,"device":device,
-        "service":state.service_core_id(),"filter_digest":filter_digest,"positions":positions,"target":target
-    })).map_err(|_| SyncCursorError::Integrity("invalid committed stream binding"))?;
-    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(Utc::now(), 3_600_000)
-        .map_err(|_| SyncCursorError::Integrity("invalid committed stream expiry"))?
-        .with_stateful_handle(handle.clone());
+        .map_err(|_| SyncCursorError::Integrity("invalid committed stream expiry"))?;
+    let handle = cursor.h.clone();
     state
         .sync()
         .upsert_cursor(&CursorState {
             handle,
             binding_subject: Some(subject),
             device_id: device,
+            session_id: Some(session.token_hash.clone()),
             service_id: state.service_core_id(),
             filter_digest: Some(filter_digest.to_owned()),
             purpose: COMMITTED_STREAM_CURSOR_PURPOSE.to_owned(),
@@ -96,37 +93,107 @@ pub(crate) async fn parse_committed_stream_cursor(
     token: &str,
 ) -> Result<Value, SyncCursorError> {
     let now_ms = Utc::now().timestamp_millis();
-    let cursor = decode_sync_cursor(token, now_ms)?;
+    let cursor = decode_sync_cursor_for(token, now_ms, &arkret_hlc::CursorPurpose::Stream)?;
     if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
-        return Err(SyncCursorError::Mismatch(
+        return Err(SyncCursorError::Invalid(
             "committed stream outer purpose mismatch",
         ));
     }
-    if session.agent_session().is_none()
-        && cursor_authority_revoked(state, token, Some(session), now_ms)
-    {
-        return Err(SyncCursorError::Revoked);
-    }
-    let stored = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
+    let stored = stored_sync_cursor_record_by_handle(state, &cursor.h).await?;
     let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
-    if stored.purpose != COMMITTED_STREAM_CURSOR_PURPOSE
-        || stored.service_id != state.service_core_id()
-        || stored.binding_subject.as_deref() != Some(subject.as_str())
-        || stored.device_id != device
-        || stored.filter_digest.as_deref() != Some(filter_digest)
-        || stored.target != Some(json!({"endpoint":endpoint}))
-    {
-        return Err(SyncCursorError::Mismatch(
-            "committed stream cursor binding mismatch",
-        ));
-    }
-    if stored.expires_at_ms <= now_ms {
-        return Err(SyncCursorError::Expired);
+    validate_sync_binding(
+        &cursor,
+        &stored,
+        &subject,
+        device,
+        state.service_core_id(),
+        COMMITTED_STREAM_CURSOR_PURPOSE,
+        Some(filter_digest),
+        Some(json!({"endpoint":endpoint})),
+        now_ms,
+    )?;
+    if cursor_authority_revoked(state, &cursor, &stored, now_ms).await? {
+        return Err(SyncCursorError::Revoked);
     }
     stored.positions.ok_or(SyncCursorError::Integrity(
         "committed stream positions absent",
     ))
 }
+fn validate_sync_binding(
+    cursor: &arkret_hlc::Cursor,
+    stored: &CursorState,
+    subject: &str,
+    device: Option<String>,
+    service: DidCoreId,
+    operation: &str,
+    filter: Option<&str>,
+    target_scope: Option<Value>,
+    now_ms: i64,
+) -> Result<(), SyncCursorError> {
+    use arkret_server::{CursorAuthority, CursorBindingContext, CursorBindingRecord};
+    let digest = |operation: &str, filter: Option<&str>, target: Option<Value>| {
+        arkret_server::cursor_filter_digest(&json!({
+            "operation": operation, "filter": filter, "target": target
+        }))
+        .map_err(|_| SyncCursorError::Integrity("invalid cursor scope"))
+    };
+    let purpose = if stored.purpose == BARRIER_CURSOR_PURPOSE {
+        arkret_hlc::CursorPurpose::Barrier
+    } else {
+        arkret_hlc::CursorPurpose::Stream
+    };
+    let expected_purpose = if operation == BARRIER_CURSOR_PURPOSE {
+        arkret_hlc::CursorPurpose::Barrier
+    } else {
+        arkret_hlc::CursorPurpose::Stream
+    };
+    let stored_scope = match operation {
+        COMMITTED_STREAM_CURSOR_PURPOSE => stored.target.clone(),
+        DEVICE_MESSAGES_CURSOR_PURPOSE => stored
+            .target
+            .as_ref()
+            .and_then(|value| value.get("endpoint"))
+            .cloned(),
+        _ => None,
+    };
+    let record = CursorBindingRecord {
+        handle: stored.handle.clone(),
+        context: CursorBindingContext::new(
+            stored
+                .binding_subject
+                .as_deref()
+                .ok_or(SyncCursorError::Integrity("missing cursor subject"))?,
+            stored.device_id.clone(),
+            stored.service_id.clone(),
+            digest(
+                &stored.purpose,
+                stored.filter_digest.as_deref(),
+                stored_scope,
+            )?,
+        ),
+        purpose,
+        positions: Value::Null,
+        issued_at_ms: stored.issued_at_ms,
+        expires_at_ms: stored.expires_at_ms,
+    };
+    let expected = CursorBindingContext::new(
+        subject,
+        device,
+        service,
+        digest(operation, filter, target_scope)?,
+    );
+    CursorAuthority::validate_binding(cursor, &expected_purpose, &expected, Some(&record), now_ms)
+        .map_err(|error| match error {
+            arkret_server::CursorAuthorityError::Expired => SyncCursorError::Expired,
+            arkret_server::CursorAuthorityError::ParamInvalid(_) => {
+                SyncCursorError::Invalid("invalid canonical cursor or context purpose")
+            }
+            arkret_server::CursorAuthorityError::IntegrityInvalid => {
+                SyncCursorError::Integrity("cursor issuance or request binding mismatch")
+            }
+        })
+}
+
 pub(crate) const DEVICE_MESSAGES_CURSOR_PURPOSE: &str = "ak.self.device_messages.read.list.v1";
 #[cfg(test)]
 pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
@@ -219,23 +286,6 @@ pub(crate) async fn sync_token_for_account_positions(
         "detail_next_realm": detail_next_realm,
         "detail_filter": filter.cloned().unwrap_or_else(|| json!({}))
     });
-    // Deterministic handle: HMAC over the binding content (positions
-    // included, with no per-mint wall-clock stamp), so an
-    // unchanged frontier re-mints the SAME handle and the upsert only
-    // refreshes the row's expiry instead of growing the table.
-    let binding = account_cursor_handle_binding(
-        account_id.as_ref(),
-        &device_id,
-        &filter_digest,
-        &realms_positions,
-        &account_realms_positions,
-        to_device_position,
-    );
-    let binding = arkret_canonical::canonical_json_bytes(&json!({
-        "purpose": ACCOUNT_STREAM_CURSOR_PURPOSE, "account_positions": binding, "account_summary": account_summary_position, "account_data_change": account_data_change_position, "global_baseline": global_baseline,
-        "detail_positions":detail_positions,"detail_turn":detail_turn,"detail_next_realm":detail_next_realm
-    })).expect("account position binding is JSON");
-    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let global_deadline = match global_baseline.as_ref() {
         Some(progress) => {
             let completed = progress.get("completed").ok_or(SyncCursorError::Integrity(
@@ -279,8 +329,8 @@ pub(crate) async fn sync_token_for_account_positions(
         return Err(SyncCursorError::Expired);
     }
     let cursor = arkret_hlc::Cursor::new_at(issued_at, ttl)
-        .map_err(|_| SyncCursorError::Integrity("invalid account cursor expiry"))?
-        .with_stateful_handle(handle.clone());
+        .map_err(|_| SyncCursorError::Integrity("invalid account cursor expiry"))?;
+    let handle = cursor.h.clone();
     let issued_at_ms = cursor.issued_at.timestamp_millis();
     let expires_at_ms = cursor.expires_at.timestamp_millis();
     state
@@ -289,6 +339,7 @@ pub(crate) async fn sync_token_for_account_positions(
             handle: handle.clone(),
             binding_subject: Some(binding_subject),
             device_id: Some(device_id),
+            session_id: session.map(|session| session.token_hash.clone()),
             service_id: DidCoreId::new(state.service_id().clone())
                 .expect("AppState service_id must be a validated DID core id"),
             filter_digest: Some(filter_digest),
@@ -319,12 +370,9 @@ pub(crate) async fn sync_token_for_events_query(
     let (account_id, device_id) = cursor_account_device(state, session);
     let binding_subject = cursor_binding_subject(account_id.as_ref());
     let target = json!({ "event_id": event_id });
-    let binding =
-        events_query_cursor_handle_binding(account_id.as_ref(), &device_id, filter_digest, &target);
-    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
-        .expect("one-hour stream cursor is valid")
-        .with_stateful_handle(handle.clone());
+        .expect("one-hour stream cursor is valid");
+    let handle = cursor.h.clone();
     let issued_at_ms = cursor.issued_at.timestamp_millis();
     let expires_at_ms = cursor.expires_at.timestamp_millis();
     upsert_sync_cursor_record(
@@ -333,6 +381,7 @@ pub(crate) async fn sync_token_for_events_query(
             handle: handle.clone(),
             binding_subject: Some(binding_subject),
             device_id: Some(device_id),
+            session_id: session.map(|session| session.token_hash.clone()),
             service_id: DidCoreId::new(state.service_id().clone())
                 .expect("AppState service_id must be a validated DID core id"),
             filter_digest: Some(filter_digest.to_owned()),
@@ -354,78 +403,15 @@ pub(crate) fn encode_sync_cursor_value(cursor: Value) -> String {
     format!("ak:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// Deterministic, unguessable stateful cursor handle.
-///
-/// `handle = base64url( HMAC-SHA256(cursor_key, canonical_binding)[..16] )`.
-///
-/// Keyed (HMAC, not a bare hash): a bare hash of the binding inputs — all of
-/// which a caller knows (its own/another device id, the realm positions) —
-/// would be forgeable, letting an attacker mint a victim device's handle and
-/// advance its `to_device` ack to prune undelivered Welcomes. The server-secret
-/// `cursor_key` makes the handle unguessable while keeping it deterministic, so
-/// identical bindings (same positions) map to the same handle (no per-poll
-/// churn, no new row). 16 bytes → 128 bits → ≥22 base64url chars, satisfying
-/// `cursor.schema.json` `h`.
-pub(crate) fn derive_cursor_handle(cursor_key: &[u8], canonical_binding: &[u8]) -> String {
-    use hmac::{Hmac, KeyInit, Mac};
-    use sha2::Sha256;
-    let mut mac = <Hmac<Sha256>>::new_from_slice(cursor_key).expect("HMAC accepts any key length");
-    mac.update(canonical_binding);
-    let tag = mac.finalize().into_bytes();
-    URL_SAFE_NO_PAD.encode(&tag[..16])
-}
-
-pub(crate) fn account_cursor_handle_binding(
-    account_id: Option<&arkret_wire::AccountId>,
-    device_id: &str,
-    filter_digest: &str,
-    realms_positions: &BTreeMap<String, i64>,
-    account_realms_positions: &BTreeMap<String, i64>,
-    to_device_position: i64,
-) -> Vec<u8> {
-    let binding = json!({
-        "account_id": account_id,
-        "device_id": device_id,
-        "filter_digest": filter_digest,
-        "purpose": ACCOUNT_STREAM_CURSOR_PURPOSE,
-        "realms": realms_positions,
-        "account_realms": account_realms_positions,
-        "to_device": to_device_position,
-    });
-    arkret_canonical::canonical_json_bytes(&binding)
-        .unwrap_or_else(|_| binding.to_string().into_bytes())
-}
-
-#[cfg(test)]
-pub(crate) fn events_query_cursor_handle_binding(
-    account_id: Option<&arkret_wire::AccountId>,
-    device_id: &str,
-    filter_digest: &str,
-    target: &Value,
-) -> Vec<u8> {
-    let binding = json!({
-        "account_id": account_id,
-        "device_id": device_id,
-        "filter_digest": filter_digest,
-        "purpose": STREAM_CURSOR_PURPOSE,
-        "target": target,
-    });
-    arkret_canonical::canonical_json_bytes(&binding)
-        .unwrap_or_else(|_| binding.to_string().into_bytes())
-}
-
 /// How often the durable sync-cursor handle table is swept for expired rows.
-/// Stream cursors live 1h, so a 15-minute cadence keeps the table within a
-/// small constant factor of the active-stream count without measurable load
-/// (one indexed DELETE per pass).
+/// Each retry instance survives until its own expiry. Retained row count
+/// depends on issuance frequency; the indexed batch sweep bounds each pass.
 const SYNC_CURSOR_TTL_SWEEP_INTERVAL: Duration = Duration::from_secs(900);
 
 /// Spawn the periodic TTL sweep for the durable sync-cursor handle table.
 ///
-/// Forward-progress pruning (on cursor presentation) already caps per-stream
-/// rows; this sweep is the backstop that clears rows whose client never came
-/// back, replacing the old lookup-time-only lazy deletion that let
-/// superseded handles accumulate until restart.
+/// Immutable unexpired retry instances survive newer progress. Only the
+/// independent sweeper reclaims expired rows; refusal paths do not delete.
 pub fn spawn_sync_cursor_ttl_sweeper(
     state: AppState,
 ) -> std::sync::Arc<tokio::task::JoinHandle<()>> {
@@ -472,7 +458,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
 }
 
 #[cfg(test)]
-/// Persist (or expiry-refresh) the handle row behind a freshly-minted cursor.
+/// Persist the immutable row behind a test issuance.
 ///
 /// A failed write is downgraded to a warning rather than failing the sync
 /// response: the client still gets its data, and if the row never lands the
@@ -482,14 +468,6 @@ async fn upsert_sync_cursor_record(state: &AppState, record: CursorState) {
     if let Err(error) = state.sync().upsert_cursor(&record).await {
         tracing::warn!(%error, handle = %record.handle, "sync cursor handle upsert failed");
     }
-}
-
-async fn stored_sync_cursor_by_handle(
-    state: &AppState,
-    handle: &str,
-) -> Result<Value, SyncCursorError> {
-    let record = stored_sync_cursor_record_by_handle(state, handle).await?;
-    Ok(stored_value_from_sync_cursor_record(record))
 }
 
 async fn stored_sync_cursor_record_by_handle(
@@ -502,43 +480,9 @@ async fn stored_sync_cursor_record_by_handle(
         .await
         .map_err(|error| {
             tracing::warn!(%error, handle, "sync cursor handle lookup failed");
-            SyncCursorError::Integrity("sync cursor handle lookup failed")
+            SyncCursorError::Unavailable("sync cursor handle lookup failed")
         })?
         .ok_or(SyncCursorError::Integrity("sync cursor handle is unknown"))
-}
-
-/// Rebuild the in-memory `{ctx, positions, target?, expires_at_ms}` stored
-/// shape from a persisted row. Generic rows reconstruct a ctx WITHOUT
-/// `binding_subject`/`device_id`, which `parse_and_validate_sync_cursor` rejects
-/// by construction.
-fn stored_value_from_sync_cursor_record(record: CursorState) -> Value {
-    let mut ctx = serde_json::Map::new();
-    if let Some(binding_subject) = record.binding_subject {
-        ctx.insert("binding_subject".to_owned(), Value::String(binding_subject));
-    }
-    if let Some(device_id) = record.device_id {
-        ctx.insert("device_id".to_owned(), Value::String(device_id));
-    }
-    ctx.insert(
-        "service_id".to_owned(),
-        Value::String(record.service_id.into_string()),
-    );
-    ctx.insert("purpose".to_owned(), Value::String(record.purpose));
-    if let Some(filter_digest) = record.filter_digest {
-        ctx.insert("filter_digest".to_owned(), Value::String(filter_digest));
-    }
-    ctx.insert("issued_at_ms".to_owned(), json!(record.issued_at_ms));
-    let mut stored = json!({
-        "ctx": Value::Object(ctx),
-        "expires_at_ms": record.expires_at_ms,
-    });
-    if let Some(positions) = record.positions {
-        stored["positions"] = positions;
-    }
-    if let Some(target) = record.target {
-        stored["target"] = target;
-    }
-    stored
 }
 
 fn cursor_position_map(
@@ -581,87 +525,41 @@ pub(crate) async fn parse_account_cursor(
     now_ms: i64,
     replace_filter: bool,
 ) -> Result<SyncCursor, SyncCursorError> {
-    let cursor = decode_sync_cursor(token, now_ms)?;
+    let cursor = decode_sync_cursor_for(token, now_ms, &arkret_hlc::CursorPurpose::Stream)?;
     if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
         return Err(SyncCursorError::Invalid(
             "after must be a v1 account cursor",
         ));
     }
-    // Revocation is checked before TTL / integrity so a revoked authority
-    // always surfaces `cursor_revoked` and never advances server-side state
-    // (to-device ack, subscribe resume, wait-for barrier, dropped recovery).
-    // `this_cursor` matches the exact token by digest; `same_device` /
-    // `same_session` match the authenticated session's (principal, device),
-    // which the cursor is bound to and re-verified against below.
-    if cursor_authority_revoked(state, token, session, now_ms) {
+    let record = stored_sync_cursor_record_by_handle(state, &cursor.h).await?;
+    let (account, device) = cursor_account_device(state, session);
+    let expected_filter = account_filter_digest(filter);
+    let binding_filter = if replace_filter {
+        record
+            .filter_digest
+            .as_deref()
+            .ok_or(SyncCursorError::Integrity("missing cursor filter"))?
+    } else {
+        &expected_filter
+    };
+    validate_sync_binding(
+        &cursor,
+        &record,
+        &cursor_binding_subject(account.as_ref()),
+        Some(device),
+        state.service_core_id(),
+        ACCOUNT_STREAM_CURSOR_PURPOSE,
+        Some(binding_filter),
+        None,
+        now_ms,
+    )?;
+    if cursor_authority_revoked(state, &cursor, &record, now_ms).await? {
         return Err(SyncCursorError::Revoked);
     }
-    let handle = cursor.h.as_str();
-    let stored = stored_sync_cursor_by_handle(state, handle).await?;
-    if stored
-        .get("expires_at_ms")
-        .and_then(|expires_at| expires_at.as_i64())
-        .is_none_or(|expires_at| expires_at <= now_ms)
-    {
-        let _ = state.sync().delete_cursor(handle).await;
-        return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
-    }
-    let ctx = stored
-        .get("ctx")
-        .and_then(|ctx| ctx.as_object())
-        .ok_or(SyncCursorError::Integrity("cursor handle is missing ctx"))?;
-    let (expected_account_id, expected_device) = cursor_account_device(state, session);
-    let expected_binding_subject = cursor_binding_subject(expected_account_id.as_ref());
-    if ctx
-        .get("purpose")
-        .and_then(|purpose| purpose.as_str())
-        .is_none_or(|purpose| purpose != ACCOUNT_STREAM_CURSOR_PURPOSE)
-    {
-        return Err(SyncCursorError::Integrity(
-            "cursor handle purpose does not match account stream",
-        ));
-    }
-    if ctx
-        .get("binding_subject")
-        .and_then(|subject| subject.as_str())
-        .is_none_or(|subject| subject != expected_binding_subject.as_str())
-    {
-        return Err(SyncCursorError::Mismatch(
-            "cursor binding subject does not match request actor",
-        ));
-    }
-    if ctx
-        .get("device_id")
-        .and_then(|device| device.as_str())
-        .is_none_or(|device| device != expected_device.as_str())
-    {
-        return Err(SyncCursorError::Mismatch(
-            "cursor device does not match request device",
-        ));
-    }
-    if ctx
-        .get("service_id")
-        .and_then(|service| service.as_str())
-        .is_none_or(|service| service != state.service_id())
-    {
-        return Err(SyncCursorError::Mismatch(
-            "cursor service does not match this service DID",
-        ));
-    }
-    let expected_filter_digest = account_filter_digest(filter);
-    if !replace_filter
-        && ctx
-            .get("filter_digest")
-            .and_then(|filter_digest| filter_digest.as_str())
-            .is_none_or(|filter_digest| filter_digest != expected_filter_digest)
-    {
-        return Err(SyncCursorError::Mismatch(
-            "cursor filter digest does not match request filter",
-        ));
-    }
-    let positions_value = stored.get("positions").ok_or(SyncCursorError::Integrity(
-        "cursor handle is missing positions",
-    ))?;
+    let positions_value = record
+        .positions
+        .as_ref()
+        .ok_or(SyncCursorError::Integrity("missing account positions"))?;
     validate_account_positions_shape(positions_value)?;
     let mut positions = cursor_position_map(
         positions_value,
@@ -798,47 +696,27 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
             "events query cursor must be a ak:cursor token",
         ));
     }
-    let cursor = decode_sync_cursor(token, now_ms)?;
+    let cursor = decode_sync_cursor_for(token, now_ms, &arkret_hlc::CursorPurpose::Stream)?;
     if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
         return Err(SyncCursorError::Invalid(
             "cursor purpose does not match stream",
         ));
     }
-    if cursor_authority_revoked(state, token, session, now_ms) {
+    let record = stored_sync_cursor_record_by_handle(state, &cursor.h).await?;
+    let (account, device) = cursor_account_device(state, session);
+    validate_sync_binding(
+        &cursor,
+        &record,
+        &cursor_binding_subject(account.as_ref()),
+        Some(device),
+        state.service_core_id(),
+        STREAM_CURSOR_PURPOSE,
+        Some(filter_digest),
+        None,
+        now_ms,
+    )?;
+    if cursor_authority_revoked(state, &cursor, &record, now_ms).await? {
         return Err(SyncCursorError::Revoked);
-    }
-    let handle = cursor.h.as_str();
-    let record = stored_sync_cursor_record_by_handle(state, handle).await?;
-    if record.expires_at_ms <= now_ms {
-        let _ = state.sync().delete_cursor(handle).await;
-        return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
-    }
-    if record.purpose.as_str() != STREAM_CURSOR_PURPOSE {
-        return Err(SyncCursorError::Integrity(
-            "cursor handle purpose does not match stream",
-        ));
-    }
-    let (expected_account_id, expected_device) = cursor_account_device(state, session);
-    let expected_binding_subject = cursor_binding_subject(expected_account_id.as_ref());
-    if record.binding_subject.as_deref() != Some(expected_binding_subject.as_str()) {
-        return Err(SyncCursorError::Mismatch(
-            "cursor binding subject does not match request actor",
-        ));
-    }
-    if record.device_id.as_deref() != Some(expected_device.as_str()) {
-        return Err(SyncCursorError::Mismatch(
-            "cursor device does not match request device",
-        ));
-    }
-    if record.service_id.as_str() != state.service_id().as_str() {
-        return Err(SyncCursorError::Mismatch(
-            "cursor service does not match this service DID",
-        ));
-    }
-    if record.filter_digest.as_deref() != Some(filter_digest) {
-        return Err(SyncCursorError::Mismatch(
-            "cursor filter digest does not match request filter",
-        ));
     }
     let target = record
         .target
@@ -864,43 +742,27 @@ pub(crate) async fn parse_and_validate_barrier_cursor(
     session: &SessionIdentityState,
     now_ms: i64,
 ) -> Result<String, SyncCursorError> {
-    let cursor = decode_sync_cursor(token, now_ms)?;
+    let cursor = decode_sync_cursor_for(token, now_ms, &arkret_hlc::CursorPurpose::Barrier)?;
     if cursor.purpose != arkret_hlc::CursorPurpose::Barrier {
         return Err(SyncCursorError::Invalid(
             "X-Arkret-Wait-For requires a barrier cursor",
         ));
     }
-    if cursor_authority_revoked(state, token, Some(session), now_ms) {
+    let record = stored_sync_cursor_record_by_handle(state, &cursor.h).await?;
+    let (account, device) = cursor_account_device(state, Some(session));
+    validate_sync_binding(
+        &cursor,
+        &record,
+        &cursor_binding_subject(account.as_ref()),
+        Some(device),
+        state.service_core_id(),
+        BARRIER_CURSOR_PURPOSE,
+        None,
+        None,
+        now_ms,
+    )?;
+    if cursor_authority_revoked(state, &cursor, &record, now_ms).await? {
         return Err(SyncCursorError::Revoked);
-    }
-    let record = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
-    if record.expires_at_ms <= now_ms {
-        let _ = state.sync().delete_cursor(cursor.h.as_str()).await;
-        return Err(SyncCursorError::Integrity(
-            "barrier cursor handle has expired",
-        ));
-    }
-    if record.purpose != BARRIER_CURSOR_PURPOSE {
-        return Err(SyncCursorError::Integrity(
-            "cursor handle purpose does not match barrier",
-        ));
-    }
-    let (expected_account_id, _) = cursor_account_device(state, Some(session));
-    let expected_binding_subject = cursor_binding_subject(expected_account_id.as_ref());
-    if record.binding_subject.as_deref() != Some(expected_binding_subject.as_str()) {
-        return Err(SyncCursorError::Mismatch(
-            "barrier cursor binding subject does not match request actor",
-        ));
-    }
-    if record.device_id.as_deref() != Some(session.require_human_device_id().as_str()) {
-        return Err(SyncCursorError::Mismatch(
-            "barrier cursor device does not match request device",
-        ));
-    }
-    if record.service_id.as_str() != state.service_id() {
-        return Err(SyncCursorError::Mismatch(
-            "barrier cursor service does not match this service DID",
-        ));
     }
     let event_id = record
         .target
@@ -915,15 +777,65 @@ pub(crate) async fn parse_and_validate_barrier_cursor(
             "barrier cursor target must be an event id",
         ));
     }
+    let event_id_typed = arkret_wire::EventId::new(event_id.to_owned())
+        .map_err(|_| SyncCursorError::Integrity("invalid barrier target"))?;
+    let accepted = state
+        .event_queries()
+        .canonical_event(event_id)
+        .await
+        .map_err(|_| SyncCursorError::Unavailable("barrier history unavailable"))?
+        .ok_or(SyncCursorError::Integrity(
+            "barrier history cannot be proved",
+        ))?;
+    if !crate::routing::events::event_log::event_visible_to_session(state, &accepted, session).await
+    {
+        return Err(SyncCursorError::Integrity("barrier target is not readable"));
+    }
+    if record
+        .target
+        .as_ref()
+        .and_then(|target| target.get("event_digest"))
+        .and_then(Value::as_str)
+        .is_some_and(|digest| digest != accepted.canonical_digest)
+    {
+        return Err(SyncCursorError::Integrity("barrier target digest mismatch"));
+    }
+    let committed = state
+        .authority_commits()
+        .committed_event(&event_id_typed)
+        .await
+        .map_err(|_| SyncCursorError::Unavailable("barrier commit unavailable"))?
+        .ok_or(SyncCursorError::Integrity(
+            "barrier exact Commit cannot be proved",
+        ))?;
+    if committed.event.event_id != event_id_typed || committed.commit.event_ref != event_id_typed {
+        return Err(SyncCursorError::Integrity(
+            "barrier Commit identity mismatch",
+        ));
+    }
     Ok(event_id.to_owned())
 }
 
 fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_hlc::Cursor, SyncCursorError> {
     arkret_hlc::Cursor::decode_at(token, now_ms).map_err(|error| {
-        if error.to_string().contains("cursor has expired") {
+        if error.error_code() == Some(arkret_wire::ErrorCode::CursorExpired) {
             SyncCursorError::Expired
         } else {
             SyncCursorError::Invalid("cursor must use the canonical SDK wire profile")
+        }
+    })
+}
+
+fn decode_sync_cursor_for(
+    token: &str,
+    now_ms: i64,
+    purpose: &arkret_hlc::CursorPurpose,
+) -> Result<arkret_hlc::Cursor, SyncCursorError> {
+    arkret_hlc::Cursor::decode_for_purpose_at(token, now_ms, purpose).map_err(|error| {
+        if error.error_code() == Some(arkret_wire::ErrorCode::CursorExpired) {
+            SyncCursorError::Expired
+        } else {
+            SyncCursorError::Invalid("invalid canonical cursor or context purpose")
         }
     })
 }
@@ -1045,11 +957,50 @@ pub(super) async fn account_cursor_revoke(
     use soland_http::error::AppError;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    if session.human_device_id().is_none() {
+        return Err(crate::app_error!(
+            CapabilityDenied,
+            "cursor revocation requires an account device"
+        ));
+    }
     let body = body.into_inner();
 
-    let cursor = body.cursor.trim();
-    if !cursor.starts_with("ak:cursor:") || cursor.len() <= "ak:cursor:".len() {
-        return Err(AppError::param_invalid("cursor must be a ak:cursor token"));
+    let cursor = decode_sync_cursor(&body.cursor, chrono::Utc::now().timestamp_millis())
+        .map_err(cursor_revoke_error)?;
+    let record = stored_sync_cursor_record_by_handle(state, &cursor.h)
+        .await
+        .map_err(cursor_revoke_error)?;
+    let (account, device) = cursor_account_device(state, Some(&session));
+    // The caller cannot choose an operation/filter for revocation; the exact
+    // persisted instance supplies these, while ownership is always checked.
+    let scope_target = match record.purpose.as_str() {
+        COMMITTED_STREAM_CURSOR_PURPOSE => record.target.clone(),
+        DEVICE_MESSAGES_CURSOR_PURPOSE => record
+            .target
+            .as_ref()
+            .and_then(|v| v.get("endpoint"))
+            .cloned(),
+        _ => None,
+    };
+    validate_sync_binding(
+        &cursor,
+        &record,
+        &cursor_binding_subject(account.as_ref()),
+        Some(device),
+        state.service_core_id(),
+        &record.purpose,
+        record.filter_digest.as_deref(),
+        scope_target,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .map_err(cursor_revoke_error)?;
+    if body.revoke_scope == arkret_models_identity::account::CursorRevokeScope::SameSession
+        && record.session_id.as_deref() != Some(session.token_hash.as_str())
+    {
+        return Err(crate::app_error!(
+            CursorIntegrityInvalid,
+            "cursor session ownership mismatch"
+        ));
     }
     let reason_code = body.reason_code.as_str().trim();
     if reason_code.is_empty() {
@@ -1062,8 +1013,12 @@ pub(super) async fn account_cursor_revoke(
         arkret_models_identity::account::CursorRevokeScope::SameSession => "same_session",
     };
 
-    let revoked_at = now();
-    let expires_at = revoked_at + chrono::Duration::seconds(CURSOR_MAX_TTL_SECONDS);
+    let revoked_at = arkret_canonical::normalize_timestamp_canonical(now());
+    let expires_at = if scope == arkret_models_identity::account::CursorRevokeScope::ThisCursor {
+        cursor.expires_at
+    } else {
+        revoked_at + chrono::Duration::seconds(CURSOR_MAX_TTL_SECONDS)
+    };
     let device_id = if matches!(
         scope,
         arkret_models_identity::account::CursorRevokeScope::ThisCursor
@@ -1073,7 +1028,7 @@ pub(super) async fn account_cursor_revoke(
         Some(session.require_human_device_id().clone())
     };
     let application_record = soland_services::sync::CursorRevocationState {
-        cursor_digest: sha256_hex(cursor.as_bytes()),
+        cursor_digest: sha256_hex(cursor.h.as_bytes()),
         account_id: arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
                 AppError::internal(format!(
@@ -1083,16 +1038,13 @@ pub(super) async fn account_cursor_revoke(
             state.service_core_id(),
         ),
         device_id,
+        session_id: record.session_id.clone(),
         scope: scope_value.to_owned(),
         reason_code: reason_code.to_owned(),
         revoked_at,
         expires_at,
     };
-    // Durable first (fail-closed): a revocation that is only cached in
-    // memory would silently un-revoke on the next restart, which defeats
-    // the high-assurance purpose of this endpoint. Only after the ledger
-    // write succeeds do we update the in-memory cache that
-    // `cursor_authority_revoked` consults.
+    // Every consumer queries the durable ledger before advancing.
     state
         .sync()
         .record_cursor_revocation(&application_record)
@@ -1100,34 +1052,75 @@ pub(super) async fn account_cursor_revoke(
         .map_err(|error| {
             AppError::internal(format!("failed to persist cursor revocation: {error}"))
         })?;
-    state.sync().cache_cursor_revocation(application_record);
+    let entries = state
+        .sync()
+        .active_cursor_revocations(revoked_at)
+        .await
+        .map_err(|error| AppError::internal(format!("cannot reload cursor revocation: {error}")))?;
+    let effective_expiry = entries
+        .iter()
+        .find(|entry| {
+            entry.cursor_digest == application_record.cursor_digest
+                && entry.account_id == application_record.account_id
+                && entry.scope == application_record.scope
+        })
+        .ok_or_else(|| AppError::internal("cursor revocation missing after persistence"))?
+        .expires_at;
 
     crate::json_ok(
         arkret_models_identity::account::AccountCursorRevokeOutcome {
             revoked: true,
-            expires_at,
+            expires_at: effective_expiry,
             revoke_scope_effective: Some(scope),
         },
     )
 }
 
+pub(crate) fn cursor_revoke_error(error: SyncCursorError) -> soland_http::error::AppError {
+    match error {
+        SyncCursorError::Expired => crate::app_error!(CursorExpired, "cursor has expired"),
+        SyncCursorError::Unavailable(message) => crate::app_error!(TemporarilyUnavailable, message),
+        SyncCursorError::Revoked => {
+            crate::app_error!(CursorRevoked, "cursor authority has been revoked")
+        }
+        SyncCursorError::Invalid(message) => soland_http::error::AppError::param_invalid(message)
+            .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
+        _ => crate::app_error!(
+            CursorIntegrityInvalid,
+            "invalid cursor issuance or ownership"
+        ),
+    }
+}
+
 /// Returns `true` when `token` (or the authenticated session it is bound to)
-/// has an active revocation recorded by [`account_cursor_revoke`]. Prunes
-/// entries past their GC horizon as a side effect.
-fn cursor_authority_revoked(
+/// has an active revocation recorded by [`account_cursor_revoke`]. Reads the
+/// durable ledger without mutating cursor or revocation retention.
+pub(crate) async fn cursor_authority_revoked(
     state: &AppState,
-    token: &str,
-    session: Option<&SessionIdentityState>,
+    cursor: &arkret_hlc::Cursor,
+    record: &CursorState,
     now_ms: i64,
-) -> bool {
-    let digest = sha256_hex(token.as_bytes());
-    let (account_id, _) = cursor_account_device(state, session);
-    state.sync().cursor_authority_revoked(
-        &digest,
-        account_id.as_ref(),
-        session.map(|session| session.require_human_device_id().as_str()),
-        chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now),
-    )
+) -> Result<bool, SyncCursorError> {
+    let now = chrono::DateTime::from_timestamp_millis(now_ms)
+        .ok_or(SyncCursorError::Integrity("invalid cursor clock"))?;
+    let entries = state
+        .sync()
+        .active_cursor_revocations(now)
+        .await
+        .map_err(|_| SyncCursorError::Unavailable("cursor revocation ledger unavailable"))?;
+    let account: Option<arkret_wire::AccountId> = record
+        .binding_subject
+        .as_deref()
+        .and_then(|subject| serde_json::from_str(subject).ok());
+    let revoked = soland_services::sync::SyncService::revoked_in(
+        &entries,
+        &sha256_hex(cursor.h.as_bytes()),
+        account.as_ref(),
+        record.device_id.as_deref(),
+        record.session_id.as_deref(),
+        now,
+    );
+    Ok(revoked)
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -1136,6 +1129,7 @@ pub(crate) struct RealmListPosition {
     pub global_watermark: i64,
     pub expires_at_ms: i64,
     pub after: Option<soland_storage::AccountSummaryKey>,
+    pub snapshot_cursor: Option<arkret_wire::Cursor>,
 }
 
 pub(crate) async fn realm_list_token(
@@ -1147,28 +1141,36 @@ pub(crate) async fn realm_list_token(
     let subject = cursor_binding_subject(account.as_ref());
     let target = serde_json::to_value(position)
         .map_err(|_| SyncCursorError::Integrity("invalid list position"))?;
-    let binding = arkret_canonical::canonical_json_bytes(&json!({
-        "purpose": "realm_list", "account": subject, "device": device,
-        "service": state.service_id(), "target": target,
-    }))
-    .map_err(|_| SyncCursorError::Integrity("invalid list binding"))?;
-    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let now = chrono::Utc::now();
     let ttl = position.expires_at_ms - now.timestamp_millis();
     if ttl <= 0 {
         return Err(SyncCursorError::Expired);
     }
+    if let Some(snapshot_token) = position.snapshot_cursor.as_ref() {
+        let snapshot = parse_realm_list_cursor(state, session, snapshot_token.as_str()).await?;
+        if snapshot.after.is_some()
+            || snapshot.watermark != position.watermark
+            || snapshot.global_watermark != position.global_watermark
+            || snapshot.expires_at_ms != position.expires_at_ms
+        {
+            return Err(SyncCursorError::Integrity("list snapshot binding mismatch"));
+        }
+        if position.after.is_none() {
+            return Ok(snapshot_token.clone());
+        }
+    }
     let issued_at = chrono::DateTime::from_timestamp_millis(position.expires_at_ms - 3_600_000)
         .ok_or(SyncCursorError::Integrity("invalid list snapshot time"))?;
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 3_600_000)
-        .map_err(|_| SyncCursorError::Integrity("invalid list expiry"))?
-        .with_stateful_handle(handle.clone());
+        .map_err(|_| SyncCursorError::Integrity("invalid list expiry"))?;
+    let handle = cursor.h.clone();
     state
         .sync()
         .upsert_cursor(&CursorState {
             handle,
             binding_subject: Some(subject),
             device_id: Some(device),
+            session_id: Some(session.token_hash.clone()),
             service_id: state.service_core_id(),
             filter_digest: None,
             purpose: "realm_list".to_owned(),
@@ -1193,31 +1195,36 @@ pub(crate) async fn parse_realm_list_cursor(
     token: &str,
 ) -> Result<RealmListPosition, SyncCursorError> {
     let now = chrono::Utc::now().timestamp_millis();
-    let cursor = decode_sync_cursor(token, now)?;
-    if cursor_authority_revoked(state, token, Some(session), now) {
+    let cursor = decode_sync_cursor_for(token, now, &arkret_hlc::CursorPurpose::Stream)?;
+    let stored = stored_sync_cursor_record_by_handle(state, &cursor.h).await?;
+    let (account, device) = cursor_account_device(state, Some(session));
+    validate_sync_binding(
+        &cursor,
+        &stored,
+        &cursor_binding_subject(account.as_ref()),
+        Some(device),
+        state.service_core_id(),
+        "realm_list",
+        None,
+        None,
+        now,
+    )?;
+    if cursor_authority_revoked(state, &cursor, &stored, now).await? {
         return Err(SyncCursorError::Revoked);
     }
-    let stored = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
-    let (account, device) = cursor_account_device(state, Some(session));
-    if stored.purpose != "realm_list"
-        || stored.binding_subject.as_deref()
-            != Some(cursor_binding_subject(account.as_ref()).as_str())
-        || stored.device_id.as_deref() != Some(device.as_str())
-        || stored.service_id != state.service_core_id()
-    {
-        return Err(SyncCursorError::Mismatch(
-            "Realm list cursor binding mismatch",
-        ));
-    }
-    if stored.expires_at_ms <= now {
-        return Err(SyncCursorError::Expired);
-    }
-    serde_json::from_value(
+    let mut position: RealmListPosition = serde_json::from_value(
         stored
             .target
             .ok_or(SyncCursorError::Integrity("missing list position"))?,
     )
-    .map_err(|_| SyncCursorError::Integrity("invalid list position"))
+    .map_err(|_| SyncCursorError::Integrity("invalid list position"))?;
+    if position.after.is_none() && position.snapshot_cursor.is_none() {
+        position.snapshot_cursor = Some(
+            arkret_wire::Cursor::new(token.to_owned())
+                .map_err(|_| SyncCursorError::Integrity("invalid snapshot cursor"))?,
+        );
+    }
+    Ok(position)
 }
 
 /// Queue continuation has its own operation binding and never advances an account stream.
@@ -1260,17 +1267,16 @@ pub(crate) async fn device_messages_cursor(
 ) -> Result<String, SyncCursorError> {
     let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
     let target = json!({"queue_position":position,"endpoint":endpoint});
-    let binding=arkret_canonical::canonical_json_bytes(&json!({"purpose":DEVICE_MESSAGES_CURSOR_PURPOSE,"account":subject,"device":device,"service":state.service_id(),"target":target})).map_err(|_|SyncCursorError::Integrity("invalid queue binding"))?;
-    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(chrono::Utc::now(), 3_600_000)
-        .map_err(|_| SyncCursorError::Integrity("invalid queue expiry"))?
-        .with_stateful_handle(handle.clone());
+        .map_err(|_| SyncCursorError::Integrity("invalid queue expiry"))?;
+    let handle = cursor.h.clone();
     state
         .sync()
         .upsert_cursor(&CursorState {
             handle,
             binding_subject: Some(subject),
             device_id: device,
+            session_id: Some(session.token_hash.clone()),
             service_id: state.service_core_id(),
             filter_digest: None,
             purpose: DEVICE_MESSAGES_CURSOR_PURPOSE.to_owned(),
@@ -1292,42 +1298,30 @@ pub(crate) async fn parse_device_messages_cursor(
     session: &SessionIdentityState,
     now_ms: i64,
 ) -> Result<i64, SyncCursorError> {
-    let cursor = decode_sync_cursor(token, now_ms)?;
+    let cursor = decode_sync_cursor_for(token, now_ms, &arkret_hlc::CursorPurpose::Stream)?;
     if cursor.purpose != arkret_hlc::CursorPurpose::Stream {
-        return Err(SyncCursorError::Mismatch(
+        return Err(SyncCursorError::Invalid(
             "queue cursor outer purpose mismatch",
         ));
     }
-    if session.agent_session().is_none()
-        && cursor_authority_revoked(state, token, Some(session), now_ms)
-    {
-        return Err(SyncCursorError::Revoked);
-    }
-    let stored = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
+    let stored = stored_sync_cursor_record_by_handle(state, &cursor.h).await?;
     let (subject, device, endpoint) = recipient_queue_cursor_binding(state, session)?;
-    if stored.purpose != DEVICE_MESSAGES_CURSOR_PURPOSE
-        || stored.binding_subject.as_deref() != Some(subject.as_str())
-        || stored.device_id != device
-        || stored.service_id != state.service_core_id()
-        || stored.filter_digest.is_some()
-        || stored.positions.is_some()
-    {
-        return Err(SyncCursorError::Mismatch(
-            "device queue cursor binding mismatch",
-        ));
+    validate_sync_binding(
+        &cursor,
+        &stored,
+        &subject,
+        device,
+        state.service_core_id(),
+        DEVICE_MESSAGES_CURSOR_PURPOSE,
+        None,
+        Some(endpoint),
+        now_ms,
+    )?;
+    if stored.positions.is_some() {
+        return Err(SyncCursorError::Integrity("unexpected queue positions"));
     }
-    if stored.expires_at_ms <= now_ms {
-        return Err(SyncCursorError::Expired);
-    }
-    if stored
-        .target
-        .as_ref()
-        .and_then(|target| target.get("endpoint"))
-        != Some(&endpoint)
-    {
-        return Err(SyncCursorError::Mismatch(
-            "recipient queue cursor endpoint binding mismatch",
-        ));
+    if cursor_authority_revoked(state, &cursor, &stored, now_ms).await? {
+        return Err(SyncCursorError::Revoked);
     }
     stored
         .target

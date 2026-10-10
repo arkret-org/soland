@@ -274,6 +274,7 @@ mod tests {
             handle: "retained-list".into(),
             binding_subject: Some("account".into()),
             device_id: Some("device".into()),
+            session_id: None,
             service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example")
                 .unwrap(),
             filter_digest: None,
@@ -352,6 +353,7 @@ mod tests {
             handle: "detail-before-global".into(),
             binding_subject: Some("account".into()),
             device_id: Some("device".into()),
+            session_id: None,
             service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example")
                 .unwrap(),
             filter_digest: Some("digest".into()),
@@ -423,6 +425,7 @@ mod tests {
             handle: handle.into(),
             binding_subject: Some("account".into()),
             device_id: Some("device".into()),
+            session_id: None,
             service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example")
                 .unwrap(),
             filter_digest: Some("digest".into()),
