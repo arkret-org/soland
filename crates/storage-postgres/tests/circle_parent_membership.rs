@@ -203,8 +203,8 @@ async fn root_digest(pool: &PgPool, realm: &arkret_wire::RealmId) -> arkret_wire
 
 async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     // This matrix retains several exact requests across later assertions.
-    // Keep its nested admission/read futures on the heap as well as the outer
-    // matrix; boxing only the outer future still embeds all their state.
+    // Keep its native source/fixture futures on the heap as well as the outer
+    // matrix; the storage traits already return boxed futures themselves.
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
@@ -230,9 +230,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         "first join",
     );
     let realm_join = Box::pin(ordinary_realm::source_request(&pool, realm_join)).await;
-    Box::pin(uow.commit_event(realm_join.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(realm_join.clone()).await.unwrap();
     let create = Box::pin(ordinary_realm::source_request(&pool, sourced(ordinary_realm::next_request_for_actor(
         &realm_join.authority_commit,
         EventKind::CircleCreate,
@@ -244,7 +242,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
     )))).await;
-    Box::pin(uow.commit_event(create.clone())).await.unwrap();
+    uow.commit_event(create.clone()).await.unwrap();
     let circle = CircleId::from_event_id(&create.authority_commit.event.event_id);
     let stream = CommitStreamRef::Circle {
         realm_id: realm.clone(),
@@ -280,7 +278,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         }}),
         at,
     )))).await;
-    Box::pin(uow.commit_event(grant.clone())).await.unwrap();
+    uow.commit_event(grant.clone()).await.unwrap();
     let first_parent = ordinary_realm::parent_membership_revision(&pool, &realm, &alice).await;
     assert_eq!(
         first_parent,
@@ -298,7 +296,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     let missing = Box::pin(ordinary_realm::source_request(&pool, missing)).await;
     assert!(matches!(
-        Box::pin(uow.commit_event(missing)).await.unwrap_err(),
+        uow.commit_event(missing).await.unwrap_err(),
         PersistenceError::SchemaViolation(_)
     ));
     let mut foreign_revision = first_parent.clone();
@@ -316,7 +314,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         ),
     );
     let foreign = Box::pin(ordinary_realm::source_request(&pool, foreign)).await;
-    let refused = Box::pin(uow.commit_event(foreign)).await.unwrap_err();
+    let refused = uow.commit_event(foreign).await.unwrap_err();
     assert_eq!(
         refusal_code(&refused),
         Some(ConflictCode::FailedPrecondition)
@@ -337,7 +335,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     let shifted = Box::pin(ordinary_realm::source_request(&pool, shifted)).await;
     assert_eq!(
-        refusal_code(&Box::pin(uow.commit_event(shifted)).await.unwrap_err()),
+        refusal_code(&uow.commit_event(shifted).await.unwrap_err()),
         Some(ConflictCode::FailedPrecondition)
     );
     assert_eq!(circle_stream_commits(&pool, &stream).await, 0);
@@ -349,9 +347,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         circle_membership(&circle, &alice, "join", Value::Null, Some(&first_parent)),
     );
     let circle_join = Box::pin(ordinary_realm::source_request(&pool, circle_join)).await;
-    Box::pin(uow.commit_event(circle_join.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(circle_join.clone()).await.unwrap();
     let joined = circle_member(&pool, &circle, &alice).await;
     assert!(joined.effective);
     assert_eq!(joined.value["parent_membership_revision"], first_parent);
@@ -409,14 +405,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     });
     let activated = history == "since_join";
     if activated {
-        Box::pin(uow.commit_event(genesis.clone())).await.unwrap();
+        uow.commit_event(genesis.clone()).await.unwrap();
     } else {
         assert_eq!(
-            refusal_code(
-                &Box::pin(uow.commit_event(genesis.clone()))
-                    .await
-                    .unwrap_err()
-            ),
+            refusal_code(&uow.commit_event(genesis.clone()).await.unwrap_err()),
             Some(ConflictCode::FailedPrecondition)
         );
         assert_eq!(circle_stream_commits(&pool, &stream).await, 1);
@@ -449,19 +441,20 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     let mut parent_tail = grant.authority_commit.clone();
     if activated {
         assert!(matches!(
-            Box::pin(store.mls_member_group_state_material_read(
-                &material_request,
-                &ordinary_realm::station(),
-                None
-            ))
-            .await
-            .unwrap(),
+            store
+                .mls_member_group_state_material_read(
+                    &material_request,
+                    &ordinary_realm::station(),
+                    None
+                )
+                .await
+                .unwrap(),
             soland_storage::MlsMemberGroupStateMaterialRead::Authorized { genesis: Some(_) }
         ));
         let signal_at =
             genesis.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
-        let authority = Box::pin(store.signal_scope_authority(
-            soland_storage::SignalScopeAuthorityQuery {
+        let authority = store
+            .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                 scope: &material_request.effective_scope,
                 authority_commit_id: &genesis.authority_commit.commit.commit_id,
                 parent_realm_authority_commit_id: Some(&grant.authority_commit.commit.commit_id),
@@ -469,11 +462,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 signal_class: arkret_wire::SignalClass::Session,
                 sent_at: signal_at,
                 at: signal_at,
-            },
-        ))
-        .await
-        .unwrap()
-        .expect("signed Circle parent join proves the historical and current Signal cut");
+            })
+            .await
+            .unwrap()
+            .expect("signed Circle parent join proves the historical and current Signal cut");
         assert_eq!(authority.recipient_actors, vec![alice.clone()]);
         assert_eq!(
             authority.historical_mls_event_ref,
@@ -485,8 +477,8 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             Some(&unit.transactions[0].commit.commit_id),
         ] {
             assert!(
-                Box::pin(
-                    store.signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                store
+                    .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                         scope: &material_request.effective_scope,
                         authority_commit_id: &genesis.authority_commit.commit.commit_id,
                         parent_realm_authority_commit_id: parent,
@@ -495,10 +487,9 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                         sent_at: signal_at,
                         at: signal_at,
                     })
-                )
-                .await
-                .unwrap()
-                .is_none()
+                    .await
+                    .unwrap()
+                    .is_none()
             );
         }
         let moderation_at =
@@ -515,13 +506,11 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         ));
         let moderation_grant =
             Box::pin(ordinary_realm::source_request(&pool, moderation_grant)).await;
-        Box::pin(uow.commit_event(moderation_grant.clone()))
-            .await
-            .unwrap();
+        uow.commit_event(moderation_grant.clone()).await.unwrap();
         // A later grant cannot retroactively authorize an older parent cut.
         assert!(
-            Box::pin(
-                store.signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            store
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                     scope: &material_request.effective_scope,
                     authority_commit_id: &genesis.authority_commit.commit.commit_id,
                     parent_realm_authority_commit_id: Some(
@@ -532,14 +521,13 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     sent_at: signal_at,
                     at: signal_at,
                 })
-            )
-            .await
-            .unwrap()
-            .is_none()
+                .await
+                .unwrap()
+                .is_none()
         );
         assert!(
-            Box::pin(
-                store.signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            store
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                     scope: &material_request.effective_scope,
                     authority_commit_id: &genesis.authority_commit.commit.commit_id,
                     parent_realm_authority_commit_id: Some(
@@ -550,10 +538,9 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     sent_at: signal_at,
                     at: signal_at,
                 })
-            )
-            .await
-            .unwrap()
-            .is_some()
+                .await
+                .unwrap()
+                .is_some()
         );
         if let Some(branch) = branch {
             let scope = &material_request.effective_scope;
@@ -569,10 +556,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     moderation_at + chrono::TimeDelta::milliseconds(1),
                 ));
                 let reset = Box::pin(ordinary_realm::source_request(&pool, reset)).await;
-                Box::pin(uow.commit_event(reset)).await.unwrap();
+                uow.commit_event(reset).await.unwrap();
                 assert!(
-                    Box::pin(store.signal_scope_authority(
-                        soland_storage::SignalScopeAuthorityQuery {
+                    store
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
                             authority_commit_id: scope_head,
                             parent_realm_authority_commit_id: Some(original_parent),
@@ -580,11 +567,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                             signal_class: arkret_wire::SignalClass::Moderation,
                             sent_at: signal_at,
                             at: signal_at,
-                        }
-                    ))
-                    .await
-                    .unwrap()
-                    .is_none(),
+                        })
+                        .await
+                        .unwrap()
+                        .is_none(),
                     "current root reset invalidates the old root-generation moderation grant"
                 );
             } else if branch == "controller" {
@@ -597,10 +583,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     moderation_at + chrono::TimeDelta::milliseconds(1),
                 ));
                 let transfer = Box::pin(ordinary_realm::source_request(&pool, transfer)).await;
-                Box::pin(uow.commit_event(transfer.clone())).await.unwrap();
+                uow.commit_event(transfer.clone()).await.unwrap();
                 assert!(
-                    Box::pin(store.signal_scope_authority(
-                        soland_storage::SignalScopeAuthorityQuery {
+                    store
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
                             authority_commit_id: scope_head,
                             parent_realm_authority_commit_id: Some(original_parent),
@@ -608,11 +594,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                             signal_class: arkret_wire::SignalClass::Moderation,
                             sent_at: signal_at,
                             at: signal_at,
-                        }
-                    ))
-                    .await
-                    .unwrap()
-                    .is_some(),
+                        })
+                        .await
+                        .unwrap()
+                        .is_some(),
                     "owner transfer preserves the already accepted ordinary grant"
                 );
                 tail = transfer.authority_commit;
@@ -625,7 +610,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     tail.commit.committed_at + chrono::TimeDelta::milliseconds(1),
                 ));
                 let revoke = Box::pin(ordinary_realm::source_request(&pool, revoke)).await;
-                Box::pin(uow.commit_event(revoke.clone())).await.unwrap();
+                uow.commit_event(revoke.clone()).await.unwrap();
                 let transfer_back = sourced(ordinary_realm::next_request_for_actor(
                     &revoke.authority_commit,
                     EventKind::RealmOwnerTransfer,
@@ -637,10 +622,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 ));
                 let transfer_back =
                     Box::pin(ordinary_realm::source_request(&pool, transfer_back)).await;
-                Box::pin(uow.commit_event(transfer_back)).await.unwrap();
+                uow.commit_event(transfer_back).await.unwrap();
                 assert!(
-                    Box::pin(store.signal_scope_authority(
-                        soland_storage::SignalScopeAuthorityQuery {
+                    store
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
                             authority_commit_id: scope_head,
                             parent_realm_authority_commit_id: Some(original_parent),
@@ -648,11 +633,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                             signal_class: arkret_wire::SignalClass::Moderation,
                             sent_at: signal_at,
                             at: signal_at,
-                        }
-                    ))
-                    .await
-                    .unwrap()
-                    .is_none(),
+                        })
+                        .await
+                        .unwrap()
+                        .is_none(),
                     "old controller authority cannot revive a revoked moderation grant"
                 );
             } else {
@@ -668,7 +652,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     tail.commit.committed_at + chrono::TimeDelta::milliseconds(1),
                 ));
                 let change = Box::pin(ordinary_realm::source_request(&pool, change)).await;
-                Box::pin(uow.commit_event(change.clone())).await.unwrap();
+                uow.commit_event(change.clone()).await.unwrap();
                 let mut heads = vec![
                     arkret_wire::CommitStreamHead {
                         stream_ref: change.authority_commit.commit.stream_ref.clone(),
@@ -742,12 +726,13 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 };
                 // Storage fixtures use structural signatures; the Garth verified-scan fixture
                 // independently verifies the real dual Ed25519 signatures and complete manifest.
-                Box::pin(store.install_handoff(&handoff, &heads, &snapshot))
+                store
+                    .install_handoff(&handoff, &heads, &snapshot)
                     .await
                     .unwrap();
                 assert!(
-                    Box::pin(store.signal_scope_authority(
-                        soland_storage::SignalScopeAuthorityQuery {
+                    store
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
                             authority_commit_id: scope_head,
                             parent_realm_authority_commit_id: Some(original_parent),
@@ -755,17 +740,17 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                             signal_class: arkret_wire::SignalClass::Moderation,
                             sent_at: signal_at,
                             at: signal_at,
-                        }
-                    ))
-                    .await
-                    .unwrap()
-                    .is_some(),
+                        })
+                        .await
+                        .unwrap()
+                        .is_some(),
                     "accepted complete handoff preserves an unchanged Circle head"
                 );
                 let mut stale = handoff.clone();
                 stale.handoff_id = arkret_wire::RealmAuthorityHandoffId::from_digest([0x93; 32]);
                 assert!(matches!(
-                    Box::pin(store.install_handoff(&stale, &heads, &snapshot))
+                    store
+                        .install_handoff(&stale, &heads, &snapshot)
                         .await
                         .unwrap_err(),
                     PersistenceError::Conflict(_)
@@ -778,8 +763,8 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     .unwrap();
                 drop(conn);
                 assert!(
-                    Box::pin(store.signal_scope_authority(
-                        soland_storage::SignalScopeAuthorityQuery {
+                    store
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
                             authority_commit_id: scope_head,
                             parent_realm_authority_commit_id: Some(original_parent),
@@ -787,10 +772,9 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                             signal_class: arkret_wire::SignalClass::Moderation,
                             sent_at: signal_at,
                             at: signal_at,
-                        }
-                    ))
-                    .await
-                    .is_err(),
+                        })
+                        .await
+                        .is_err(),
                     "missing durable handoff manifest cannot authorize an old generation head"
                 );
             }
@@ -813,10 +797,10 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             moderation_at + chrono::TimeDelta::milliseconds(1),
         ));
         let revoke = Box::pin(ordinary_realm::source_request(&pool, revoke)).await;
-        Box::pin(uow.commit_event(revoke.clone())).await.unwrap();
+        uow.commit_event(revoke.clone()).await.unwrap();
         assert!(
-            Box::pin(
-                store.signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            store
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                     scope: &material_request.effective_scope,
                     authority_commit_id: &genesis.authority_commit.commit.commit_id,
                     parent_realm_authority_commit_id: Some(
@@ -827,21 +811,17 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     sent_at: signal_at,
                     at: signal_at,
                 })
-            )
-            .await
-            .unwrap()
-            .is_none()
+                .await
+                .unwrap()
+                .is_none()
         );
         assert_eq!(circle_stream_commits(&pool, &stream).await, 2);
         parent_tail = revoke.authority_commit;
         assert!(matches!(
-            Box::pin(store.mls_roster_authority_read(
-                &roster_request,
-                &ordinary_realm::station(),
-                None
-            ))
-            .await
-            .unwrap(),
+            store
+                .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+                .await
+                .unwrap(),
             soland_storage::MlsRosterAuthorityRead::Authorized { facts: Some(_) }
         ));
     }
@@ -861,9 +841,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     let same_parent_leave =
         Box::pin(ordinary_realm::source_request(&pool, same_parent_leave)).await;
-    Box::pin(uow.commit_event(same_parent_leave.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(same_parent_leave.clone()).await.unwrap();
     let same_parent_join = circle_request(
         &same_parent_leave.authority_commit,
         &circle,
@@ -871,23 +849,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         circle_membership(&circle, &alice, "join", json!("leave"), Some(&first_parent)),
     );
     let same_parent_join = Box::pin(ordinary_realm::source_request(&pool, same_parent_join)).await;
-    Box::pin(uow.commit_event(same_parent_join.clone()))
+    uow.commit_event(same_parent_join.clone()).await.unwrap();
+    let answer = store
+        .mls_member_group_state_material_read(&material_request, &ordinary_realm::station(), None)
         .await
         .unwrap();
-    let answer = Box::pin(store.mls_member_group_state_material_read(
-        &material_request,
-        &ordinary_realm::station(),
-        None,
-    ))
-    .await
-    .unwrap();
-    let roster = Box::pin(store.mls_roster_authority_read(
-        &roster_request,
-        &ordinary_realm::station(),
-        None,
-    ))
-    .await
-    .unwrap();
+    let roster = store
+        .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+        .await
+        .unwrap();
     {
         assert!(matches!(
             answer,
@@ -903,7 +873,8 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             target_epoch: roster_request.target_epoch, caller_actor_id: roster_request.caller_actor_id.clone(), cursor: None,
         };
         assert!(matches!(
-            Box::pin(store.mls_member_roster_selector(&member, &ordinary_realm::station()))
+            store
+                .mls_member_roster_selector(&member, &ordinary_realm::station())
                 .await
                 .unwrap(),
             soland_storage::MlsMemberRosterSelectorRead::NotFound
@@ -916,16 +887,14 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     // Circle Event is synthesized and the canonical row is not rewritten.
     let realm_leave = realm_membership(&parent_tail, &alice, &alice, "leave", "parent leave");
     let realm_leave = Box::pin(ordinary_realm::source_request(&pool, realm_leave)).await;
-    Box::pin(uow.commit_event(realm_leave.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(realm_leave.clone()).await.unwrap();
     let after_leave = circle_member(&pool, &circle, &alice).await;
     if activated {
         let signal_at =
             realm_leave.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
         assert!(
-            Box::pin(
-                store.signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            store
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                     scope: &material_request.effective_scope,
                     authority_commit_id: &genesis.authority_commit.commit.commit_id,
                     parent_realm_authority_commit_id: Some(
@@ -936,10 +905,9 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     sent_at: signal_at,
                     at: signal_at,
                 })
-            )
-            .await
-            .unwrap()
-            .is_none()
+                .await
+                .unwrap()
+                .is_none()
         );
     }
     assert!(!after_leave.effective);
@@ -952,23 +920,21 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     assert!(!circle_scan_authorized(&store, &stream, &alice).await);
     assert!(matches!(
-        Box::pin(store.mls_member_group_state_material_read(
-            &material_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
         soland_storage::MlsMemberGroupStateMaterialRead::NotFound
     ));
     assert!(matches!(
-        Box::pin(store.mls_roster_authority_read(
-            &roster_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
         soland_storage::MlsRosterAuthorityRead::NotFound
     ));
 
@@ -981,15 +947,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         "parent rejoin",
     );
     let rejoin = Box::pin(ordinary_realm::source_request(&pool, rejoin)).await;
-    Box::pin(uow.commit_event(rejoin.clone())).await.unwrap();
+    uow.commit_event(rejoin.clone()).await.unwrap();
     let second_parent = ordinary_realm::parent_membership_revision(&pool, &realm, &alice).await;
     assert_ne!(second_parent, first_parent);
     let after_rejoin = circle_member(&pool, &circle, &alice).await;
     if activated {
         let signal_at = rejoin.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
         assert!(
-            Box::pin(
-                store.signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            store
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                     scope: &material_request.effective_scope,
                     authority_commit_id: &genesis.authority_commit.commit.commit_id,
                     parent_realm_authority_commit_id: Some(
@@ -1000,10 +966,9 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     sent_at: signal_at,
                     at: signal_at,
                 })
-            )
-            .await
-            .unwrap()
-            .is_none(),
+                .await
+                .unwrap()
+                .is_none(),
             "parent rejoin cannot revive an old Signal cut"
         );
     }
@@ -1015,23 +980,21 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     assert!(!circle_scan_authorized(&store, &stream, &alice).await);
     assert!(matches!(
-        Box::pin(store.mls_member_group_state_material_read(
-            &material_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
         soland_storage::MlsMemberGroupStateMaterialRead::NotFound
     ));
     assert!(matches!(
-        Box::pin(store.mls_roster_authority_read(
-            &roster_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
         soland_storage::MlsRosterAuthorityRead::NotFound
     ));
     // The old revision is no longer the parent current join.
@@ -1043,7 +1006,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     let stale = Box::pin(ordinary_realm::source_request(&pool, stale)).await;
     assert_eq!(
-        refusal_code(&Box::pin(uow.commit_event(stale)).await.unwrap_err()),
+        refusal_code(&uow.commit_event(stale).await.unwrap_err()),
         Some(ConflictCode::FailedPrecondition)
     );
     // A leave never carries the revision.
@@ -1061,7 +1024,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     let misplaced = Box::pin(ordinary_realm::source_request(&pool, misplaced)).await;
     assert!(matches!(
-        Box::pin(uow.commit_event(misplaced)).await.unwrap_err(),
+        uow.commit_event(misplaced).await.unwrap_err(),
         PersistenceError::SchemaViolation(_)
     ));
     // Only an explicit leave then a new join bound to the new revision
@@ -1073,9 +1036,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         circle_membership(&circle, &alice, "leave", json!("join"), None),
     );
     let circle_leave = Box::pin(ordinary_realm::source_request(&pool, circle_leave)).await;
-    Box::pin(uow.commit_event(circle_leave.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(circle_leave.clone()).await.unwrap();
     let circle_rejoin = circle_request(
         &circle_leave.authority_commit,
         &circle,
@@ -1089,32 +1050,28 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         ),
     );
     let circle_rejoin = Box::pin(ordinary_realm::source_request(&pool, circle_rejoin)).await;
-    Box::pin(uow.commit_event(circle_rejoin.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(circle_rejoin.clone()).await.unwrap();
     let restored = circle_member(&pool, &circle, &alice).await;
     assert!(restored.effective);
     assert_eq!(restored.value["parent_membership_revision"], second_parent);
     // Even all-history policy cannot authorize a historical Circle cut whose
     // join belongs to the previous parent Realm join instance.
     assert!(matches!(
-        Box::pin(store.mls_member_group_state_material_read(
-            &material_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
         soland_storage::MlsMemberGroupStateMaterialRead::NotFound
     ));
     assert!(matches!(
-        Box::pin(store.mls_roster_authority_read(
-            &roster_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
         soland_storage::MlsRosterAuthorityRead::NotFound
     ));
     assert!(circle_scan_authorized(&store, &stream, &alice).await);
@@ -1128,7 +1085,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         "parent ban",
     );
     let ban = Box::pin(ordinary_realm::source_request(&pool, ban)).await;
-    Box::pin(uow.commit_event(ban)).await.unwrap();
+    uow.commit_event(ban).await.unwrap();
     let after_ban = circle_member(&pool, &circle, &alice).await;
     assert!(!after_ban.effective);
     assert_eq!(after_ban.value, restored.value);
@@ -1138,23 +1095,21 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     );
     assert!(!circle_scan_authorized(&store, &stream, &alice).await);
     assert!(matches!(
-        Box::pin(store.mls_member_group_state_material_read(
-            &material_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_member_group_state_material_read(
+                &material_request,
+                &ordinary_realm::station(),
+                None
+            )
+            .await
+            .unwrap(),
         soland_storage::MlsMemberGroupStateMaterialRead::NotFound
     ));
     assert!(matches!(
-        Box::pin(store.mls_roster_authority_read(
-            &roster_request,
-            &ordinary_realm::station(),
-            None
-        ))
-        .await
-        .unwrap(),
+        store
+            .mls_roster_authority_read(&roster_request, &ordinary_realm::station(), None)
+            .await
+            .unwrap(),
         soland_storage::MlsRosterAuthorityRead::NotFound
     ));
 }

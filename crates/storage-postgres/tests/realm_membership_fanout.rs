@@ -2739,12 +2739,10 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         "join",
     );
     let alice_join = Box::pin(ordinary_realm::source_request(&pool, alice_join)).await;
-    Box::pin(uow.commit_event(alice_join.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(alice_join.clone()).await.unwrap();
     let bob_join = membership_request(&alice_join.authority_commit, bob.clone(), &bob, "join");
     let bob_join = Box::pin(ordinary_realm::source_request(&pool, bob_join)).await;
-    Box::pin(uow.commit_event(bob_join.clone())).await.unwrap();
+    uow.commit_event(bob_join.clone()).await.unwrap();
     let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
 
     // A joined member without any grant cannot issue one.
@@ -2788,7 +2786,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &root_event_ref,
     );
     let bob_grant = Box::pin(ordinary_realm::source_request(&pool, bob_grant)).await;
-    Box::pin(uow.commit_event(bob_grant.clone())).await.unwrap();
+    uow.commit_event(bob_grant.clone()).await.unwrap();
     let revision = bob_grant.authority_commit.commit.clone();
     let head = &bob_grant.authority_commit;
     for (kind, actor, code) in [
@@ -2817,9 +2815,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
     // grant.
     let alice_revoker = grant_request(head, &alice, &["ak.capability.revoke"], &root_event_ref);
     let alice_revoker = Box::pin(ordinary_realm::source_request(&pool, alice_revoker)).await;
-    Box::pin(uow.commit_event(alice_revoker.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(alice_revoker.clone()).await.unwrap();
     Box::pin(assert_refused(
         &pool,
         &uow,
@@ -2857,9 +2853,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &revision,
     );
     let relinquish = Box::pin(ordinary_realm::source_request(&pool, relinquish)).await;
-    Box::pin(uow.commit_event(relinquish.clone()))
-        .await
-        .unwrap();
+    uow.commit_event(relinquish.clone()).await.unwrap();
     assert_eq!(grant_status(&pool, &bob_grant).await, "relinquished");
     Box::pin(assert_refused(
         &pool,
@@ -2883,7 +2877,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &alice_revoker.authority_commit.commit,
     );
     let revoke = Box::pin(ordinary_realm::source_request(&pool, revoke)).await;
-    Box::pin(uow.commit_event(revoke)).await.unwrap();
+    uow.commit_event(revoke).await.unwrap();
     assert_eq!(grant_status(&pool, &alice_revoker).await, "revoked");
 }
 
