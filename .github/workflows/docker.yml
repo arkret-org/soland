@@ -31,6 +31,13 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Floria
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/floria
+          path: floria
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: Checkout Arkret Spec
         uses: actions/checkout@v6
         with:
@@ -64,6 +71,7 @@ jobs:
           build-contexts: |
             arkret-rust-sdk=arkret-rust-sdk
             arkret-spec=arkret-spec
+            floria=floria
           load: true
           tags: ${{ env.IMAGE_NAME }}
           labels: ${{ steps.meta.outputs.labels }}

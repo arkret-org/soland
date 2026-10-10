@@ -48,6 +48,13 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Floria
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/floria
+          path: floria
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: Install Rust 1.98
         uses: dtolnay/rust-toolchain@master
         with:
@@ -163,6 +170,13 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/arkret-rust-sdk
           path: arkret-rust-sdk
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
+      - name: Checkout Floria
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/floria
+          path: floria
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Install Rust 1.98
@@ -293,6 +307,13 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Floria
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/floria
+          path: floria
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -345,6 +366,13 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/arkret-rust-sdk
           path: arkret-rust-sdk
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
+      - name: Checkout Floria
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/floria
+          path: floria
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
       - name: Install Rust

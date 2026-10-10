@@ -6,6 +6,7 @@ WORKDIR /workspace
 
 COPY --from=arkret-rust-sdk . ./arkret-rust-sdk
 COPY --from=arkret-spec . ./arkret-spec
+COPY --from=floria . ./floria
 COPY . ./soland
 
 WORKDIR /workspace/soland

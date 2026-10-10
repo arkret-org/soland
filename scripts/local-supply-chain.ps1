@@ -24,6 +24,8 @@ docker buildx build `
     --tag $ImageTag `
     --metadata-file $metadataPath `
     --build-context arkret-rust-sdk=../arkret-rust-sdk `
+    --build-context arkret-spec=../arkret-spec `
+    --build-context floria=../floria `
     .
 
 syft $ImageTag -o "spdx-json=$sbomPath"

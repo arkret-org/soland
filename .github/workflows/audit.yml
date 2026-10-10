@@ -36,6 +36,13 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Checkout Floria
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/floria
+          path: floria
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
       - name: cargo-deny check ${{ matrix.checks }}
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
