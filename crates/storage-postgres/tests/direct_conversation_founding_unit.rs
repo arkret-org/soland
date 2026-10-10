@@ -2406,7 +2406,8 @@ async fn terminal_persistent_rows(pool: &soland_storage_postgres::PgPool) -> ser
 
 #[tokio::test]
 async fn profile_admission_table_refuses_in_registered_precedence_with_zero_writes() {
-    let pool = contract_pool().await;
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
     let pair = Box::pin(pair(&pool)).await;
     let store = pair.store();
     let at = now();
