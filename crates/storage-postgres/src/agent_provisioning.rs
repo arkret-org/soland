@@ -79,7 +79,7 @@ pub(crate) async fn admit_agent_provision_in_connection(
     .await?
     {
         return Ok(AgentProvisionAdmissionOutcome::Duplicate(record(
-            event, &payload, stored,
+            event, &payload, *stored,
         )?));
     }
     if payload.principal_control_realm_id == event.realm_id {

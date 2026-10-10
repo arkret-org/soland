@@ -95,7 +95,7 @@ fn recovery_policy_unexecutable(message: impl Into<String>) -> AppError {
 fn reject_unexecutable_recovery_policy(policy: &RecoveryPolicy) -> Result<(), AppError> {
     for method in &policy.methods {
         match method {
-            arkret_models_crypto::RecoveryMethod::DidRoot {} => {}
+            arkret_models_crypto::RecoveryMethod::DidRoot => {}
             arkret_models_crypto::RecoveryMethod::RecoveryUnlock { keys } => {
                 for key in keys {
                     if key.not_before >= key.expires_at

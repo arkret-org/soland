@@ -1042,9 +1042,8 @@ mod projection_service_tests {
                 ))
                 .unwrap();
         });
-        assert_eq!(
+        assert!(
             progress_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-            true,
             "a persistence rebuild must not block live projection writers"
         );
         writer.join().unwrap();
@@ -1157,7 +1156,7 @@ mod projection_service_tests {
         projection.restore_accepted_membership(&operation, operation.created_at);
         ProjectionService::apply_realm_bootstrap_to_state(
             &mut projection,
-            &[operation.clone()],
+            std::slice::from_ref(&operation),
             false,
             service.clock(),
         )

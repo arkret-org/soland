@@ -148,13 +148,12 @@ async fn cut_in_connection(
     }) {
         return Ok(None);
     }
-    if let Some(caller) = caller {
-        if !entries
+    if let Some(caller) = caller
+        && !entries
             .iter()
             .any(|row| row.parent_membership_revision(realm, caller).is_some())
-        {
-            return Ok(None);
-        }
+    {
+        return Ok(None);
     }
     let Some(current) = entries.iter().find(|entry| matches!(entry, TypedCurrentRow::Value { selector: CurrentSelector::MlsGroup { scope_ref }, source_stream_ref, .. } if scope_ref == &arkret_wire::ScopeRef::Realm { realm_id: realm.clone() } && source_stream_ref == &stream)).cloned() else { return Ok(None) };
     Ok(Some(Cut {

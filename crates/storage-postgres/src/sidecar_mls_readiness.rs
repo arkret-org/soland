@@ -110,7 +110,7 @@ pub(crate) async fn tree_authorized_in_connection(
                 };
                 let key = arkret_canonical::multibase::decode_ed25519_multibase(key)
                     .map_err(PersistenceError::database)?;
-                if arkret_canonical::base64url_encode(&key) != leaf.signature_key.as_str() {
+                if arkret_canonical::base64url_encode(key) != leaf.signature_key.as_str() {
                     return Ok(false);
                 }
             }
@@ -358,7 +358,7 @@ pub(crate) async fn controller_device_ready_in_connection(
         })?;
     let key = arkret_canonical::multibase::decode_ed25519_multibase(key)
         .map_err(PersistenceError::database)?;
-    let key = arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(&key))
+    let key = arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(key))
         .map_err(PersistenceError::database)?;
     let actor = ActorId::account(cut.controller_account_id.clone());
     let scope = ScopeRef::Sidecar {
@@ -452,6 +452,10 @@ pub(crate) async fn controller_device_ready_in_connection(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Consumed endpoint checks retain group, member, device and readiness inputs."
+)]
 pub(crate) async fn consumed_endpoint_in_connection(
     conn: &mut crate::AsyncPgConnection,
     scope: &ScopeRef,

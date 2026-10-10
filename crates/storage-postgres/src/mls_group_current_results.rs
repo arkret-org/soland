@@ -326,8 +326,8 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             "the installed public state is not at the Commit's epoch",
         ));
     }
-    if let Some(cut) = &sidecar_cut {
-        if !crate::sidecar_mls_readiness::tree_authorized_in_connection(
+    if let Some(cut) = &sidecar_cut
+        && !crate::sidecar_mls_readiness::tree_authorized_in_connection(
             conn,
             cut,
             &next,
@@ -335,11 +335,10 @@ pub(crate) async fn commit_mls_group_current_result_in_connection(
             Some(transaction),
         )
         .await?
-        {
-            return Err(binding_mismatch(
-                "the Sidecar post-transition tree retains an unauthorized endpoint",
-            ));
-        }
+    {
+        return Err(binding_mismatch(
+            "the Sidecar post-transition tree retains an unauthorized endpoint",
+        ));
     }
     // encryption-and-audit.md section 2.4.1: while a Circle tree holds a leaf
     // of an actor that is no longer an effective Circle member, only a Commit

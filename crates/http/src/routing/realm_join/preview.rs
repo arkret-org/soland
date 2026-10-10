@@ -68,9 +68,7 @@ pub(super) async fn self_preview(
     req: &mut Request,
 ) -> JsonResult<SelfRealmJoinPreviewOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = AuthArgs::default()
-        .authenticated_session(state, req)
-        .await?;
+    let session = AuthArgs.authenticated_session(state, req).await?;
     let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
         state, &session,
     )

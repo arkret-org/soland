@@ -104,7 +104,7 @@ async fn list(
             .into_inner()
             .map(arkret_wire::Cursor::new)
             .transpose()
-            .map_err(|error| invalid_cursor(error))?,
+            .map_err(invalid_cursor)?,
         limit: Some(limit),
     };
     // Recovery authentication has already bound a verified, unexpired session
@@ -117,7 +117,7 @@ async fn list(
     let active_series = if recovery {
         active_pointers(state, account).await?
     } else {
-        active_pointers_for_device(state, account, &session.require_human_device_id()).await?
+        active_pointers_for_device(state, account, session.require_human_device_id()).await?
     };
     let filter = arkret_server::cursor_filter_digest(&json!({
         "operation":operation, "series_id":query.series_id, "backup_kind":query.backup_kind,

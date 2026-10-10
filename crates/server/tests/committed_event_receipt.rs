@@ -405,7 +405,7 @@ fn non_governance_receiver_verifies_original_human_fact_and_legacy_is_unavailabl
             .as_mut()
             .unwrap()
             .verification_method = method(
-            &foreign_pcr.history.did.to_string(),
+            foreign_pcr.history.did.as_ref(),
             "ak:device:not-a-device-id",
         );
         let mut wrong_projection = replica.clone();

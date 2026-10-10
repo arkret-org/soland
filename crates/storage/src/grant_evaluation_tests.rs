@@ -1149,7 +1149,7 @@ fn verified_approvals_discharge_only_the_exact_grant_constraint_and_action() {
     assert!(allowed(&evaluate_grants_with_verified_approvals(
         &operation,
         &grants,
-        &[proof.clone()]
+        std::slice::from_ref(&proof)
     )));
     let mut wrong = proof.clone();
     wrong.constraint_digest.push('0');
@@ -1165,7 +1165,7 @@ fn verified_approvals_discharge_only_the_exact_grant_constraint_and_action() {
     ));
     grants.push(grant(92, &[action], realm_wide(), vec![approval]));
     assert!(matches!(
-        evaluate_grants_with_verified_approvals(&operation, &grants, &[proof.clone()]),
+        evaluate_grants_with_verified_approvals(&operation, &grants, std::slice::from_ref(&proof)),
         GrantEvaluation::RequiresReview
     ));
     let mut deny = constraint(

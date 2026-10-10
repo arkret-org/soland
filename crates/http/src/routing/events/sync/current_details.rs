@@ -226,7 +226,7 @@ fn round_robin(mut realms: Vec<RealmId>, last: Option<&str>) -> Vec<RealmId> {
 }
 
 enum Freeze {
-    Window(RealmSyncEntry, AccountDetailProgress),
+    Window(Box<RealmSyncEntry>, AccountDetailProgress),
     Unavailable(RealmDetailErrorCode),
 }
 
@@ -299,7 +299,12 @@ async fn freeze(
                 streams_limited: window.streams_limited,
             };
             Ok(Freeze::Window(
-                window_entry(realm, window, window_cursor.as_str(), baseline_revision),
+                Box::new(window_entry(
+                    realm,
+                    window,
+                    window_cursor.as_str(),
+                    baseline_revision,
+                )),
                 progress,
             ))
         }
@@ -449,7 +454,7 @@ pub(super) async fn frame(
                 {
                     Ok(Freeze::Window(entry, progress)) => {
                         positions.insert(realm.to_string(), progress);
-                        entries.insert(realm.to_string(), entry);
+                        entries.insert(realm.to_string(), *entry);
                         last_realm = Some(realm.to_string());
                         delivered_window = true;
                         // One atomic window per frame keeps every window

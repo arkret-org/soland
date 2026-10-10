@@ -139,7 +139,7 @@ fn next(
 
 #[tokio::test]
 async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
-    let mut config = AppConfig {
+    let config = AppConfig {
         development_mode: true,
         ..soland_test_support::app_config()
     };

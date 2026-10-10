@@ -358,16 +358,15 @@ async fn guard_snapshot_revisions(
                     .bind::<Text,_>(circle_id.as_str())
                     .bind::<Text,_>(member_actor_id.to_string())
                     .get_result::<ExistingCircleMemberCurrent>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
-                if let Some(old) = existing {
-                    if old.realm_id != realm_id.as_str()
+                if let Some(old) = existing
+                    && (old.realm_id != realm_id.as_str()
                         || old.source_stream_ref != source
                         || old.current_stream_position > incoming_position
                         || (old.current_stream_position == incoming_position
                             && (old.current_commit_id != revision.commit_id.as_str()
-                                || old.value != *value))
-                    {
-                        return Err(PersistenceError::Conflict("failed_precondition: Circle member snapshot current revision or value differs".to_owned()));
-                    }
+                                || old.value != *value)))
+                {
+                    return Err(PersistenceError::Conflict("failed_precondition: Circle member snapshot current revision or value differs".to_owned()));
                 }
             }
             S::ModerationFrankingProof { event_id } => {
@@ -388,15 +387,14 @@ async fn guard_snapshot_revisions(
                     .await
                     .optional()
                     .map_err(PersistenceError::database)?;
-                if let Some(old) = old {
-                    if old.source_stream_ref != source
+                if let Some(old) = old
+                    && (old.source_stream_ref != source
                         || old.current_stream_position > incoming_position
                         || (old.current_stream_position == incoming_position
                             && (old.current_commit_id != revision.commit_id.as_str()
-                                || old.value != *value))
-                    {
-                        return Err(PersistenceError::Conflict("failed_precondition: franking proof snapshot current revision or value differs".to_owned()));
-                    }
+                                || old.value != *value)))
+                {
+                    return Err(PersistenceError::Conflict("failed_precondition: franking proof snapshot current revision or value differs".to_owned()));
                 }
             }
             _ => {}

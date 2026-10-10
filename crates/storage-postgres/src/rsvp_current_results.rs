@@ -310,6 +310,10 @@ pub(crate) async fn project_verified_rsvp_in_connection(
 /// Install one signed Snapshot row at its verified source revision. The row
 /// may precede locally retained history, so it cannot depend on a basis Event
 /// or a local capability grant.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Atomic RSVP installation binds the Event, current revision and verified provenance."
+)]
 pub(crate) async fn install_verified_rsvp_in_connection(
     conn: &mut AsyncPgConnection,
     realm_id: &arkret_wire::RealmId,

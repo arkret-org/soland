@@ -768,9 +768,10 @@ async fn disclosure_facts_in_connection(
         };
         let message_id = arkret_wire::MessageId::new(target_ref.as_str())
             .map_err(|_| rejected("a non-Message reaction target has no disclosure rule"))?;
-        if !message_streams.contains_key(&message_id) {
-            let stream = message_creation_stream(conn, realm_id, &message_id).await?;
-            message_streams.insert(message_id, stream);
+        if let std::collections::btree_map::Entry::Vacant(entry) = message_streams.entry(message_id)
+        {
+            let stream = message_creation_stream(conn, realm_id, entry.key()).await?;
+            entry.insert(stream);
         }
     }
     let mut call_creations = std::collections::BTreeMap::new();

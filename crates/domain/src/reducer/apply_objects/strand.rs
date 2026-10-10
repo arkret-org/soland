@@ -752,40 +752,6 @@ fn apply_strand_tracks_update_to_map(
     Ok(tracks)
 }
 
-#[cfg(test)]
-mod track_configuration_tests {
-    use super::*;
-
-    #[test]
-    fn configuration_rejects_ancestor_replacement_and_preserves_body() {
-        let current = serde_json::from_value(serde_json::json!({
-            "discussion": {"enabled": true, "is_primary": true, "profile": "discussion"},
-            "synthesis": {"enabled": true, "is_primary": false, "profile": "synthesis", "content": {"kind": "ak.content.text", "body": "Protected"}}
-        })).unwrap();
-        for path in [
-            "tracks",
-            "tracks.synthesis",
-            "tracks.synthesis.template",
-            "tracks.synthesis.metadata.Bad",
-        ] {
-            let payload = serde_json::json!({"patch": {path: {"$op": "set", "value": {}}}});
-            assert_eq!(
-                apply_strand_tracks_update_to_map(&current, &payload),
-                Err("strand_tracks_patch_invalid")
-            );
-        }
-        let next = apply_strand_tracks_update_to_map(&current, &serde_json::json!({"patch": {"tracks.synthesis.metadata.label": {"$op": "set", "value": "Summary"}}})).unwrap();
-        assert_eq!(
-            strand_track_content_snapshot(&current),
-            strand_track_content_snapshot(&next)
-        );
-        assert_eq!(
-            serde_json::to_value(&next).unwrap()["synthesis"]["metadata"]["label"],
-            "Summary"
-        );
-    }
-}
-
 fn validate_strand_tracks(
     tracks: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
 ) -> Result<(), &'static str> {
@@ -846,4 +812,38 @@ fn patched_schema_refs(patch: &serde_json::Map<String, Value>) -> Option<Vec<Str
             .map(ToOwned::to_owned)
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod track_configuration_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_rejects_ancestor_replacement_and_preserves_body() {
+        let current = serde_json::from_value(serde_json::json!({
+            "discussion": {"enabled": true, "is_primary": true, "profile": "discussion"},
+            "synthesis": {"enabled": true, "is_primary": false, "profile": "synthesis", "content": {"kind": "ak.content.text", "body": "Protected"}}
+        })).unwrap();
+        for path in [
+            "tracks",
+            "tracks.synthesis",
+            "tracks.synthesis.template",
+            "tracks.synthesis.metadata.Bad",
+        ] {
+            let payload = serde_json::json!({"patch": {path: {"$op": "set", "value": {}}}});
+            assert_eq!(
+                apply_strand_tracks_update_to_map(&current, &payload),
+                Err("strand_tracks_patch_invalid")
+            );
+        }
+        let next = apply_strand_tracks_update_to_map(&current, &serde_json::json!({"patch": {"tracks.synthesis.metadata.label": {"$op": "set", "value": "Summary"}}})).unwrap();
+        assert_eq!(
+            strand_track_content_snapshot(&current),
+            strand_track_content_snapshot(&next)
+        );
+        assert_eq!(
+            serde_json::to_value(&next).unwrap()["synthesis"]["metadata"]["label"],
+            "Summary"
+        );
+    }
 }

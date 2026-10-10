@@ -15,8 +15,10 @@
 use arkret_models_identity::AccountLogoutOutcome;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(any(test, feature = "conformance-harness"))]
 use chrono::Duration;
 use salvo::http::StatusCode;
+#[cfg(any(test, feature = "conformance-harness"))]
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
@@ -24,10 +26,9 @@ use sha2::{Digest, Sha256};
 use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
-use super::{
-    append_audit_log, bearer_token, dpop_token, handle_for_did, normalize_localpart, now,
-    render_error, validate_device_id,
-};
+use super::{append_audit_log, bearer_token, dpop_token, now, render_error};
+#[cfg(any(test, feature = "conformance-harness"))]
+use super::{handle_for_did, normalize_localpart, validate_device_id};
 use crate::state::AppState;
 #[cfg(any(test, feature = "conformance-harness"))]
 use crate::wire::{DevLoginRequestBody, SessionLoginOutcome};
@@ -52,8 +53,10 @@ pub(super) use login::account_existing_session_error;
 #[cfg(any(test, feature = "conformance-harness"))]
 use login::dev_login;
 pub(crate) use revocation::purge_device_delivery_state;
+#[cfg(any(test, feature = "conformance-harness"))]
+pub use revocation::token_for;
 pub use revocation::{
-    revoke_devices_for_actor, revoke_sessions_for_actor, session_credential_hash, token_for,
+    revoke_devices_for_actor, revoke_sessions_for_actor, session_credential_hash,
 };
 pub(super) use sessions::request_requires_fresh_introspection;
 pub use sessions::{auth_or_render, authenticated_session};

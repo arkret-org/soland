@@ -148,19 +148,17 @@ impl ServiceRouteResolver {
         } else {
             self.resolved_routes.lock().get(&key).cloned()
         };
-        if let Some(route) = cached {
-            if route.is_routable_at(now)
-                && self
-                    .store
-                    .route_cache(service_id, service_kind)
-                    .await?
-                    .is_some_and(|c| {
-                        c.method_history_head() == route.method_history_head()
-                            && c.is_routable_at(now)
-                    })
-            {
-                return Ok(route);
-            }
+        if let Some(route) = cached
+            && route.is_routable_at(now)
+            && self
+                .store
+                .route_cache(service_id, service_kind)
+                .await?
+                .is_some_and(|c| {
+                    c.method_history_head() == route.method_history_head() && c.is_routable_at(now)
+                })
+        {
+            return Ok(route);
         }
         self.resolve(service_id, service_kind, now, true).await?;
         self.resolved_routes
@@ -181,12 +179,11 @@ impl ServiceRouteResolver {
                 "service DID is fork-quarantined".into(),
             ));
         }
-        if !force_refresh {
-            if let Some(c) = self.store.route_cache(service_id, service_kind).await? {
-                if c.is_routable_at(now) {
-                    return Ok(c);
-                }
-            }
+        if !force_refresh
+            && let Some(c) = self.store.route_cache(service_id, service_kind).await?
+            && c.is_routable_at(now)
+        {
+            return Ok(c);
         }
         let candidate = self
             .fetcher

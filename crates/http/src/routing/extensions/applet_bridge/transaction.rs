@@ -112,7 +112,7 @@ pub(super) async fn process_verified_transaction(
                         .conflict_code()
                         .map(|code| code.as_str())
                         .unwrap_or("schema_violation"),
-                    &error.to_string(),
+                    error.to_string(),
                 ));
             }
         }

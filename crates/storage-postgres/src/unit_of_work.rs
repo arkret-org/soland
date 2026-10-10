@@ -2300,12 +2300,12 @@ pub(crate) async fn commit_applet_record(
         ));
     }
     let canonical_namespaces = soland_storage::applet_namespaces_from_record(&mutation.record)?;
-    if let Some(expected_record) = mutation.expected_record.as_ref() {
-        if canonical_namespaces != soland_storage::applet_namespaces_from_record(expected_record)? {
-            return Err(PersistenceError::SchemaViolation(
-                "Applet package.namespaces are immutable".to_owned(),
-            ));
-        }
+    if let Some(expected_record) = mutation.expected_record.as_ref()
+        && canonical_namespaces != soland_storage::applet_namespaces_from_record(expected_record)?
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "Applet package.namespaces are immutable".to_owned(),
+        ));
     }
     let managed_authorities = soland_storage::applet_managed_authorities_from_record(
         &mutation.identity.record,
@@ -2540,19 +2540,7 @@ async fn commit_one_inner(
         return Ok(());
     }
 
-    let prepared_human = if request.forwarded_producer_evidence.is_none() {
-        Box::pin(
-            crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(
-                conn,
-                &request.authority_commit,
-            ),
-        )
-        .await?
-    } else {
-        let retained = request
-            .forwarded_producer_evidence
-            .as_ref()
-            .expect("presence checked");
+    let prepared_human = if let Some(retained) = &request.forwarded_producer_evidence {
         let core = &retained.evidence.device_projection_attestation.attestation;
         let source = &core.event_authorization;
         if crate::authority_commit::is_exact_accepted_event_replay(
@@ -2601,6 +2589,14 @@ async fn commit_one_inner(
             )?;
             Some(fact)
         }
+    } else {
+        Box::pin(
+            crate::agent_producer_signer_keys::validate_prepared_local_human_in_connection(
+                conn,
+                &request.authority_commit,
+            ),
+        )
+        .await?
     };
 
     if let Some(guard) = request.self_producer_guard.as_ref() {
@@ -2702,6 +2698,10 @@ async fn commit_one_inner(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Commit preparation retains distinct typed optional proofs within the same transaction."
+)]
 fn commit_prepared_event<'a>(
     conn: &'a mut AsyncPgConnection,
     request: EventCommitRequest,
@@ -2731,6 +2731,10 @@ fn commit_prepared_event<'a>(
     ))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Atomic Event commit retains distinct typed optional proofs and mutable outcome."
+)]
 async fn commit_prepared_event_inner(
     conn: &mut AsyncPgConnection,
     request: EventCommitRequest,

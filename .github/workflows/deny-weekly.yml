@@ -36,7 +36,7 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Checkout Floria
+      - name: Checkout Floria contracts workspace
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/floria

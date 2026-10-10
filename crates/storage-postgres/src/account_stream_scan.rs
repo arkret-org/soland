@@ -638,7 +638,7 @@ async fn current_circle_join(
     else {
         return Ok(None);
     };
-    Ok(sql_query(
+    sql_query(
         "SELECT m.membership,m.current_commit_id,m.current_stream_position \
         FROM circle_member_state_current_results m \
         WHERE m.realm_id=$1 AND m.circle_id=$2 AND m.member_id=$3 AND m.membership='join' \
@@ -659,7 +659,7 @@ async fn current_circle_join(
     .get_result::<JoinRow>(&mut *conn)
     .await
     .optional()
-    .map_err(PersistenceError::database)?)
+    .map_err(PersistenceError::database)
 }
 
 async fn circle_join_floor(
@@ -1406,9 +1406,7 @@ pub(crate) async fn committed_event_for_member(
             let floor = if tenure.service_id == issuer.as_str() {
                 caller_circle_floor_in_connection(conn,&realm_id,circle_id,caller).await?
             } else {
-                match replica_circle_floor_in_connection(conn,&realm_id,circle_id,caller).await? {
-                    Ok(floor) => Some(floor),Err(_) => None,
-                }
+                replica_circle_floor_in_connection(conn,&realm_id,circle_id,caller).await?.ok()
             };
             if floor.is_none_or(|floor| commit.stream_position<floor.oldest_position) {
                 return Ok(Read::NotVisible);
@@ -1436,12 +1434,9 @@ pub(crate) async fn committed_event_for_member(
                     conn, &realm_id, sidecar_id, caller,
                 ).await?
             } else {
-                match crate::sidecar_replica_authority::handshake_floor_in_connection(
+                crate::sidecar_replica_authority::handshake_floor_in_connection(
                     conn, &realm_id, sidecar_id, caller,
-                ).await? {
-                    Ok(floor) => floor,
-                    Err(_) => None,
-                }
+                ).await?.unwrap_or_default()
             };
             if floor.is_none_or(|floor| commit.stream_position < floor.oldest_position) {
                 return Ok(Read::NotVisible);
@@ -1662,14 +1657,13 @@ pub(crate) async fn scan_stream_for_peer(
             .collect::<Vec<_>>();
         let mut producer_signer_facts = Vec::new();
         for row in &committed_events {
-            if let CommittedEventView::Full(full) = row {
-                if let Some(fact) = crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(conn, &full.event, &full.commit).await? {
+            if let CommittedEventView::Full(full) = row
+                && let Some(fact) = crate::agent_producer_signer_keys::producer_source_for_commit_in_connection(conn, &full.event, &full.commit).await? {
                     producer_signer_facts.push(arkret_models_collaboration::authority_commit::HistoricalProducerSignerFactEntry {
                         target: arkret_wire::CommittedEventRef { event_id: full.event.event_id.clone(), commit_id: full.commit.commit_id.clone(), stream_ref: full.commit.stream_ref.clone(), stream_position: full.commit.stream_position },
                         producer_signer_fact: fact,
                     });
                 }
-            }
         }
         let outcome = arkret_models_collaboration::authority_commit::PeerStreamScanOutcome {
             committed_events, readable_floor: page.readable_floor, truncated: page.truncated, producer_signer_facts,

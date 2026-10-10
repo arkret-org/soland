@@ -139,10 +139,11 @@ fn assert_event_read_query_bindings(root: &Value) {
             "retired path leaked: {retired}"
         );
     }
-    for (path, operation_id) in [(
-        "/_arkret/peer/mls/group-state-material",
-        "ak.peer.mls.read.group_state_material",
-    )] {
+    {
+        let (path, operation_id) = (
+            "/_arkret/peer/mls/group-state-material",
+            "ak.peer.mls.read.group_state_material",
+        );
         let operation = &root["paths"][path]["post"];
         assert_eq!(operation["operationId"], operation_id);
         assert!(

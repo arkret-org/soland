@@ -229,7 +229,7 @@ async fn install_endpoint(
     let basis = &commit.authoring_request_basis;
     if let Some(existing) = applet_record(
         state,
-        &commit.applet_package.applet_id.as_str(),
+        commit.applet_package.applet_id.as_str(),
         &basis.effective_scope,
     )
     .await?

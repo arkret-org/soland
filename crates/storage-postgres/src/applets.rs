@@ -320,8 +320,8 @@ impl AppletStore for PgAppletStore {
                 .get_result::<AppletRegistrationRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
             if current.as_ref().map(|r|&r.record)!=Some(expected) {return Ok(false);}
             if expected.get("revoke_execution")!=replacement.get("revoke_execution")
-                && expected.pointer("/revoke_execution/outcome/operation_id") != replacement.pointer("/revoke_execution/outcome/operation_id") {
-                if let Some(plan)=replacement.pointer("/revoke_execution/revoke_plan") {
+                && expected.pointer("/revoke_execution/outcome/operation_id") != replacement.pointer("/revoke_execution/outcome/operation_id")
+                && let Some(plan)=replacement.pointer("/revoke_execution/revoke_plan") {
                     let plan:arkret_models_integration::AppletRevokePlan=serde_json::from_value(plan.clone()).map_err(PersistenceError::database)?;
                     if matches!(plan.revoke_mode,arkret_wire::AppletRevokeMode::RevokeAll|arkret_wire::AppletRevokeMode::RevokeWidgetOnly) {
                         let install=soland_storage::AppletWidgetInstallSelector {
@@ -334,7 +334,6 @@ impl AppletStore for PgAppletStore {
                         if actual!=planned {return Err(PersistenceError::Conflict("stale_state: widget inventory differs from the frozen revoke plan".into()).into());}
                     }
                 }
-            }
             let updated=sql_query("UPDATE applet_installations SET record=$3,updated_at=NOW() WHERE applet_id=$1 AND effective_scope_key=$2")
                 .bind::<Text,_>(applet_id).bind::<Text,_>(effective_scope_key).bind::<Jsonb,_>(&replacement)
                 .execute(conn).await.map_err(PersistenceError::database)?;

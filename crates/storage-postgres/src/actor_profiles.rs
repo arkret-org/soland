@@ -129,7 +129,7 @@ pub(crate) struct PcrSigner {
 /// Either the exact Event is already committed (its Commit) or it is a new
 /// Event whose signer is active at the locked PCR cut.
 pub(crate) enum PcrSelfEventCut {
-    Known(RealmCommit),
+    Known(Box<RealmCommit>),
     Fresh(PcrSigner),
 }
 
@@ -343,7 +343,7 @@ pub(crate) async fn verify_pcr_self_event(
             ));
         };
         let stored: RealmCommit = serde_json::from_value(stored).map_err(corrupt)?;
-        return Ok(PcrSelfEventCut::Known(stored));
+        return Ok(PcrSelfEventCut::Known(Box::new(stored)));
     }
 
     let (status, device_key) = verify_device_signer_in_connection(

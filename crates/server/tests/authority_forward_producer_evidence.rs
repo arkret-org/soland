@@ -364,14 +364,15 @@ fn governance_station_refuses_every_evidence_negative_with_zero_writes() {
         let human = |name: &str| producer_event(&a, &realm_id, DEVICE, created_at, name);
         let source = peer(&a.service_id);
 
-        let cases: Vec<(
-            &str,
+        type RejectionCase<'a> = (
+            &'a str,
             Event,
             Option<ForwardAccountDeviceSignerEvidence>,
             AuthenticatedPeerContext,
             DateTime<Utc>,
-            &str,
-        )> = vec![
+            &'a str,
+        );
+        let cases: Vec<RejectionCase<'_>> = vec![
             (
                 "human_producer_without_evidence",
                 human("no evidence"),

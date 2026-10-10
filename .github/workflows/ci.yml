@@ -48,7 +48,7 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Checkout Floria
+      - name: Checkout Floria contracts workspace
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/floria
@@ -110,6 +110,10 @@ jobs:
 
       - name: Typed error mapping gate
         run: python scripts/check-error-mapping.py
+        working-directory: soland
+
+      - name: SDK wire type ownership gate
+        run: python ../arkret-rust-sdk/tools/wire_type_ownership_audit.py --workspace-root .. --require-repository soland
         working-directory: soland
 
       - name: Crate layering gate
@@ -191,7 +195,7 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Checkout Floria
+      - name: Checkout Floria contracts workspace
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/floria
@@ -333,7 +337,7 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Checkout Floria
+      - name: Checkout Floria contracts workspace
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/floria
@@ -401,7 +405,7 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Checkout Floria
+      - name: Checkout Floria contracts workspace
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/floria

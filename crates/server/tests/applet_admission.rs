@@ -757,7 +757,7 @@ async fn revoke_original_admin_device(fixture: &Fixture) {
             "backup_kind":"secret_storage","backup_version":"kb_1","created_at":at,"series_id":series,"series_seq":0,
             "encryption":{"recipient_method":"secret_storage_key","recipient_key_ref":"source-history-fixture-key","aead":{"name":"xchacha20_poly1305","nonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
             "domain_separation":{"subdomain":"secret_storage"},"contents":[{"item_kind":"recovery_key_share","secret_id":"device-source-history"}],
-            "ciphertext":"AAAA","ciphertext_digest":arkret_canonical::sha256_digest(&[0,0,0]),
+            "ciphertext":"AAAA","ciphertext_digest":arkret_canonical::sha256_digest([0,0,0]),
             "auth_data":{"device_id":device,"verification_method":fixture.pcr.history.device_verification_method,"signature_algorithm":"Ed25519","signature":"AA","device_authorize_event_id":fixture.pcr.unit.transactions[1].event.event_id}
         })).unwrap();
         let signature = SigningKey::from_bytes(&other.signing_seed)

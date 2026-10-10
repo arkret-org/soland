@@ -84,12 +84,12 @@ pub(crate) async fn refresh_direct_conversation_peer_claim(
 /// evidence an `authority_forward` carried from the producer's Station.
 pub(super) enum AdmittedProducer {
     /// Same-Station producer; the guard is rechecked in the unit.
-    Local(SelfProducerCommitGuard),
+    Local(Box<SelfProducerCommitGuard>),
     Applet(soland_storage::AppletEventProducerGuard),
     /// Cross-Station human device; the verified evidence is retained with
     /// the Event's first Commit.
-    Forwarded(soland_storage::ForwardedProducerDeviceEvidence),
-    ForwardedAgent(arkret_identity::agent_authority_evidence::VerifiedAgentProducer),
+    Forwarded(Box<soland_storage::ForwardedProducerDeviceEvidence>),
+    ForwardedAgent(Box<arkret_identity::agent_authority_evidence::VerifiedAgentProducer>),
 }
 
 /// Kind-specific durable effects committed atomically with the Event.
@@ -487,9 +487,9 @@ fn commit_event_unit_with_idempotency_impl<'a>(
             forwarded_agent_producer,
             applet_producer_guard,
         ) = match producer {
-            AdmittedProducer::Local(guard) => (Some(guard), None, None, None),
-            AdmittedProducer::Forwarded(evidence) => (None, Some(evidence), None, None),
-            AdmittedProducer::ForwardedAgent(evidence) => (None, None, Some(evidence), None),
+            AdmittedProducer::Local(guard) => (Some(*guard), None, None, None),
+            AdmittedProducer::Forwarded(evidence) => (None, Some(*evidence), None, None),
+            AdmittedProducer::ForwardedAgent(evidence) => (None, None, Some(*evidence), None),
             AdmittedProducer::Applet(guard) => (None, None, None, Some(guard)),
         };
         let command = soland_services::events::CommitAcceptedEventCommand {
@@ -684,7 +684,7 @@ pub(crate) async fn submit_self_moderation_report(
     commit_event_unit(
         state,
         &request,
-        AdmittedProducer::Local(producer_guard),
+        AdmittedProducer::Local(Box::new(producer_guard)),
         SelfEventUnitEffects {
             franking_replay_nonce,
             mls: None,
@@ -746,7 +746,7 @@ pub(crate) async fn submit_mimi_binding_event(
     commit_event_unit(
         state,
         submission,
-        AdmittedProducer::Local(guard),
+        AdmittedProducer::Local(Box::new(guard)),
         SelfEventUnitEffects::default(),
     )
     .await
@@ -755,6 +755,81 @@ pub(crate) async fn submit_mimi_binding_event(
 #[cfg(test)]
 mod claim_privacy_tests {
     use super::*;
+
+    #[test]
+    fn genesis_creation_timestamp_rejects_one_millisecond_drift_before_lookup() {
+        use arkret_models_collaboration::events_payloads::{
+            MlsGenesisCreatorLeafAuthority, MlsGenesisPayload,
+        };
+        use arkret_wire::{Base64UrlString, BlobRef, DeviceId, EventId, NonEmptyString};
+
+        let realm = arkret_wire::RealmId::from_event_id(&EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [31; 32],
+        ));
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-10T00:00:00.123Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let payload = MlsGenesisPayload {
+            cipher_suite: NonEmptyString::new("MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519")
+                .unwrap(),
+            group_info_ref: BlobRef::new(format!("ak:blob:sha256:{}", "1".repeat(64))).unwrap(),
+            ratchet_tree_ref: BlobRef::new(format!("ak:blob:sha256:{}", "2".repeat(64))).unwrap(),
+            creator_leaf_authority: MlsGenesisCreatorLeafAuthority {
+                leaf_signature_key_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
+                    [7; 32],
+                ))
+                .unwrap(),
+                endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device {
+                    device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000086")
+                        .unwrap(),
+                },
+                authorization_event_ref: EventId::from_digest(
+                    arkret_canonical::DigestSuite::Sha256,
+                    [32; 32],
+                ),
+            },
+            governance_binding: arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+                realm.clone(),
+                None,
+                0,
+                0,
+                0,
+            )
+            .unwrap(),
+            created_at: at,
+        };
+        payload.validate().unwrap();
+        for (outer_delta, inner_delta) in [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let mut candidate = payload.clone();
+            candidate.created_at += chrono::Duration::milliseconds(inner_delta);
+            let event = arkret_wire::test_support::raw_event_for_actor_at(
+                arkret_wire::EventKind::MlsGenesis.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    arkret_wire::DidCoreId::new("ak:did_core:web:genesis-creator.example").unwrap(),
+                    arkret_wire::DidCoreId::new("ak:did_core:web:genesis-station.example").unwrap(),
+                )),
+                serde_json::to_value(candidate).unwrap(),
+                at + chrono::Duration::milliseconds(outer_delta),
+            )
+            .unwrap();
+            // Every candidate has a valid content-derived Event ID. Drift must
+            // fail as a timestamp refusal rather than an unrelated digest error.
+            let result = validate_replay_event_identity(&event);
+            if outer_delta == inner_delta {
+                result.unwrap();
+            } else {
+                assert_eq!(
+                    result.unwrap_err().conflict_code(),
+                    Some(soland_storage::ConflictCode::FailedPrecondition),
+                    "outer={outer_delta}ms, inner={inner_delta}ms",
+                );
+            }
+        }
+    }
 
     #[test]
     fn replay_identity_accepts_exact_content_and_rejects_drift_before_lookup() {

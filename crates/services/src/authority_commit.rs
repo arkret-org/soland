@@ -408,6 +408,10 @@ pub struct AuthorityCommitApplication {
 impl AuthorityCommitApplication {
     /// Sign the exact Event at a cut locked by a specialized admission unit.
     /// The unit must install this Commit with its domain facts atomically.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Signing binds the Event and all verified authority and producer facts at one cut."
+    )]
     pub fn sign_event_commit_at_authority_cut(
         &self,
         event: &Event,
@@ -1263,6 +1267,10 @@ impl AuthorityCommitApplication {
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Atomic MLS preparation binds state installation and authenticated signer facts to the Event."
+    )]
     pub async fn prepare_self_mls_transaction_with_signer_fact(
         &self,
         event: &Event,
@@ -1692,6 +1700,10 @@ impl AuthorityCommitApplication {
         Ok(self.store().signal_recipient_realms(actor).await?)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One atomic authority read binds scope, historical cuts, sender, signal class and both times."
+    )]
     pub async fn signal_scope_authority(
         &self,
         scope: &arkret_wire::ScopeRef,
@@ -2876,7 +2888,7 @@ mod tests {
         };
         let expected_id =
             arkret_wire::RealmSnapshotId::from_digest(arkret_canonical::sha256_bytes(
-                &arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+                arkret_canonical::canonical_json_bytes(&identity).unwrap(),
             ));
         assert_eq!(snapshot.snapshot_id, expected_id);
         let unsigned = arkret_canonical::unsigned_value(&snapshot, &["signature"]).unwrap();

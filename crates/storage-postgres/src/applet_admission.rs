@@ -405,15 +405,14 @@ pub(crate) fn validate_input(
         {
             return Err(rejected("Bot exact authority binding changed"));
         }
-    } else if let Some(basis) = req.basis.ghost() {
-        if provision.registration_ref != basis.registration_event_ref
+    } else if let Some(basis) = req.basis.ghost()
+        && (provision.registration_ref != basis.registration_event_ref
             || provision.applet_authority_ref != basis.authorization_ref
-            || provision.external_ref.as_ref() != Some(&basis.external_ref)
-        {
-            return Err(rejected(
-                "Ghost exact authority or external identity changed",
-            ));
-        }
+            || provision.external_ref.as_ref() != Some(&basis.external_ref))
+    {
+        return Err(rejected(
+            "Ghost exact authority or external identity changed",
+        ));
     }
     let genesis: RealmGenesis = decode(
         b.pcr_genesis_event
@@ -607,7 +606,7 @@ pub(crate) async fn admit_authoring_unit(
     // before any Commit is authored or same-cut evidence is evaluated.
     input.accepted_at = arkret_canonical::normalize_timestamp_canonical(input.accepted_at);
     let mut conn = pg_conn(pool).await.map_err(PersistenceError::database)?;
-    (&mut *conn)
+    (*conn)
         .transaction::<_, PgTransactionError, _>(async move |conn| {
             Box::pin(admit_in_connection(
                 conn, &input, &author, &attester, &finalize,
@@ -1441,7 +1440,7 @@ async fn require_exact_service_grant(
         .bind::<Jsonb,_>(serde_json::to_value(effective_scope(input)?).map_err(rejected)?)
         .get_result::<RegistrationRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?
         .ok_or_else(||rejected("accepted Applet registration instance was replaced or scope differs"))?;
-    let expected = serde_json::to_value(input.package.to_registration(&epoch).map_err(rejected)?)
+    let expected = serde_json::to_value(input.package.to_registration(epoch).map_err(rejected)?)
         .map_err(rejected)?;
     if crate::applet_current_results::registration_security_value(&registration.value)
         != crate::applet_current_results::registration_security_value(&expected)

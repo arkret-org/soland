@@ -21,6 +21,10 @@ const PAGE_SIZE: usize = 8;
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Preserve the public roster read API and complete signed page outcome."
+)]
 pub enum MlsRosterAuthorityApplicationRead {
     NotFound,
     CursorInvalid,
@@ -159,6 +163,10 @@ impl AuthorityCommitApplication {
     /// Build one signed page from a freshly reauthorized and fully verified
     /// historical set. `now` comes from the serving Station clock; subsequent
     /// pages carry the first page's issuance instant in the opaque cursor.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The authenticated roster read binds the request, issuer, signature, station, cursor and current cut."
+    )]
     pub async fn mls_roster_authority_read(
         &self,
         request: &MlsRosterAuthorityReadRequestBody,
@@ -612,7 +620,7 @@ mod tests {
             },
             authorization_event_ref: event(14),
             leaf_signature_key_b64u: Base64UrlString::new(arkret_canonical::base64url_encode(
-                &[7; 32],
+                [7; 32],
             ))
             .unwrap(),
             claim_record_digest: Hash::new(
@@ -633,7 +641,8 @@ mod tests {
             attestation: attestation.clone(),
             claim_outcome: outcome,
         };
-        let facts = MlsRosterAuthorityFacts {
+
+        MlsRosterAuthorityFacts {
             group_info_ref: BlobRef::new(format!("ak:blob:sha256:{}", "3".repeat(64))).unwrap(),
             ratchet_tree_ref: BlobRef::new(format!("ak:blob:sha256:{}", "4".repeat(64))).unwrap(),
             authority_head_commit_event_ref: commit.clone(),
@@ -642,7 +651,7 @@ mod tests {
                     genesis_event_ref: genesis,
                     actor_id: actor.clone(),
                     leaf_signature_key_b64u: Base64UrlString::new(
-                        arkret_canonical::base64url_encode(&[5; 32]),
+                        arkret_canonical::base64url_encode([5; 32]),
                     )
                     .unwrap(),
                     endpoint: MlsWelcomeRecipientEndpoint::AgentRuntime {
@@ -660,8 +669,7 @@ mod tests {
                 },
             ],
             historical_add_proofs: vec![proof],
-        };
-        facts
+        }
     }
 
     #[test]

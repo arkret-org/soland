@@ -78,8 +78,8 @@ async fn dev_token(
         .take_json()
         .await
         .unwrap();
-    let token = login["session_credential"].as_str().unwrap().to_owned();
-    token
+
+    login["session_credential"].as_str().unwrap().to_owned()
 }
 
 #[tokio::test]

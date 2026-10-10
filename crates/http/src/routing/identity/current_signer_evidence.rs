@@ -140,7 +140,7 @@ pub(crate) async fn resolve_self_signer_keys(
                 requester_is_member
                     && state
                         .authority_commits()
-                        .accepted_current_member_joined(&body.realm_id, &selector.actor())
+                        .accepted_current_member_joined(&body.realm_id, selector.actor())
                         .await
                         .ok()
                         .unwrap_or(false)
@@ -265,10 +265,8 @@ async fn current_device_key(
         .strip_prefix("did:key:")?;
     let raw = arkret_canonical::decode_ed25519_multibase(multibase).ok()?;
     let key = CurrentDeviceSigningKey {
-        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(
-            &raw,
-        ))
-        .ok()?,
+        public_key_b64u: arkret_wire::Base64UrlString::new(arkret_canonical::base64url_encode(raw))
+            .ok()?,
     };
     key.validate().ok()?;
     Some(SignerKeyQueryOutcome::CurrentDeviceResolved {

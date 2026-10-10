@@ -870,15 +870,14 @@ impl PushRegistrationHandoffStore for PgPushRegistrationHandoffStore {
             .get_result::<FamilyBindingRow>(conn)
             .await
             .optional()?;
-            if let Some(existing_family) = existing_family {
-                if existing_family.account_id != account_json
-                    || existing_family.device_id != record.device_id.as_str()
-                {
-                    return Err(PersistenceError::Conflict(
-                        "cas_conflict: hard logout family account or device changed".to_owned(),
-                    )
-                    .into());
-                }
+            if let Some(existing_family) = existing_family
+                && (existing_family.account_id != account_json
+                    || existing_family.device_id != record.device_id.as_str())
+            {
+                return Err(PersistenceError::Conflict(
+                    "cas_conflict: hard logout family account or device changed".to_owned(),
+                )
+                .into());
             }
             sql_query(
                 "INSERT INTO push_hard_logout_journal \

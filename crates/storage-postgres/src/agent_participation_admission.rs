@@ -312,12 +312,11 @@ pub(crate) async fn require_child_tightens(
     if let Some(bits) = governance_component(conn, realm, &format!("realm:{realm}")).await? {
         parent = parent.intersect(bits);
     }
-    if let Some(circle) = circle {
-        if let Some(bits) =
+    if let Some(circle) = circle
+        && let Some(bits) =
             governance_component(conn, realm, &format!("circle:{realm}:{circle}")).await?
-        {
-            parent = parent.intersect(bits);
-        }
+    {
+        parent = parent.intersect(bits);
     }
     arkret_models_collaboration::governance::agent_participation::validate_agent_participation_tightens(parent, child)
         .map_err(|_| PersistenceError::Conflict(format!("failed_precondition: {}", arkret_wire::ReasonCode::AGENT_PARTICIPATION_CEILING_WIDEN)))

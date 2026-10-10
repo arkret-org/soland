@@ -382,7 +382,7 @@ impl DeviceHistoryFixture {
                 arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"])
                     .expect("fixture Commit identity");
             commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-                &arkret_canonical::canonical_json_bytes(&identity)
+                arkret_canonical::canonical_json_bytes(&identity)
                     .expect("canonical fixture Commit identity"),
             ));
             commit.signature = self.authority_signature(&commit);

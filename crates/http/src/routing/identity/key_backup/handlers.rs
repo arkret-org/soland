@@ -225,12 +225,12 @@ pub(super) async fn put_key_backup(
     let backup = backup.into_inner();
     let account_actor = local_backup_actor(state, &session.actor)?;
     validate_key_backup_body_typed(&typed_backup_id, &account_actor, &backup)?;
-    validate_key_backup_session_device(&backup, &session.require_human_device_id())?;
+    validate_key_backup_session_device(&backup, session.require_human_device_id())?;
     let device_gate =
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
             &session.actor,
-            &session.require_human_device_id(),
+            session.require_human_device_id(),
         )
         .await
         .map_err(|error| AppError::capability_denied(error.to_string()))?;
@@ -483,11 +483,7 @@ pub(super) async fn unlock_key_backup(
             &holder,
             &unlock_client_ip(req),
             Utc::now(),
-            state
-                .config()
-                .key_backup_daily_download_limit
-                .try_into()
-                .unwrap_or(64),
+            state.config().key_backup_daily_download_limit,
         )
         .await
         .map_err(unlock_consumption_error)?;

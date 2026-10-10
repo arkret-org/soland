@@ -348,6 +348,10 @@ fn sorted_unique_roots(
     Ok(keyed.into_iter().map(|(_, root)| root).collect())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Ancestor validation keeps each authority binding and bounded traversal input explicit."
+)]
 pub(crate) fn validate_ancestor_graph(
     child_id: &GrantId,
     current_id: &GrantId,
@@ -448,13 +452,12 @@ fn validate_parent_constraints(
         }) {
             return Err(conflict("authority_regrant_denied"));
         }
-    } else if let Some(parent_depth) = control.max_authority_depth {
-        if child_control
+    } else if let Some(parent_depth) = control.max_authority_depth
+        && child_control
             .and_then(|child| child.max_authority_depth)
             .is_none_or(|child_depth| child_depth > parent_depth.saturating_sub(1))
-        {
-            return Err(conflict("authority_depth_exceeded"));
-        }
+    {
+        return Err(conflict("authority_depth_exceeded"));
     }
     if let Some(parent_expiry) = soland_storage::capability_grant_expires_at(parent) {
         let child_expiry = child
@@ -486,7 +489,7 @@ fn validate_parent_constraints(
 enum CapabilityGrantCurrentMutation {
     Create {
         grant_id: GrantId,
-        body: arkret_models_collaboration::events_payloads::CapabilityGrantCreateBody,
+        body: Box<arkret_models_collaboration::events_payloads::CapabilityGrantCreateBody>,
     },
     Close {
         grant_id: GrantId,
@@ -525,7 +528,7 @@ fn mutation_for_event(
             let grant_id = GrantId::from_event_id(&event.event_id);
             Ok(Some(CapabilityGrantCurrentMutation::Create {
                 grant_id,
-                body: payload.grant,
+                body: Box::new(payload.grant),
             }))
         }
         arkret_wire::EventKind::CapabilityRevoke => {
@@ -629,7 +632,7 @@ async fn require_non_event_registration_binding(
         .constraints
         .iter()
         .filter(|constraint| {
-            wire_name(serde_json::to_value(&constraint.constraint_kind)).as_deref()
+            wire_name(serde_json::to_value(constraint.constraint_kind)).as_deref()
                 == Some(rule.required_constraint_kind)
                 && constraint
                     .constraint_subkind
@@ -741,6 +744,10 @@ pub(crate) async fn managed_subject_role(
     }))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The runtime grant binds verified producer, authority, expiry and operation evidence."
+)]
 fn managed_runtime_grant(
     id: &GrantId,
     issuer: &ActorId,
@@ -1298,7 +1305,7 @@ async fn commit_capability_grant_current_result_inner(
     let (status, value) = match (mutation, current.as_ref()) {
         (CapabilityGrantCurrentMutation::Create { grant_id, body }, None) => (
             CapabilityGrantCurrentStatus::Active,
-            materialize_capability_grant(conn, event, commit, grant_id, body).await?,
+            materialize_capability_grant(conn, event, commit, grant_id, *body).await?,
         ),
         (CapabilityGrantCurrentMutation::Create { .. }, Some(_)) => {
             return Err(conflict(

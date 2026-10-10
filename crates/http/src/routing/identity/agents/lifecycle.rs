@@ -876,7 +876,6 @@ pub(super) async fn renew_agent_pairing(
         .min(12 * 60 * 60 * 1000);
     let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
     let terminal_notification = account_notification_context(&record);
-    let mut record = record;
     // Re-opening pairing is never a lifecycle transition (key-management.md
     // §3.6.1): the lifecycle intent stays exactly as it was and only the
     // derived runtime_state moves (to pending_runtime_key for bootstrap, or

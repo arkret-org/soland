@@ -15,6 +15,12 @@ pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use serde_json::Value;
 pub use soland_domain::identity::{ContactRecord, ContactRequestSlotState};
+// Durable adapters use the same pure join-policy rules as the contract owner,
+// through this backend-neutral boundary rather than a direct domain dependency.
+pub use soland_domain::reducer::{
+    join_policy_declares_an_automatic_gate, join_rule_requires_an_automatic_gate,
+    validate_join_policy_payload,
+};
 pub(crate) use uuid::Uuid;
 
 mod agent_draft_pending_intents;

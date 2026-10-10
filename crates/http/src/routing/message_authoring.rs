@@ -275,7 +275,7 @@ async fn prepare(
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
             account.principal_id.as_str(),
-            &session.require_human_device_id(),
+            session.require_human_device_id(),
         )
         .await
         .map_err(|e| AppError::capability_denied(e.to_string()))?;
@@ -317,7 +317,7 @@ async fn prepare(
         state,
         &body.intent.content,
         &scope,
-        &session.require_human_device_id(),
+        session.require_human_device_id(),
     )
     .await?;
     let digest_suite = state

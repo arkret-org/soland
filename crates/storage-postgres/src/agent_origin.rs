@@ -688,10 +688,10 @@ pub(crate) async fn assemble_state_in_connection(
             return Err(invalid("control dependency original differs"));
         }
         let reference = dep.computed_reference().map_err(invalid)?;
-        if let Some(old) = dependencies.insert(reference.clone(), dep.clone()) {
-            if old != dep {
-                return Err(invalid("same dependency ref has conflicting content"));
-            }
+        if let Some(old) = dependencies.insert(reference.clone(), dep.clone())
+            && old != dep
+        {
+            return Err(invalid("same dependency ref has conflicting content"));
         }
         let binding = AgentProducerBinding {
             event_ref: original.0.event_id.clone(),

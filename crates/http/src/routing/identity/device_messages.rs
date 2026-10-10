@@ -943,7 +943,7 @@ async fn get_device_messages(
     let lost_watermark = if matches!(&selector, RecipientQueueSelector::HumanDevice { .. }) {
         state
             .deliveries()
-            .device_message_lost_watermark(&session.actor, &session.require_human_device_id())
+            .device_message_lost_watermark(&session.actor, session.require_human_device_id())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
     } else {

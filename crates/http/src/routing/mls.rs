@@ -681,7 +681,7 @@ async fn serve_group_state_material(
     // proves GroupInfo and the ratchet tree describe the requested group at
     // epoch zero. Stored material failing either is not served.
     let validated = outcome
-        .validate_for_request(&request)
+        .validate_for_request(request)
         .map_err(|_| unavailable_material())?;
     arkret_mls::validate_public_group_state(
         &validated.group_info_bytes,
@@ -4173,7 +4173,7 @@ async fn verify_session_keypackage_write_signature(
     verify_device_keypackage_signature(
         state,
         &principal,
-        &session.require_human_device_id(),
+        session.require_human_device_id(),
         signature,
         signing_input,
     )
@@ -4236,7 +4236,7 @@ async fn verify_session_keypackage_revoke_signature(
     verify_device_keypackage_signature(
         state,
         &principal,
-        &session.require_human_device_id(),
+        session.require_human_device_id(),
         signature,
         signing_input,
     )

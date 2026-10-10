@@ -58,11 +58,13 @@ pub(crate) use authority_self_event_unit::{
     refresh_direct_conversation_peer_claim, submit_applet_event, submit_mimi_binding_event,
     submit_self_moderation_report,
 };
+pub(crate) use member_identity::HandleClaimEvidenceRecord;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use member_identity::MemberIdentityEventRecord;
 #[cfg(test)]
 pub(crate) use member_identity::MemberIdentityReplacementEdge;
 #[cfg(test)]
 pub(crate) use member_identity::MemberIdentitySubjectKey;
-pub(crate) use member_identity::{HandleClaimEvidenceRecord, MemberIdentityEventRecord};
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };

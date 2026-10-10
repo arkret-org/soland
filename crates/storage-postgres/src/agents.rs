@@ -157,7 +157,7 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let scope_key = get_str("scope_key")?;
         let realm_id = get_str("realm_id")?;
         let scope = record.get("scope").cloned().unwrap_or(Value::Null);
-        (&mut *conn).transaction::<bool, PgTransactionError, _>(async move |conn| {
+        (*conn).transaction::<bool, PgTransactionError, _>(async move |conn| {
             crate::agent_participation_admission::lock_selection(conn, &agent_id, false).await?;
             let present = sql_query("SELECT version FROM agent_participation WHERE agent_id=$1 AND scope_key=$2")
                 .bind::<Text,_>(&agent_id).bind::<Text,_>(&scope_key)

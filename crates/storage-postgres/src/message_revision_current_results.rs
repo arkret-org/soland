@@ -312,8 +312,8 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
     if !mls_carrier {
         require_plaintext_message_service(conn, &event.realm_id, commit).await?;
     }
-    if let Some(poll) = poll {
-        if crate::poll_state::admit_poll_in_connection(
+    if let Some(poll) = poll
+        && crate::poll_state::admit_poll_in_connection(
             conn,
             event,
             commit,
@@ -321,10 +321,9 @@ pub(crate) async fn commit_message_create_current_result_in_connection(
             &typed.poll_response_heads,
         )
         .await?
-        {
-            // A response is an audit Event and a PollState input, never a MessageState.
-            return Ok(());
-        }
+    {
+        // A response is an audit Event and a PollState input, never a MessageState.
+        return Ok(());
     }
     insert_message_create_current(conn, event, commit, &payload).await
 }

@@ -163,22 +163,21 @@ pub(super) async fn security_transaction_create(
         recovery_transaction_session_id(&request),
     )
     .await?;
-    if let SecurityTransactionCreateRequest::SecurityRotation(rotation) = &request {
-        if rotation.authorizing_device_id.as_str() != session.require_human_device_id()
+    if let SecurityTransactionCreateRequest::SecurityRotation(rotation) = &request
+        && (rotation.authorizing_device_id.as_str() != session.require_human_device_id()
             || state.account_lifecycle_state(session.actor.as_str()) != "active"
             || !authorizing_device_active(
                 state,
                 &rotation.account_id,
                 &rotation.authorizing_device_id,
             )
-            .await?
-        {
-            return Err(crate::app_error!(
-                Unauthenticated,
-                "security rotation requires fresh high-risk authentication by the authorizing device",
-            )
-            .with_wire_code("reauthentication_required"));
-        }
+            .await?)
+    {
+        return Err(crate::app_error!(
+            Unauthenticated,
+            "security rotation requires fresh high-risk authentication by the authorizing device",
+        )
+        .with_wire_code("reauthentication_required"));
     }
     // §2.1 — a recovery create request never carries a finished plan. The
     // Station derives it here, in the same durable prepare that freezes the

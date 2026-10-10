@@ -1093,7 +1093,7 @@ pub(crate) async fn pending_signals_for_subscriber(
         let realm_id = realm.to_string();
         let Ok(watermark) = state
             .deliveries()
-            .signal_watermark(&actor_key, &session.require_human_device_id(), &realm_id)
+            .signal_watermark(&actor_key, session.require_human_device_id(), &realm_id)
             .await
         else {
             continue;
@@ -1129,7 +1129,7 @@ pub(crate) async fn pending_signals_for_subscriber(
                 .deliveries()
                 .advance_signal_watermark(
                     &actor_key,
-                    &session.require_human_device_id(),
+                    session.require_human_device_id(),
                     &realm_id,
                     highest,
                 )

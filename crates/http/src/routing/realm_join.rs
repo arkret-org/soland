@@ -92,9 +92,7 @@ pub(crate) async fn local_authority_bundle(
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_join.command.prepare.v1"))]
 async fn prepare(depot: &mut Depot, req: &mut Request) -> JsonResult<SelfRealmJoinPrepareOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = AuthArgs::default()
-        .authenticated_session(state, req)
-        .await?;
+    let session = AuthArgs.authenticated_session(state, req).await?;
     let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
         state, &session,
     )

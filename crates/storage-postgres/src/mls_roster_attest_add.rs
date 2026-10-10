@@ -276,13 +276,11 @@ pub(crate) async fn install_in_connection(
         if parsed.actor_id == attestation.actor_id
             && parsed.leaf_signature_key == attestation.leaf_signature_key_b64u
             && parsed.key_package_bytes == claim_key_package
-        {
-            if matching_ordinal
+            && matching_ordinal
                 .replace(proposal.consumed_proposal_ordinal)
                 .is_some()
-            {
-                return Err(refused("Add proof matches multiple consumed Proposals"));
-            }
+        {
+            return Err(refused("Add proof matches multiple consumed Proposals"));
         }
     }
     let ordinal =

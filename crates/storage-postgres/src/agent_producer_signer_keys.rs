@@ -822,9 +822,8 @@ pub(crate) async fn read(
         historical_fact_diagnostic("ordinary_read", "target_missing");
         return Ok(None);
     };
-    let mut conn = pg_conn(pool).await.map_err(|error| {
+    let mut conn = pg_conn(pool).await.inspect_err(|_| {
         historical_fact_diagnostic("historical_read", "database_connection_failed");
-        error
     })?;
     #[derive(QueryableByName)]
     struct HistoricalRow {
@@ -942,9 +941,8 @@ pub(crate) async fn read_self_pcr(
         historical_fact_diagnostic("restricted_self_pcr_read", "target_missing");
         return Ok(None);
     };
-    let mut conn = pg_conn(pool).await.map_err(|error| {
+    let mut conn = pg_conn(pool).await.inspect_err(|_| {
         historical_fact_diagnostic("historical_read", "database_connection_failed");
-        error
     })?;
     #[derive(QueryableByName)]
     struct SelfRow {
@@ -1259,6 +1257,10 @@ pub(crate) async fn prepare_admitted_own_pcr_in_connection(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Agent Genesis admission binds the controller, signer, Event and preverified evidence on one connection."
+)]
 pub(crate) async fn prepare_agent_genesis_outcome_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,

@@ -226,21 +226,19 @@ fn validate_typed_payload_shapes(
                 .filter(|delta| delta.get("op").and_then(Value::as_str) == Some("join"))
                 .and_then(|delta| delta.get("participant"))
                 .and_then(|participant| participant.get("participant_binding"))
-            {
-                if binding
+                && (binding
                     .get("issuer_kid")
                     .and_then(Value::as_str)
                     .is_none_or(str::is_empty)
                     || binding
                         .get("sig")
                         .and_then(Value::as_str)
-                        .is_none_or(str::is_empty)
-                {
-                    return Err(
-                        "participant_binding_invalid: participant_binding issuer_kid and sig are \
+                        .is_none_or(str::is_empty))
+            {
+                return Err(
+                    "participant_binding_invalid: participant_binding issuer_kid and sig are \
                          required",
-                    );
-                }
+                );
             }
             Ok(())
         }

@@ -195,6 +195,10 @@ pub trait KeyBackupStore: Send + Sync {
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<bool>;
     async fn unlock_challenge(&self, authority_id: &str) -> PersistenceResult<Option<Value>>;
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Atomic unlock consumption binds authority, backup, replay digest, holder and rate limit inputs."
+    )]
     async fn consume_unlock(
         &self,
         basis: &KeyBackupUnlockBasis,

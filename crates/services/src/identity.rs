@@ -1617,6 +1617,10 @@ pub trait KeyBackupPort: Send + Sync {
         now: chrono::DateTime<Utc>,
     ) -> ServiceResult<bool>;
     async fn unlock_challenge(&self, authority_id: &str) -> ServiceResult<Option<Value>>;
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Atomic unlock consumption binds authority, backup, replay digest, holder and rate limit inputs."
+    )]
     async fn consume_unlock(
         &self,
         basis: &soland_storage::KeyBackupUnlockBasis,
@@ -1909,6 +1913,10 @@ impl KeyBackupService {
     pub async fn unlock_challenge(&self, authority_id: &str) -> ServiceResult<Option<Value>> {
         self.backups.unlock_challenge(authority_id).await
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the atomic unlock service API and its security and rate limit inputs."
+    )]
     pub async fn consume_unlock(
         &self,
         basis: &soland_storage::KeyBackupUnlockBasis,

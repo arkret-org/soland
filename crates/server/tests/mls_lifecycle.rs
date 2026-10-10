@@ -431,7 +431,6 @@ async fn commit_next(
     actor: &Member,
     payload: Value,
     mls_state: Option<MlsStateInstallation>,
-    welcomes: Vec<VerifiedMlsWelcome>,
 ) -> EventCommitRequest {
     let label = kind.as_str().to_owned();
     let mut request = ordinary_realm::next_request_for_actor(
@@ -448,10 +447,6 @@ async fn commit_next(
         request.authority_commit.event.clone(),
     ));
     request.authority_commit.mls_state = mls_state;
-    if !welcomes.is_empty() {
-        request.authority_commit.recipient_queue_capacity = 16;
-    }
-    request.authority_commit.welcomes = welcomes;
     uow.commit_event(request.clone())
         .await
         .unwrap_or_else(|error| panic!("commit {label}: {error}"));
@@ -587,7 +582,6 @@ async fn mls_lifecycle_body() {
             .to_value()
             .expect("join payload"),
         None,
-        Vec::new(),
     )
     .await;
 
@@ -753,7 +747,6 @@ async fn mls_lifecycle_body() {
             consumed_proposals: Vec::new(),
             public_blobs: Vec::new(),
         }),
-        Vec::new(),
     )
     .await;
     let genesis_ref = genesis.authority_commit.event.event_id.clone();

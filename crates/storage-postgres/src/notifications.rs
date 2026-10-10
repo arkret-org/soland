@@ -203,7 +203,7 @@ impl NotificationRow {
         })
     }
 
-    fn into_delta(&self) -> PersistenceResult<NotificationDelta> {
+    fn to_delta(&self) -> PersistenceResult<NotificationDelta> {
         let action = self.projection_action.as_ref().ok_or_else(|| {
             PersistenceError::Internal(
                 "account notification is missing projection_action".to_owned(),
@@ -264,7 +264,7 @@ impl NotificationRow {
                 "account notification artifact kind is invalid".to_owned(),
             ));
         }
-        let delta = self.into_delta()?;
+        let delta = self.to_delta()?;
         let controller_account_pk = self.controller_account_pk.ok_or_else(|| {
             PersistenceError::Internal(
                 "account notification is missing controller_account_pk".to_owned(),
@@ -737,7 +737,7 @@ where
 pub(crate) fn global_notification_payload(value: Value) -> PersistenceResult<Value> {
     let row: NotificationRow = serde_json::from_value(value)
         .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-    serde_json::to_value(row.into_delta()?)
+    serde_json::to_value(row.to_delta()?)
         .map_err(|error| PersistenceError::Internal(error.to_string()))
 }
 
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn ordinary_projection_row_decodes_by_projection_id_branch() {
         let row = ordinary_row();
-        let delta = row.into_delta().unwrap();
+        let delta = row.to_delta().unwrap();
         assert!(matches!(
             delta.data,
             Some(NotificationData::OrdinaryProjection(_))
@@ -816,7 +816,7 @@ mod tests {
         let mut row = ordinary_row();
         row.projection_action = Some("remove".to_owned());
         row.projection_data = Some(serde_json::json!({"reason":"access_revoked"}));
-        let delta = row.into_delta().unwrap();
+        let delta = row.to_delta().unwrap();
         assert_eq!(
             delta.ordinary_removal_reason(),
             Some(
@@ -827,7 +827,7 @@ mod tests {
 }
 
 /// Decode one stored notification payload into the branch its `id` form
-/// selected. Used only by `into_delta`, which has already chosen the branch.
+/// selected. Used only by `to_delta`, which has already chosen the branch.
 fn decode_notification_data<T: serde::de::DeserializeOwned>(value: Value) -> PersistenceResult<T> {
     serde_json::from_value(value).map_err(|error| {
         PersistenceError::Internal(format!("account notification data is invalid: {error}"))

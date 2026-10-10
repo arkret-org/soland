@@ -174,8 +174,7 @@ async fn admit_mls_event_inner(
         return state
             .authority_commits()
             .finalize_mls_rejection(event, &authority, reason_code)
-            .await
-            .map_err(Into::into);
+            .await;
     }
     Ok(outcome)
 }

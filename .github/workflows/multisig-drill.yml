@@ -70,7 +70,7 @@ jobs:
           repository: ${{ github.repository_owner }}/arkret-rust-sdk
           path: arkret-rust-sdk
 
-      - name: Checkout Floria
+      - name: Checkout Floria contracts workspace
         uses: actions/checkout@v6
         with:
           repository: ${{ github.repository_owner }}/floria

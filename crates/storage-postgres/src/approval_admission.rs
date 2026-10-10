@@ -192,6 +192,10 @@ pub(crate) fn validate_candidate<'a>(
 /// with the full shared constraint evaluator on the exact action and target.
 /// Governance requires an actual grant; List WIP also recognizes the registry
 /// owner aggregate, without overriding a matching refusal constraint.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Approval qualification binds the actor, approval proof, Event and confirmed authority cut."
+)]
 pub(crate) async fn approver_qualifies(
     conn: &mut AsyncPgConnection,
     event: &Event,
@@ -217,6 +221,10 @@ pub(crate) async fn approver_qualifies(
     .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Principal qualification keeps the approval signer and Event authority inputs tied to one transaction."
+)]
 pub(crate) async fn qualify_principal(
     conn: &mut AsyncPgConnection,
     event: &Event,
@@ -394,16 +402,15 @@ pub(crate) async fn require_list_wip(
             true,
         )
         .await?
-        {
-            if counted.insert(
+            && counted.insert(
                 arkret_wire::project_did_to_core_id(&vote.input.approver_did)
                     .map_err(|e| error("schema_violation", e))?,
-            ) {
-                accepted.push(QualifiedApproval {
-                    method: method.clone(),
-                    qualification_basis: basis,
-                });
-            }
+            )
+        {
+            accepted.push(QualifiedApproval {
+                method: method.clone(),
+                qualification_basis: basis,
+            });
         }
     }
     if accepted.is_empty() {
@@ -418,6 +425,10 @@ pub(crate) async fn require_list_wip(
 /// Governance remains a tightening layer after base capability admission. A
 /// grant-context vote may count here only when it names a satisfied dependency;
 /// realm-context votes cannot satisfy a grant's separate requirement.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Governance approval verification binds the Event, current authority and qualified proofs."
+)]
 pub(crate) async fn require_governance(
     conn: &mut AsyncPgConnection,
     event: &Event,
@@ -465,16 +476,15 @@ pub(crate) async fn require_governance(
             false,
         )
         .await?
-        {
-            if counted.insert(
+            && counted.insert(
                 arkret_wire::project_did_to_core_id(&vote.input.approver_did)
                     .map_err(|e| error("schema_violation", e))?,
-            ) {
-                accepted.push(QualifiedApproval {
-                    method: method.clone(),
-                    qualification_basis: basis,
-                });
-            }
+            )
+        {
+            accepted.push(QualifiedApproval {
+                method: method.clone(),
+                qualification_basis: basis,
+            });
         }
     }
     if (accepted.len() as u64) < quorum {

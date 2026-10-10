@@ -40,7 +40,7 @@ pub(crate) async fn submit_sidecar_ensure_batch(
                 "Sidecar create and attach Events must share Realm and controller",
             ));
         }
-        arkret_schema::validate_event_for_submit(&create_event).map_err(|error| {
+        arkret_schema::validate_event_for_submit(create_event).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "schema_violation",

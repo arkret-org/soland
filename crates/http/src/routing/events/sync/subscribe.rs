@@ -108,12 +108,10 @@ pub(super) async fn account_response(
         .realm_list
         .as_ref()
         .and_then(|request| request.after.as_ref())
+        && let Err(error) = cursor::parse_realm_list_cursor(&state, &session, token.as_str()).await
     {
-        if let Err(error) = cursor::parse_realm_list_cursor(&state, &session, token.as_str()).await
-        {
-            render_account_cursor_error(res, error, false);
-            return;
-        }
+        render_account_cursor_error(res, error, false);
+        return;
     }
     let filter_value = sync_filter_value(body.filter.as_ref());
     let wait_for_event_id =

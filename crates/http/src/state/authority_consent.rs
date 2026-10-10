@@ -76,33 +76,32 @@ async fn commit(
         .persistence()
         .admit_consent(ConsentAdmissionWrite { transaction })
         .await?;
-    if let ConsentAdmissionOutcome::Committed(record) = &outcome {
-        if let Some(update) = &record.quarantine_update {
-            use crate::routing::identity::device_messages::{
-                ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate,
-                ActorPrivateDeviceUpdate, fanout_actor_private_update,
-                station_device_message_sender,
-            };
-            let holder = request.event.actor_id.as_account_id().ok_or_else(|| {
-                ServiceError::Internal("committed Consent holder is not an Account".into())
-            })?;
-            fanout_actor_private_update(
-                state,
-                holder.principal_id.as_str(),
-                ActorPrivateDeviceUpdate::AccountData {
-                    sender: station_device_message_sender(state),
-                    content: ActorPrivateAccountDataUpdate {
-                        operation: ActorPrivateAccountDataOperation::Put,
-                        account_data_key: update.account_data_key.clone(),
-                        revision: update.revision,
-                        content: Some(update.payload.clone()),
-                        updated_at: update.updated_at,
-                    },
-                    created_at: update.updated_at,
+    if let ConsentAdmissionOutcome::Committed(record) = &outcome
+        && let Some(update) = &record.quarantine_update
+    {
+        use crate::routing::identity::device_messages::{
+            ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate,
+            ActorPrivateDeviceUpdate, fanout_actor_private_update, station_device_message_sender,
+        };
+        let holder = request.event.actor_id.as_account_id().ok_or_else(|| {
+            ServiceError::Internal("committed Consent holder is not an Account".into())
+        })?;
+        fanout_actor_private_update(
+            state,
+            holder.principal_id.as_str(),
+            ActorPrivateDeviceUpdate::AccountData {
+                sender: station_device_message_sender(state),
+                content: ActorPrivateAccountDataUpdate {
+                    operation: ActorPrivateAccountDataOperation::Put,
+                    account_data_key: update.account_data_key.clone(),
+                    revision: update.revision,
+                    content: Some(update.payload.clone()),
+                    updated_at: update.updated_at,
                 },
-            )
-            .await;
-        }
+                created_at: update.updated_at,
+            },
+        )
+        .await;
     }
     Ok(outcome)
 }

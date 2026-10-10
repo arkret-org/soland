@@ -70,6 +70,10 @@ pub struct AccountRealmStreamAuthorizationCut {
 /// Result of `ak.self.committed_event.resource.get.v1` for one caller on an
 /// ordinary Realm's Realm stream, decided from typed current at one read cut.
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Preserve the public member read API and its full or withheld event variants."
+)]
 pub enum MemberCommittedEventRead {
     /// The Commit lies in the caller's readable interval; the Event is
     /// disclosed in full or as the withheld branch.
@@ -356,6 +360,10 @@ pub struct AuthorityCommitTransaction {
 /// rechecked inside the same transaction that commits the Event. This is an
 /// internal persistence guard, never a caller-supplied protocol claim.
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Atomic commit guards retain typed producer evidence without changing the public storage API."
+)]
 pub enum SelfProducerCommitGuard {
     /// The locally configured MIMI facade authored this Event. The exact
     /// binding and independently verified reporter/sender are rechecked at cut.
@@ -937,6 +945,10 @@ pub struct MlsRosterAuthorityFacts {
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Preserve the public authorized roster read API and its exact signed request."
+)]
 pub enum MlsMemberRosterSelectorRead {
     NotFound,
     RevisionUnavailable,
@@ -1346,6 +1358,10 @@ pub struct SignalScopeAuthority {
 /// Station may authorize from its verified replica without holding Genesis
 /// FullView; the governing Station must return the exact accepted Genesis.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Preserve the public group material read API and its complete Genesis carrier."
+)]
 pub enum MlsMemberGroupStateMaterialRead {
     NotFound,
     RevisionUnavailable,
@@ -1583,6 +1599,10 @@ pub trait AuthorityCommitStore: Send + Sync {
         ))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One atomic authority read binds the scope, historical cuts, sender, signal class and both times."
+    )]
     async fn signal_scope_authority(
         &self,
         scope: &arkret_wire::ScopeRef,

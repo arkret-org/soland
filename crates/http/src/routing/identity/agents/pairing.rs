@@ -555,11 +555,11 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         return Ok(agent_record);
     };
     let Some(runtime_request) = agent_record.runtime_key_request.as_ref() else {
-        if agent_record.paired_pairing_request_id == agent_record.pairing_request_id {
-            if let Some(context) = account_notification_context(&agent_record) {
-                finalize_terminal_account_notification(state, &agent_record.id, context,
+        if agent_record.paired_pairing_request_id == agent_record.pairing_request_id
+            && let Some(context) = account_notification_context(&agent_record)
+        {
+            finalize_terminal_account_notification(state, &agent_record.id, context,
                     arkret_models_collaboration::sync_frames::account_subscribe::AgentRuntimeApprovalRemovalReason::Approved).await?;
-            }
         }
         return Ok(agent_record);
     };

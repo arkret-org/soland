@@ -1,10 +1,18 @@
 //! Deterministic full Account fixtures whose PCR and Human Profile are accepted.
 
 #[path = "../../../test-support/src/device_authorization_history.rs"]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    clippy::duplicate_mod,
+    reason = "This fixture is also compiled by test-support without a circular crate dependency."
+)]
 mod device_authorization_history;
 #[path = "../../../test-support/src/pcr_genesis.rs"]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    clippy::duplicate_mod,
+    reason = "This fixture is also compiled by test-support without a circular crate dependency."
+)]
 mod pcr_genesis;
 
 use arkret_wire::{
@@ -18,11 +26,10 @@ use soland_storage_postgres::{PgActorProfileStore, PgPersistenceStore, PgPool};
 
 // Test signing material only. No authorization, source fact, revision or
 // acceptance result is cached here; each candidate reads its actual PG cut.
-fn fixture_signers()
--> &'static std::sync::Mutex<std::collections::BTreeMap<String, (DidUrl, [u8; 32])>> {
-    static SIGNERS: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::BTreeMap<String, (DidUrl, [u8; 32])>>,
-    > = std::sync::OnceLock::new();
+type FixtureSigners = std::sync::Mutex<std::collections::BTreeMap<String, (DidUrl, [u8; 32])>>;
+
+fn fixture_signers() -> &'static FixtureSigners {
+    static SIGNERS: std::sync::OnceLock<FixtureSigners> = std::sync::OnceLock::new();
     SIGNERS.get_or_init(Default::default)
 }
 pub fn register_fixture_signer(account: &AccountId, method: DidUrl, seed: [u8; 32]) {

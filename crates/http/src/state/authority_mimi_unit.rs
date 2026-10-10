@@ -130,7 +130,7 @@ pub(crate) async fn commit_mimi_event(
     commit_event_unit_with_idempotency(
         state,
         &EventAdmissionSubmission::new(event),
-        AdmittedProducer::Local(guard),
+        AdmittedProducer::Local(Box::new(guard)),
         SelfEventUnitEffects {
             franking_replay_nonce,
             mls: None,

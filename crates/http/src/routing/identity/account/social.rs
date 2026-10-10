@@ -601,10 +601,9 @@ async fn contact_list_rows(
         row.bidirectional_scopes =
             intersection(&row.granted_to_peer_scopes, &row.granted_by_peer_scopes);
         row.effective_scopes = Some(row.bidirectional_scopes.clone());
-        if let Ok(pair_key) =
-            direct_pair_key(state, actor, &row.peer.contact_actor_id()).map_err(|error| {
+        if let Ok(pair_key) = direct_pair_key(state, actor, &row.peer.contact_actor_id())
+            .inspect_err(|_| {
                 contact_summary_diagnostic("pair_key_failed");
-                error
             })
             && let Some(facts) = state
                 .event_queries()

@@ -313,35 +313,31 @@ mod notification_tests {
                     ))
                     .await
                     .unwrap();
-                if !received_first {
-                    if let Ok(Ok(notification)) =
+                if !received_first
+                    && let Ok(Ok(notification)) =
                         tokio::time::timeout(Duration::from_millis(100), first_rx.recv()).await
-                    {
-                        assert_eq!(notification.realm_id, "from-second");
-                        let soland_http::state::EventNotificationKind::Event {
-                            event_payload, ..
-                        } = notification.kind
-                        else {
-                            panic!("expected event");
-                        };
-                        assert_eq!(event_payload, large_body);
-                        received_first = true;
-                    }
+                {
+                    assert_eq!(notification.realm_id, "from-second");
+                    let soland_http::state::EventNotificationKind::Event { event_payload, .. } =
+                        notification.kind
+                    else {
+                        panic!("expected event");
+                    };
+                    assert_eq!(event_payload, large_body);
+                    received_first = true;
                 }
-                if !received_second {
-                    if let Ok(Ok(notification)) =
+                if !received_second
+                    && let Ok(Ok(notification)) =
                         tokio::time::timeout(Duration::from_millis(100), second_rx.recv()).await
-                    {
-                        assert_eq!(notification.realm_id, "from-first");
-                        let soland_http::state::EventNotificationKind::Event {
-                            event_payload, ..
-                        } = notification.kind
-                        else {
-                            panic!("expected event");
-                        };
-                        assert_eq!(event_payload, large_body);
-                        received_second = true;
-                    }
+                {
+                    assert_eq!(notification.realm_id, "from-first");
+                    let soland_http::state::EventNotificationKind::Event { event_payload, .. } =
+                        notification.kind
+                    else {
+                        panic!("expected event");
+                    };
+                    assert_eq!(event_payload, large_body);
+                    received_second = true;
                 }
             }
         };

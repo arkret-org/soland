@@ -743,15 +743,14 @@ pub(crate) async fn install_verified_head(
     head: &arkret_wire::CommitStreamHead,
     at: chrono::DateTime<chrono::Utc>,
 ) -> PersistenceResult<()> {
-    if let Some(previous) = verified_head(conn, &head.stream_ref).await? {
-        if previous.stream_position > head.stream_position
+    if let Some(previous) = verified_head(conn, &head.stream_ref).await?
+        && (previous.stream_position > head.stream_position
             || (previous.stream_position == head.stream_position
-                && previous.commit_id != head.commit_id)
-        {
-            return Err(invalid(
-                "snapshot regresses an already verified authorization cut",
-            ));
-        }
+                && previous.commit_id != head.commit_id))
+    {
+        return Err(invalid(
+            "snapshot regresses an already verified authorization cut",
+        ));
     }
     diesel::sql_query("INSERT INTO replica_authorization_cuts (realm_id,source_stream_ref,head_commit_id,head_stream_position,verified_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(realm_id,source_stream_ref) DO UPDATE SET head_commit_id=EXCLUDED.head_commit_id,head_stream_position=EXCLUDED.head_stream_position,verified_at=EXCLUDED.verified_at")
         .bind::<Text, _>(head.stream_ref.realm_id().as_str()).bind::<Jsonb, _>(serde_json::to_value(&head.stream_ref).map_err(invalid)?).bind::<Text, _>(head.commit_id.as_str()).bind::<BigInt, _>(i64::try_from(head.stream_position).map_err(invalid)?).bind::<Timestamptz, _>(at).execute(conn).await.map_err(PersistenceError::database)?;

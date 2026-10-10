@@ -480,7 +480,7 @@ impl AuthorityProtocolPort for AppState {
                 self, session, event,
             )
             .await
-            .map_err(|error| {
+            .inspect_err(|error| {
                 #[cfg(feature = "conformance-harness")]
                 crate::routing::trace_submission_refusal(
                     "producer_preflight",
@@ -490,9 +490,8 @@ impl AuthorityProtocolPort for AppState {
                     } else {
                         "human"
                     },
-                    Some(&error),
+                    Some(error),
                 );
-                error
             })?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
             let outcome = super::authority_forward::forward_self_event_with_session(
@@ -532,7 +531,9 @@ impl AuthorityProtocolPort for AppState {
                     event,
                     &[],
                     None,
-                    super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
+                    super::authority_self_event_unit::AdmittedProducer::Local(Box::new(
+                        producer_guard,
+                    )),
                     &producer_key,
                 )
                 .await;
@@ -542,7 +543,7 @@ impl AuthorityProtocolPort for AppState {
                     self, &request,
                 )
                 .await
-                .map_err(|error| {
+                .inspect_err(|error| {
                     #[cfg(feature = "conformance-harness")]
                     crate::routing::trace_submission_refusal(
                         "key_backup_pointer_unit",
@@ -552,9 +553,8 @@ impl AuthorityProtocolPort for AppState {
                         } else {
                             "human"
                         },
-                        Some(&error),
+                        Some(error),
                     );
-                    error
                 });
             }
             SelfEventRoute::AccountabilityGrant => {
@@ -572,11 +572,11 @@ impl AuthorityProtocolPort for AppState {
         super::authority_self_event_unit::commit_event_unit(
             self,
             &request,
-            super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
+            super::authority_self_event_unit::AdmittedProducer::Local(Box::new(producer_guard)),
             super::authority_self_event_unit::SelfEventUnitEffects::default(),
         )
         .await
-        .map_err(|error| {
+        .inspect_err(|error| {
             #[cfg(feature = "conformance-harness")]
             crate::routing::trace_submission_refusal(
                 "guarded_event_unit",
@@ -586,9 +586,8 @@ impl AuthorityProtocolPort for AppState {
                 } else {
                     "human"
                 },
-                Some(&error),
+                Some(error),
             );
-            error
         })
     }
 
@@ -640,7 +639,7 @@ impl AuthorityProtocolPort for AppState {
             event,
             &request.welcomes,
             None,
-            super::authority_self_event_unit::AdmittedProducer::Local(producer_guard),
+            super::authority_self_event_unit::AdmittedProducer::Local(Box::new(producer_guard)),
             &producer_key,
         )
         .await

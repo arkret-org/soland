@@ -41,7 +41,7 @@ fn approval_deadline(
     timeout: Option<chrono::TimeDelta>,
 ) -> bool {
     approved_at <= committed_at
-        && timeout.map_or(true, |age| {
+        && timeout.is_none_or(|age| {
             approved_at
                 .checked_add_signed(age)
                 .is_some_and(|deadline| committed_at <= deadline)
@@ -59,6 +59,10 @@ fn approval_not_before(grant: &CapabilityGrant) -> chrono::DateTime<chrono::Utc>
 
 /// Return only exact constraints proved at this cut. The shared evaluator must
 /// preserve every deny/quarantine and all other unproved review constraints.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Grant approval admission binds target, issuer, grants and proofs at the locked cut."
+)]
 pub(crate) async fn require_grant_approvals(
     conn: &mut AsyncPgConnection,
     event: &Event,
@@ -150,15 +154,15 @@ pub(crate) async fn require_grant_approvals(
             }
             let principal = arkret_wire::project_did_to_core_id(&vote.input.approver_did)
                 .map_err(|e| PersistenceError::SchemaViolation(e.to_string()))?;
-            if let Some(basis) = qualified.get(&principal) {
-                if counted.insert(principal.clone()) {
-                    accepted.push(QualifiedApproval {
+            if let Some(basis) = qualified.get(&principal)
+                && counted.insert(principal.clone())
+            {
+                accepted.push(QualifiedApproval {
                         method: method.clone(),
                         qualification_basis: serde_json::json!({"voter":basis,"grant_requirement":{
                             "grant_id":grant.id,"constraint_digest":constraint_digest,"constraint":constraint,
                             "eligible_roster":roster_basis,"effective_approval_quorum":quorum}}),
                     });
-                }
             }
         }
         if (accepted.len() as u64) < quorum {

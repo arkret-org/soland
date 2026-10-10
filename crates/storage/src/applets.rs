@@ -175,6 +175,10 @@ pub struct AppletTransactionReplayRecord {
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Preserve the public replay result API; the existing record is returned intact."
+)]
 pub enum AppletTransactionReplayBegin {
     Fresh,
     Existing(Box<AppletTransactionReplayRecord>),

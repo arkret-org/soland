@@ -55,59 +55,55 @@ pub(crate) async fn full_event_for_member_in_connection(
 ) -> PersistenceResult<bool> {
     if ordinary_agent_read_ceiling(
         crate::account_stream_scan::realm_purpose(conn, &row.event.realm_id).await?,
-    ) {
-        if let Some(controller) =
-            crate::realm_authorization_cut::owned_controller_snapshot_in_connection(
+    ) && let Some(controller) =
+        crate::realm_authorization_cut::owned_controller_snapshot_in_connection(
+            conn,
+            &row.event.realm_id,
+            caller,
+            at,
+        )
+        .await?
+    {
+        let agent = caller.as_account_id().ok_or_else(|| {
+            PersistenceError::Conflict("failed_precondition: Agent account unavailable".into())
+        })?;
+        let owner = controller.as_account_id().ok_or_else(|| {
+            PersistenceError::Conflict("failed_precondition: controller account unavailable".into())
+        })?;
+        let circle = match &row.event.scope_ref {
+            arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id),
+            _ => None,
+        };
+        crate::agent_management_admission::require_member_event_read_in_connection(
+            conn,
+            &row.event.realm_id,
+            circle,
+            owner,
+            agent,
+            at,
+        )
+        .await?;
+        if matches!(
+            row.commit.stream_ref,
+            arkret_wire::CommitStreamRef::Realm { .. }
+        ) {
+            let Some(floor) = crate::account_stream_scan::caller_realm_floor_in_connection(
                 conn,
                 &row.event.realm_id,
-                caller,
-                at,
+                &controller,
             )
             .await?
-        {
-            let agent = caller.as_account_id().ok_or_else(|| {
-                PersistenceError::Conflict("failed_precondition: Agent account unavailable".into())
-            })?;
-            let owner = controller.as_account_id().ok_or_else(|| {
-                PersistenceError::Conflict(
-                    "failed_precondition: controller account unavailable".into(),
-                )
-            })?;
-            let circle = match &row.event.scope_ref {
-                arkret_wire::ScopeRef::Circle { circle_id, .. } => Some(circle_id),
-                _ => None,
+            else {
+                return Ok(false);
             };
-            crate::agent_management_admission::require_member_event_read_in_connection(
-                conn,
-                &row.event.realm_id,
-                circle,
-                owner,
-                agent,
-                at,
-            )
-            .await?;
-            if matches!(
-                row.commit.stream_ref,
-                arkret_wire::CommitStreamRef::Realm { .. }
-            ) {
-                let Some(floor) = crate::account_stream_scan::caller_realm_floor_in_connection(
-                    conn,
-                    &row.event.realm_id,
-                    &controller,
-                )
-                .await?
-                else {
-                    return Ok(false);
-                };
-                if row.commit.stream_position < floor.oldest_position {
-                    return Ok(false);
-                }
-            }
-            // Membership-derived visibility is intersected on the same bytes,
-            // not replaced with an explicit event.read capability requirement.
-            if !member_event_visible_in_connection(conn, row, &controller, at).await? {
+            if row.commit.stream_position < floor.oldest_position {
                 return Ok(false);
             }
+        }
+        // Membership-derived visibility is intersected on the same bytes,
+        // not replaced with an explicit event.read capability requirement.
+        if !member_event_visible_in_connection(conn, row, &controller, at).await? {
+            return Ok(false);
         }
     }
     member_event_visible_in_connection(conn, row, caller, at).await
@@ -146,18 +142,17 @@ async fn member_event_visible_in_connection(
     {
         return Ok(false);
     }
-    if let arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
-        if !crate::sidecar_access::participant_in_connection(
+    if let arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref
+        && !crate::sidecar_access::participant_in_connection(
             conn,
             &event.realm_id,
             sidecar_id,
             caller,
         )
         .await?
-            && !crate::sidecar_access::handshake_event_in_connection(conn, event, caller).await?
-        {
-            return Ok(false);
-        }
+        && !crate::sidecar_access::handshake_event_in_connection(conn, event, caller).await?
+    {
+        return Ok(false);
     }
     if author_private_source(event) {
         return Ok(&event.actor_id == caller);

@@ -265,7 +265,7 @@ mod tests {
             prepared_plan_digest: Hash::new(arkret_canonical::sha256_digest(b"plan")).unwrap(),
             erase_confirmation_digest: security_rotation_erase_confirmation_digest(
                 &transaction_id,
-                &[binding.clone()],
+                std::slice::from_ref(&binding),
             )
             .unwrap(),
             series: vec![binding.clone()],

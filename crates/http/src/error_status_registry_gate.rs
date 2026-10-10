@@ -205,7 +205,11 @@ fn base_code(prefix: &str) -> Option<ErrorCode> {
             consider(position, Some(*code));
         }
     }
-    for needle in ["AppError::new(", "AppError::from_rejection(", "app_error!("] {
+    for needle in [
+        concat!("AppError::", "new("),
+        "AppError::from_rejection(",
+        "app_error!(",
+    ] {
         if let Some(position) = window.rfind(needle) {
             let argument = &window[position + needle.len()..];
             let argument = argument.trim_start();

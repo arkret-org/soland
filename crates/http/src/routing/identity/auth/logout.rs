@@ -230,7 +230,7 @@ async fn dev_mode_local_logout(
     let revoked = revoked_session.is_some();
     if let Some(session) = revoked_session {
         let delivery_purge =
-            purge_device_delivery_state(state, &session.actor, &session.require_human_device_id())
+            purge_device_delivery_state(state, &session.actor, session.require_human_device_id())
                 .await;
         append_audit_log(
             state,

@@ -1655,7 +1655,7 @@ fn commit<'a>(
                 projection,
                 action,
                 local_mirror_target,
-            } => (projection, action, local_mirror_target),
+            } => (*projection, *action, local_mirror_target),
         };
         let mut intent = Box::pin(prepare_contact_completion_draft(
             state,
@@ -1736,8 +1736,8 @@ fn contact_admission_error(error: soland_services::ServiceError) -> AppError {
 enum ContactCommitPlan {
     Failed(ContactFailedOutcome),
     Ready {
-        projection: soland_services::events::CommitContactProjection,
-        action: soland_storage::ContactCompletionAction,
+        projection: Box<soland_services::events::CommitContactProjection>,
+        action: Box<soland_storage::ContactCompletionAction>,
         local_mirror_target: Option<String>,
     },
 }
@@ -2199,9 +2199,11 @@ fn plan_contact_commit<'a>(
             }
         };
         Ok(ContactCommitPlan::Ready {
-            projection: projection
-                .ok_or_else(|| AppError::internal("Contact plan omits its projection"))?,
-            action: outcome,
+            projection: Box::new(
+                projection
+                    .ok_or_else(|| AppError::internal("Contact plan omits its projection"))?,
+            ),
+            action: Box::new(outcome),
             local_mirror_target,
         })
     })

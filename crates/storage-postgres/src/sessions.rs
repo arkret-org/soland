@@ -44,12 +44,11 @@ impl SessionStore for PgSessionStore {
         let existing = sql_query("SELECT payload FROM sessions WHERE id=$1 FOR UPDATE").bind::<Text,_>(&record.token_hash)
             .get_result::<crate::JsonPayloadRow>(&mut *conn).await.optional().map_err(PersistenceError::database)?;
         let mut payload = encode_session_payload(record);
-        if existing.is_none() {
-            if let Some(binding) = current_binding {
+        if existing.is_none()
+            && let Some(binding) = current_binding {
                 crate::ensure_gate_allowed_in_transaction(conn,&binding).await?;
                 payload["device_authorization"] = serde_json::to_value(binding).map_err(PersistenceError::database)?;
             }
-        }
         let affected = sql_query(
             "INSERT INTO sessions (id, account_pk, actor_id, device_id, audience, session_public_key, payload, expires_at, revoked_at, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) \

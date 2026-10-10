@@ -571,11 +571,11 @@ pub(crate) async fn commit_strand_update_current_result_in_connection(
     )
     .await?;
     let mut retained_tracks = next.tracks.clone();
-    if let Some(track) = retained_tracks.get_mut("synthesis") {
-        if let Some(previous) = current.tracks.get("synthesis") {
-            track.content = previous.content.clone();
-            track.encrypted_content = previous.encrypted_content.clone();
-        }
+    if let Some(track) = retained_tracks.get_mut("synthesis")
+        && let Some(previous) = current.tracks.get("synthesis")
+    {
+        track.content = previous.content.clone();
+        track.encrypted_content = previous.encrypted_content.clone();
     }
     if writes_synthesis
         && [&current, &next].into_iter().any(|strand| {

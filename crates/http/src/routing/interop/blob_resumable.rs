@@ -980,10 +980,10 @@ async fn complete_resumable_upload(
     };
     if let Err(error) = state.deliveries().store_blob(&blob_ref, record).await {
         tracing::error!(%error, "failed to persist blob");
-        if matches!(state.deliveries().blob(&blob_ref).await, Ok(None)) {
-            if let Err(delete_error) = state.deliveries().delete_object(&storage_key).await {
-                tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
-            }
+        if matches!(state.deliveries().blob(&blob_ref).await, Ok(None))
+            && let Err(delete_error) = state.deliveries().delete_object(&storage_key).await
+        {
+            tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
         }
         if !validate_existing_blob_classification(state, &blob_ref, encryption, res).await {
             return;

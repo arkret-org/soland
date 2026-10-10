@@ -126,10 +126,9 @@ impl Handler for MetricsMiddleware {
         if req.method() == Method::POST
             && req.uri().path() == "/_arkret/self/streams/scan"
             && (200..300).contains(&status)
+            && let Some(bytes) = res.body.size()
         {
-            if let Some(bytes) = res.body.size() {
-                counter!(STREAM_SCAN_BYTES).increment(bytes);
-            }
+            counter!(STREAM_SCAN_BYTES).increment(bytes);
         }
         if matches!(
             req.uri().path(),

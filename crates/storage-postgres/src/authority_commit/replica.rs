@@ -543,20 +543,18 @@ async fn require_visible(
         realm_id,
         sidecar_id,
     } = &event.scope_ref
-    {
-        if !crate::sidecar_replica_authority::holds_source_in_connection(
+        && !crate::sidecar_replica_authority::holds_source_in_connection(
             conn,
             realm_id,
             sidecar_id,
             local_service_id,
         )
         .await?
-        {
-            return Err(conflict(
-                ConflictCode::CapabilityDenied,
-                "private Sidecar source is not held by this exact controller Station",
-            ));
-        }
+    {
+        return Err(conflict(
+            ConflictCode::CapabilityDenied,
+            "private Sidecar source is not held by this exact controller Station",
+        ));
     }
     if event.kind == arkret_wire::EventKind::SidecarCreate
         && event
@@ -1194,27 +1192,25 @@ pub(super) async fn install_replica_anchor_in_connection(
     {
         return Err(invalid("the bootstrap snapshot head does not cover the join").into());
     }
-    if let Some(held) = &head {
-        if snapshot_head.stream_position < held.stream_position
+    if let Some(held) = &head
+        && (snapshot_head.stream_position < held.stream_position
             || (snapshot_head.stream_position == held.stream_position
-                && snapshot_head.commit_id != held.commit_id)
-        {
-            return Err(conflict(
-                ConflictCode::ForkQuarantine,
-                "a refreshed snapshot does not cover the verified held head",
-            ));
-        }
+                && snapshot_head.commit_id != held.commit_id))
+    {
+        return Err(conflict(
+            ConflictCode::ForkQuarantine,
+            "a refreshed snapshot does not cover the verified held head",
+        ));
     }
-    if let Some(previous) = &anchor.anchored_head {
-        if snapshot_head.stream_position < previous.stream_position
+    if let Some(previous) = &anchor.anchored_head
+        && (snapshot_head.stream_position < previous.stream_position
             || (snapshot_head.stream_position == previous.stream_position
-                && snapshot_head.commit_id != previous.commit_id)
-        {
-            return Err(conflict(
-                ConflictCode::ForkQuarantine,
-                "a refreshed snapshot regresses its verified anchor",
-            ));
-        }
+                && snapshot_head.commit_id != previous.commit_id))
+    {
+        return Err(conflict(
+            ConflictCode::ForkQuarantine,
+            "a refreshed snapshot regresses its verified anchor",
+        ));
     }
     let member = arkret_wire::ActorId::account(anchor.member_account_id.clone());
     let opening_selector = match &realm_stream {

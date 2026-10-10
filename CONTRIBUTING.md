@@ -90,6 +90,13 @@ dependencies locally with a `[patch.crates-io]` entry in
   `noncanonical-route-inventory.jsonl` update, including the metadata
   `current_private_path_count`.
 
+The sibling Cotest process harness launches a prebuilt Soland executable.
+Before running cross-repository conformance scenarios, build the current
+source with `cargo build --locked --bin soland --features conformance-harness -j 2`
+and set `SOLAND_BIN` to that executable's absolute path. Compiling Soland as a
+dependency of `cargo test` does not refresh the standalone executable; an older
+binary can otherwise report behavior that the current source already rejects.
+
 ## Reporting bugs
 
 Use a regular GitHub issue for non-security bugs. For vulnerabilities, see

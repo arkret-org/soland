@@ -69,12 +69,12 @@ async fn reconcile_founding_projection(
     staged: Option<StagedRealmBootstrap>,
 ) {
     let mut repair_needed = staged.is_none();
-    if let Some(staged) = staged {
-        if let Err(error) = state.projections().install_staged_realm_bootstrap(staged) {
-            tracing::error!(%realm_id, slot = error.operation_index, reason = %error.reason,
+    if let Some(staged) = staged
+        && let Err(error) = state.projections().install_staged_realm_bootstrap(staged)
+    {
+        tracing::error!(%realm_id, slot = error.operation_index, reason = %error.reason,
                 "durable Direct Conversation founding projection install failed");
-            repair_needed = true;
-        }
+        repair_needed = true;
     }
     repair_needed |= state
         .projections()

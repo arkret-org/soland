@@ -1,14 +1,21 @@
 //! Real accepted PCR and independently signed ordinary producer material.
+// Integration binaries consume different subsets of this shared fixture API.
+#![allow(dead_code)]
 #[path = "../../../test-support/src/device_authorization_history.rs"]
-#[allow(dead_code)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "This fixture is also compiled by test-support without a circular crate dependency."
+)]
 mod device_authorization_history;
 #[path = "ordinary_realm.rs"]
 #[allow(dead_code)]
 mod ordinary_realm;
 #[path = "../../../test-support/src/pcr_genesis.rs"]
-#[allow(dead_code)]
+#[allow(
+    clippy::duplicate_mod,
+    reason = "This fixture is also compiled by test-support without a circular crate dependency."
+)]
 mod pcr_genesis;
-
 use arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest;
 use arkret_models_identity::{HistoricalSignerKeyQuerySender, SignerKeyQuerySelector};
 use arkret_wire::{ActorId, CommittedEventRef, Did, EventKind};
@@ -161,7 +168,7 @@ pub fn seal_commit(commit: &mut arkret_wire::RealmCommit, station: &Did) {
     let body =
         arkret_canonical::canonical::unsigned_value(commit, &["commit_id", "signature"]).unwrap();
     commit.commit_id = arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-        &arkret_canonical::canonical_json_bytes(&body).unwrap(),
+        arkret_canonical::canonical_json_bytes(&body).unwrap(),
     ));
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &arkret_canonical::canonical::unsigned_value(commit, &["signature"]).unwrap(),

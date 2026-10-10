@@ -36,9 +36,11 @@ pub(crate) mod webvh_validation;
 
 use super::system::describe;
 use super::{
-    AuthArgs, SyncCursorError, append_audit_log, bearer_token, dpop_token, handle_for_did,
-    normalize_localpart, now, render_error, sha256_hex, validate_device_id, validate_did,
+    AuthArgs, SyncCursorError, append_audit_log, bearer_token, dpop_token, now, render_error,
+    sha256_hex, validate_did,
 };
+#[cfg(any(test, feature = "conformance-harness"))]
+use super::{handle_for_did, normalize_localpart, validate_device_id};
 
 pub fn router() -> Router {
     protocol_router()

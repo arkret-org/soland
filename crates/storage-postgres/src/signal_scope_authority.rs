@@ -836,6 +836,10 @@ async fn declared_commit(
         .then_some(commit))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Atomic Signal scope reads retain both historical cuts, sender, class and timestamps."
+)]
 pub(crate) async fn read(
     pool: &PgPool,
     scope: &ScopeRef,
@@ -868,6 +872,10 @@ pub(crate) async fn read(
     .await
     .map_err(PgTransactionError::into_persistence)
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Atomic Signal scope reads retain both historical cuts, sender, class and times on the same connection."
+)]
 async fn read_in_connection(
     conn: &mut AsyncPgConnection,
     scope: &ScopeRef,

@@ -365,6 +365,10 @@ impl RealmAuthorizationCut {
     /// constraint of any named grant refuses; otherwise a satisfied grant owing
     /// no quota, then the owner aggregate when `owner_covers`, then the first
     /// satisfied grant whose quota reservations succeed admits the Event.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Atomic action admission retains authenticated actor, policy facts and authority cut inputs."
+    )]
     async fn admit_actions_in_connection(
         &self,
         conn: &mut AsyncPgConnection,
@@ -914,6 +918,10 @@ impl RealmAuthorizationCut {
         Ok((override_allowed, approved))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Atomic approval preparation retains Event, actor and grant facts on the same connection."
+    )]
     async fn prepare_grant_approvals(
         &self,
         conn: &mut AsyncPgConnection,
@@ -1257,28 +1265,26 @@ impl RealmAuthorizationCut {
         if matches!(
             event.kind,
             EventKind::PinAdd | EventKind::PinRemove | EventKind::PinReorder
-        ) {
-            if let Ok(payload) =
-                arkret_models_collaboration::objects::productivity::PinAssertionPayload::from_event(
-                    event,
-                )
-            {
-                let target = match payload.pin_scope() {
-                    arkret_wire::PinScope::Strand { id } => {
-                        facts.strand_id = Some(id.to_string());
-                        WireResourceSelector::strand(self.realm_id.clone(), id.clone())
-                    }
-                    arkret_wire::PinScope::Space { id } => {
-                        facts.space_id = Some(id.to_string());
-                        WireResourceSelector::space(self.realm_id.clone(), id.clone())
-                    }
-                    arkret_wire::PinScope::Circle { id } => {
-                        WireResourceSelector::circle(self.realm_id.clone(), id.clone())
-                    }
-                    arkret_wire::PinScope::Realm { .. } => realm,
-                };
-                return (target, facts);
-            }
+        ) && let Ok(payload) =
+            arkret_models_collaboration::objects::productivity::PinAssertionPayload::from_event(
+                event,
+            )
+        {
+            let target = match payload.pin_scope() {
+                arkret_wire::PinScope::Strand { id } => {
+                    facts.strand_id = Some(id.to_string());
+                    WireResourceSelector::strand(self.realm_id.clone(), id.clone())
+                }
+                arkret_wire::PinScope::Space { id } => {
+                    facts.space_id = Some(id.to_string());
+                    WireResourceSelector::space(self.realm_id.clone(), id.clone())
+                }
+                arkret_wire::PinScope::Circle { id } => {
+                    WireResourceSelector::circle(self.realm_id.clone(), id.clone())
+                }
+                arkret_wire::PinScope::Realm { .. } => realm,
+            };
+            return (target, facts);
         }
         if matches!(
             event.kind,
@@ -1403,17 +1409,16 @@ impl RealmAuthorizationCut {
                 );
             }
         }
-        if event.kind == EventKind::StrandWatchSet {
-            if let Some(strand_id) = facts
+        if event.kind == EventKind::StrandWatchSet
+            && let Some(strand_id) = facts
                 .strand_id
                 .as_deref()
                 .and_then(|value| value.parse::<StrandId>().ok())
-            {
-                return (
-                    WireResourceSelector::strand(self.realm_id.clone(), strand_id),
-                    facts,
-                );
-            }
+        {
+            return (
+                WireResourceSelector::strand(self.realm_id.clone(), strand_id),
+                facts,
+            );
         }
         if event.kind == EventKind::MessageCreate {
             facts.track = Some(DISCUSSION_TRACK.to_owned());

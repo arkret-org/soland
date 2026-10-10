@@ -157,15 +157,14 @@ pub(crate) async fn commit_realm_default_strand_current_result_in_connection(
             "default Strand current result is missing or stale",
         ));
     }
-    if let Some(current) = current.as_ref() {
-        if current.current_stream_position
+    if let Some(current) = current.as_ref()
+        && current.current_stream_position
             >= i64::try_from(commit.stream_position)
                 .map_err(|_| conflict("invalid default Strand stream position"))?
-        {
-            return Err(conflict(
-                "default Strand current revision does not precede Event",
-            ));
-        }
+    {
+        return Err(conflict(
+            "default Strand current revision does not precede Event",
+        ));
     }
     let existing = match current.as_ref() {
         None => None,

@@ -134,7 +134,7 @@ fn seal_commit(
     let identity =
         canonical::unsigned_value(&commit, &["commit_id", "signature"]).expect("Commit identity");
     commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-        &arkret_canonical::canonical_json_bytes(&identity).expect("canonical Commit identity"),
+        arkret_canonical::canonical_json_bytes(&identity).expect("canonical Commit identity"),
     ));
     let unsigned = canonical::unsigned_value(&commit, &["signature"]).expect("unsigned Commit");
     commit.signature = sign_detached_object(

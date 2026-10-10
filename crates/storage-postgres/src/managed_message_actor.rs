@@ -546,7 +546,7 @@ pub(crate) async fn require_managed_actor_in_connection(
     }
     if !crate::actor_profiles::accountability_holds_in_connection(
         conn,
-        &[registration.service_id.clone()],
+        std::slice::from_ref(&registration.service_id),
         &account.principal_id,
         at,
     )

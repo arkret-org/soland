@@ -46,7 +46,7 @@ pub(super) async fn set_read_cursor(
     })?;
     let event = submission.event;
     let cursor =
-        validate_caller_signed_read_cursor(&actor, &session.require_human_device_id(), &event)?;
+        validate_caller_signed_read_cursor(&actor, session.require_human_device_id(), &event)?;
     let owner = actor
         .as_account_id()
         .cloned()

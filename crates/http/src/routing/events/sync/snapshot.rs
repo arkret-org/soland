@@ -116,7 +116,7 @@ async fn build_global_sync_snapshot(
     {
         let lost_watermark = match state
             .deliveries()
-            .device_message_lost_watermark(&session.actor, &session.require_human_device_id())
+            .device_message_lost_watermark(&session.actor, session.require_human_device_id())
             .await
         {
             Ok(watermark) => watermark,

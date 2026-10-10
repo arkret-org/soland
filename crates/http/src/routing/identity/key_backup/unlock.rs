@@ -235,7 +235,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
     validate_key_backup_unlock_proof_shape(
         proof,
         &account_id,
-        &session.require_human_device_id(),
+        session.require_human_device_id(),
         backup,
     )?;
     let typed: KeyBackupUnlockProof =
@@ -268,7 +268,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
             crate::routing::identity::device_generation::active_device_revocation_gate_selector(
                 state,
                 &session.actor,
-                &session.require_human_device_id(),
+                session.require_human_device_id(),
             )
             .await
             .map_err(|error| AppError::capability_denied(error.to_string()))?;
@@ -316,7 +316,7 @@ pub(super) async fn verify_key_backup_unlock_proof(
                 .ok_or_else(|| AppError::capability_denied("current device key missing"))?;
             if !key_backup_verification_method_matches_device_key(
                 &session.actor,
-                &session.require_human_device_id(),
+                session.require_human_device_id(),
                 key,
                 method,
             ) {
@@ -421,7 +421,7 @@ pub(super) async fn issue_key_backup_unlock_challenge(
     crate::routing::identity::device_generation::active_device_revocation_gate_selector(
         state,
         &session.actor,
-        &session.require_human_device_id(),
+        session.require_human_device_id(),
     )
     .await
     .map_err(|error| AppError::capability_denied(error.to_string()))?;

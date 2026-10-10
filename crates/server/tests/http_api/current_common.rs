@@ -6,6 +6,9 @@
 //! file was split into per-domain submodules. All items are reachable
 //! to siblings via `super::common::*` from the `main.rs` integration-test root.
 
+// Each test binary uses a subset of these shared helpers and re-exports.
+#![allow(dead_code, unused_imports)]
+
 pub(crate) use std::sync::LazyLock;
 use std::sync::OnceLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};

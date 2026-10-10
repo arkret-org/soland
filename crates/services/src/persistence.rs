@@ -724,6 +724,10 @@ impl PersistenceHandle {
             .await?)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "An atomic handoff binds both routes, source authority, replay proof and current time."
+    )]
     pub async fn ensure_push_registration_handoff_intent(
         &self,
         source_station_id: &arkret_wire::DidCoreId,

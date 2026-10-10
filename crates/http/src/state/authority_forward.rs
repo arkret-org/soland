@@ -106,7 +106,7 @@ fn resolve_forwarded_producer(
     if let Some(device) = verify_forwarded_producer(state, peer, event, device, body_digest, now)? {
         let key = forwarded_producer_key(Some(&device.evidence))?;
         return Ok((
-            super::authority_self_event_unit::AdmittedProducer::Forwarded(device),
+            super::authority_self_event_unit::AdmittedProducer::Forwarded(Box::new(device)),
             key,
         ));
     }
@@ -126,7 +126,7 @@ fn resolve_forwarded_producer(
         })?;
         let key = verified.key().clone();
         return Ok((
-            super::authority_self_event_unit::AdmittedProducer::ForwardedAgent(verified),
+            super::authority_self_event_unit::AdmittedProducer::ForwardedAgent(Box::new(verified)),
             key,
         ));
     }
@@ -392,8 +392,7 @@ async fn request_origin_controller_gate(
         principal_id: principal.clone(),
         agent_authority_id: state.service_core_id(),
     };
-    let body = arkret_canonical::canonical_json_bytes(&input)
-        .map_err(|error| temporarily_unavailable(error))?;
+    let body = arkret_canonical::canonical_json_bytes(&input).map_err(temporarily_unavailable)?;
     let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         channel.controller_gate_url(),
         "registered controller gate issuance",
@@ -507,9 +506,8 @@ async fn fresh_producer_agent_evidence(
         expires_at: issued_at + chrono::Duration::seconds(300),
         proof: AgentDetachedJws {
             kind: arkret_wire::NonEmptyString::new(arkret_wire::proof_kind::DETACHED_JWS)
-                .map_err(|e| temporarily_unavailable(e))?,
-            jws: arkret_wire::NonEmptyString::new("pending")
-                .map_err(|e| temporarily_unavailable(e))?,
+                .map_err(temporarily_unavailable)?,
+            jws: arkret_wire::NonEmptyString::new("pending").map_err(temporarily_unavailable)?,
         },
     };
     attestation.proof.jws = arkret_wire::NonEmptyString::new(
@@ -519,13 +517,13 @@ async fn fresh_producer_agent_evidence(
         )
         .map_err(|_| temporarily_unavailable("Agent state signing failed"))?,
     )
-    .map_err(|e| temporarily_unavailable(e))?;
+    .map_err(temporarily_unavailable)?;
     let jwk =
         arkret_signatures::jwk::JsonWebKey::ed25519(original.authorization.public_key.key.clone());
     let signer = arkret_models_identity::authenticated_signer_resolution_evidence::build_agent_signer_evidence(
         original.agent_id.clone(),original.authorization.verification_method.clone(),
-        serde_json::from_value(serde_json::to_value(jwk).map_err(|e|temporarily_unavailable(e))?)
-            .map_err(|e|temporarily_unavailable(e))?,
+        serde_json::from_value(serde_json::to_value(jwk).map_err(temporarily_unavailable)?)
+            .map_err(temporarily_unavailable)?,
         original.authorization.accepted_commit_id.clone(),original.authorization.accepted_at,
     ).map_err(wire_refusal)?;
     let resolution =
@@ -538,7 +536,7 @@ async fn fresh_producer_agent_evidence(
             schema: arkret_wire::NonEmptyString::new(
                 arkret_wire::SchemaId::AGENT_AUTHORITY_STATE_EVIDENCE_V1,
             )
-            .map_err(|e| temporarily_unavailable(e))?,
+            .map_err(temporarily_unavailable)?,
             state: Some(original),
             state_digest,
             attestation,

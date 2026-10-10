@@ -206,8 +206,7 @@ async fn views(
                 serde_json::from_value(member.value).map_err(corrupt)?;
             if let Some(event) =
                 covering_event(member.envelope, member.commit_json, member.verified_current)?
-            {
-                if event.kind != arkret_wire::EventKind::CircleMemberState
+                && (event.kind != arkret_wire::EventKind::CircleMemberState
                     || event.scope_ref
                         != (arkret_wire::ScopeRef::Circle {
                             realm_id: circle.realm_id.clone(),
@@ -223,12 +222,11 @@ async fn views(
                     .map_err(corrupt)?
                         != who
                     || event.payload.get("membership")
-                        != Some(&serde_json::to_value(current.membership).map_err(corrupt)?)
-                {
-                    return Err(corrupt(
-                        "membership does not match its covering accepted Event",
-                    ));
-                }
+                        != Some(&serde_json::to_value(current.membership).map_err(corrupt)?))
+            {
+                return Err(corrupt(
+                    "membership does not match its covering accepted Event",
+                ));
             }
             let membership: CircleMembership =
                 serde_json::from_value(serde_json::json!(current.membership)).map_err(corrupt)?;
@@ -299,17 +297,15 @@ async fn views(
             }
             if let Some(event) =
                 covering_event(group.envelope, group.commit_json, group.verified_current)?
-            {
-                if event.scope_ref != scope
+                && (event.scope_ref != scope
                     || !matches!(
                         event.kind,
                         arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
-                    )
-                {
-                    return Err(corrupt(
-                        "MLS current has no matching covering accepted transition",
-                    ));
-                }
+                    ))
+            {
+                return Err(corrupt(
+                    "MLS current has no matching covering accepted transition",
+                ));
             }
             Some(scope.canonical_mls_group_id().map_err(corrupt)?.to_string())
         } else {

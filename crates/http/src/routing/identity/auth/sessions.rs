@@ -574,7 +574,7 @@ async fn enforce_session_device_revocation_gate(
     let current = super::super::device_generation::active_device_revocation_gate_selector(
         state,
         &session.actor,
-        &session.require_human_device_id(),
+        session.require_human_device_id(),
     )
     .await;
     let current = match current {

@@ -38,13 +38,13 @@ pub(crate) async fn after_current_writes_in_connection(
         let cut =
             crate::sidecar_authority_cut::locked_in_connection(conn, &realm, &id, &controller)
                 .await;
-        if let Err(PersistenceError::SchemaViolation(message)) = &cut {
-            if message == "Sidecar participant authority cut exceeds 64 accepted refs" {
-                return Err(PersistenceError::Conflict(format!(
-                    "{}: Sidecar participant authority cut exceeds 64 accepted refs",
-                    soland_storage::ConflictCode::FailedPrecondition
-                )));
-            }
+        if let Err(PersistenceError::SchemaViolation(message)) = &cut
+            && message == "Sidecar participant authority cut exceeds 64 accepted refs"
+        {
+            return Err(PersistenceError::Conflict(format!(
+                "{}: Sidecar participant authority cut exceeds 64 accepted refs",
+                soland_storage::ConflictCode::FailedPrecondition
+            )));
         }
         // A missing parent membership means this Sidecar has no live desired
         // cut. An unheld or corrupt authority source remains a hard refusal.
