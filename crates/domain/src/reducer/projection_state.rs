@@ -442,7 +442,7 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::FAILED_PRECONDITION.to_owned(),
             };
         }
-        let effect = match APPLY_REGISTRY.get(&kind) {
+        match APPLY_REGISTRY.get(&kind) {
             Some(dispatch) => dispatch(self, operation, hlc),
             None => ProjectionEffect::Rejected {
                 reason: if kind.is_reducer_input() {
@@ -452,8 +452,7 @@ impl ProjectionState {
                 }
                 .to_owned(),
             },
-        };
-        effect
+        }
     }
 
     /// Apply the manifest's non-reducer service cache adapter. A private
