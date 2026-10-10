@@ -947,6 +947,8 @@ CREATE TABLE public.authority_forward_attempts (
     -- Local frozen intent and verified acknowledgement; neither is installed state.
     original_submission_json jsonb,
     accepted_commit_json jsonb,
+    -- Local first-attempt cut for an own Circle leave result, never a wire field.
+    circle_leave_parent_revision jsonb,
     event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     status text NOT NULL CHECK (status IN ('forwarding', 'rejected', 'temporarily_unavailable')),
     reason_code text,

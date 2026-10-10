@@ -4,6 +4,10 @@ mod accepted_pcr_account;
 #[allow(dead_code)]
 mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
@@ -13,12 +17,34 @@ use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork, ModerationStor
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgModerationStore};
 
-// Structural producer signatures exercise the persistence boundary only.
+async fn bootstrap(
+    pool: &soland_storage_postgres::PgPool,
+) -> soland_storage::OrdinaryRealmBootstrapCommitUnit {
+    let did = ordinary_realm::human_profile::station_did(&ordinary_realm::station());
+    let account = ordinary_realm::human_profile::admit_for_station_did(
+        pool,
+        did.clone(),
+        "moderation-founder",
+    )
+    .await;
+    ordinary_realm::source_bootstrap(
+        pool,
+        ordinary_realm::bootstrap_unit_with_history_for_account(
+            &uuid::Uuid::now_v7().to_string(),
+            "invite",
+            "since_join",
+            &account,
+            &did,
+        ),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn pending_review_without_report_is_exact_accepted_event_and_lift_removes_it() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let unit = ordinary_realm::bootstrap_unit(&uuid::Uuid::now_v7().to_string());
+    let unit = bootstrap(&pool).await;
     let at = unit.transactions[0].commit.committed_at;
     let authority = PgAuthorityCommitStore { pool: pool.clone() };
     authority
@@ -39,6 +65,7 @@ async fn pending_review_without_report_is_exact_accepted_event_and_lift_removes_
             "issuer_id":principal,"request_canonical_digest":format!("sha256:{}", "01".repeat(32))}),
         at,
     );
+    let review = ordinary_realm::source_request(&pool, review).await;
     uow.commit_event(review.clone()).await.unwrap();
     let view = queue.management_view_for_actor(&actor, None).await.unwrap();
     assert!(
@@ -73,7 +100,10 @@ async fn pending_review_without_report_is_exact_accepted_event_and_lift_removes_
         at,
     );
     assert_eq!(
-        uow.commit_event(stale).await.unwrap_err().conflict_code(),
+        uow.commit_event(ordinary_realm::source_request(&pool, stale).await)
+            .await
+            .unwrap_err()
+            .conflict_code(),
         Some(soland_storage::ConflictCode::CasConflict)
     );
     assert_eq!(
@@ -91,7 +121,9 @@ async fn pending_review_without_report_is_exact_accepted_event_and_lift_removes_
         lift_payload,
         at,
     );
-    uow.commit_event(lift).await.unwrap();
+    uow.commit_event(ordinary_realm::source_request(&pool, lift).await)
+        .await
+        .unwrap();
     let lifted = queue
         .management_view_for_actor(&actor, Some(&realm))
         .await
@@ -100,7 +132,8 @@ async fn pending_review_without_report_is_exact_accepted_event_and_lift_removes_
     assert!(lifted.pending_review_events.is_empty());
 }
 
-fn circle_request(
+async fn circle_request(
+    pool: &soland_storage_postgres::PgPool,
     previous: &soland_storage::AuthorityCommitTransaction,
     kind: arkret_wire::EventKind,
     actor: arkret_wire::ActorId,
@@ -127,7 +160,7 @@ fn circle_request(
     request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
         request.authority_commit.event.clone(),
     ));
-    request
+    ordinary_realm::source_request(pool, request).await
 }
 
 #[tokio::test]
@@ -142,6 +175,7 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
         human.as_account_id().unwrap(),
         &governing_did,
     );
+    let unit = ordinary_realm::source_bootstrap(&pool, unit).await;
     let head = unit.transactions.last().unwrap();
     let at = head.commit.committed_at;
     let actor = head.event.actor_id.clone();
@@ -164,6 +198,7 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
         "state":"active","created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
     );
+    let create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let circle = arkret_wire::CircleId::from_event_id(&create.authority_commit.event.event_id);
     let scope = arkret_wire::ScopeRef::Circle {
@@ -171,6 +206,7 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
         circle_id: circle.clone(),
     };
     let join = circle_request(
+        &pool,
         &create.authority_commit,
         arkret_wire::EventKind::CircleMemberState,
         actor.clone(),
@@ -178,17 +214,19 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
         serde_json::json!({"circle_id":circle,"member_id":actor,"membership":"join",
             "parent_membership_revision":ordinary_realm::parent_membership_revision(&pool,&realm,&actor).await,
             "expected_membership":null}),
-    );
+    ).await;
     uow.commit_event(join.clone()).await.unwrap();
     let report_payload = serde_json::json!({"realm_id":realm,"effective_scope":scope,
         "target_ref":circle,"report_reason_code":"spam","reporter_id":principal});
     let report = circle_request(
+        &pool,
         &join.authority_commit,
         arkret_wire::EventKind::SelfModerationReport,
         actor.clone(),
         &circle,
         report_payload.clone(),
-    );
+    )
+    .await;
     uow.commit_event(report.clone()).await.unwrap();
     assert!(
         queue
@@ -202,12 +240,14 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
     let review_payload = serde_json::json!({"target_ref":circle,"decision":"require_review","issuer_id":principal,
         "request_canonical_digest":format!("sha256:{}","02".repeat(32))});
     let denied = circle_request(
+        &pool,
         &report.authority_commit,
         arkret_wire::EventKind::ModerationDecision,
         actor.clone(),
         &circle,
         review_payload.clone(),
-    );
+    )
+    .await;
     assert!(uow.commit_event(denied.clone()).await.is_err());
     assert!(
         store
@@ -241,7 +281,9 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
             "issued_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
     );
-    uow.commit_event(grant).await.unwrap();
+    uow.commit_event(ordinary_realm::source_request(&pool, grant).await)
+        .await
+        .unwrap();
     let view = queue.management_view_for_actor(&actor, None).await.unwrap();
     assert_eq!(view.items.len(), 1);
     assert_eq!(
@@ -249,6 +291,7 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
         serde_json::json!("submitted")
     );
     let wrong_target = circle_request(
+        &pool,
         &report.authority_commit,
         arkret_wire::EventKind::SelfModerationReport,
         actor.clone(),
@@ -258,7 +301,8 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
             p["target_ref"] = serde_json::json!(realm);
             p
         },
-    );
+    )
+    .await;
     assert!(uow.commit_event(wrong_target.clone()).await.is_err());
     assert!(
         store
@@ -280,6 +324,7 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
     let lift_payload = serde_json::json!({"target_ref":circle,"decision_ref":denied.authority_commit.event.event_id,
         "expected_revision":{"commit_id":denied.authority_commit.commit.commit_id,"stream_position":denied.authority_commit.commit.stream_position}});
     let stale = circle_request(
+        &pool,
         &denied.authority_commit,
         arkret_wire::EventKind::ModerationDecisionLift,
         actor.clone(),
@@ -289,18 +334,21 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
             p["expected_revision"]["stream_position"] = serde_json::json!(0);
             p
         },
-    );
+    )
+    .await;
     assert_eq!(
         uow.commit_event(stale).await.unwrap_err().conflict_code(),
         Some(soland_storage::ConflictCode::CasConflict)
     );
     let lift = circle_request(
+        &pool,
         &denied.authority_commit,
         arkret_wire::EventKind::ModerationDecisionLift,
         actor.clone(),
         &circle,
         lift_payload,
-    );
+    )
+    .await;
     uow.commit_event(lift).await.unwrap();
     let view = queue.management_view_for_actor(&actor, None).await.unwrap();
     assert!(view.pending_review_events.is_empty());

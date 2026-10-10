@@ -226,6 +226,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         "join",
         "first join",
     );
+    let realm_join = ordinary_realm::source_request(&pool, realm_join).await;
     uow.commit_event(realm_join.clone()).await.unwrap();
     let create = ordinary_realm::source_request(&pool, sourced(ordinary_realm::next_request_for_actor(
         &realm_join.authority_commit,
@@ -290,6 +291,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         &alice,
         circle_membership(&circle, &alice, "join", Value::Null, None),
     );
+    let missing = ordinary_realm::source_request(&pool, missing).await;
     assert!(matches!(
         uow.commit_event(missing).await.unwrap_err(),
         PersistenceError::SchemaViolation(_)
@@ -308,6 +310,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             Some(&foreign_revision),
         ),
     );
+    let foreign = ordinary_realm::source_request(&pool, foreign).await;
     let refused = uow.commit_event(foreign).await.unwrap_err();
     assert_eq!(
         refusal_code(&refused),
@@ -327,6 +330,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         &alice,
         circle_membership(&circle, &alice, "join", Value::Null, Some(&shifted)),
     );
+    let shifted = ordinary_realm::source_request(&pool, shifted).await;
     assert_eq!(
         refusal_code(&uow.commit_event(shifted).await.unwrap_err()),
         Some(ConflictCode::FailedPrecondition)
@@ -339,6 +343,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         &alice,
         circle_membership(&circle, &alice, "join", Value::Null, Some(&first_parent)),
     );
+    let circle_join = ordinary_realm::source_request(&pool, circle_join).await;
     uow.commit_event(circle_join.clone()).await.unwrap();
     let joined = circle_member(&pool, &circle, &alice).await;
     assert!(joined.effective);
@@ -376,11 +381,12 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         payload.clone(),
         at,
     );
-    let mut genesis = sourced(ordinary_realm::request_for_event(
+    let genesis = sourced(ordinary_realm::request_for_event(
         &circle_join.authority_commit,
         event,
         at,
     ));
+    let mut genesis = ordinary_realm::source_request(&pool, genesis).await;
     genesis.authority_commit.commit.stream_ref = stream.clone();
     genesis.authority_commit.mls_state = Some(soland_storage::MlsStateInstallation {
         effective_scope: ScopeRef::Circle {
@@ -495,6 +501,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 "issued_at":arkret_canonical::format_timestamp_canonical(moderation_at)}}),
             moderation_at,
         ));
+        let moderation_grant = ordinary_realm::source_request(&pool, moderation_grant).await;
         uow.commit_event(moderation_grant.clone()).await.unwrap();
         // A later grant cannot retroactively authorize an older parent cut.
         assert!(
@@ -544,6 +551,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     json!({"realm_id":realm,"expected_state_digest":root_digest(&pool,&realm).await}),
                     moderation_at + chrono::TimeDelta::milliseconds(1),
                 ));
+                let reset = ordinary_realm::source_request(&pool, reset).await;
                 uow.commit_event(reset).await.unwrap();
                 assert!(
                     store
@@ -570,6 +578,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                         "patch":{"controller_actor_id":alice},"successor_acceptance":"storage-boundary-fixture"}),
                     moderation_at + chrono::TimeDelta::milliseconds(1),
                 ));
+                let transfer = ordinary_realm::source_request(&pool, transfer).await;
                 uow.commit_event(transfer.clone()).await.unwrap();
                 assert!(
                     store
@@ -596,6 +605,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                         "expected_revision":{"commit_id":original_parent,"stream_position":moderation_grant.authority_commit.commit.stream_position}}),
                     tail.commit.committed_at + chrono::TimeDelta::milliseconds(1),
                 ));
+                let revoke = ordinary_realm::source_request(&pool, revoke).await;
                 uow.commit_event(revoke.clone()).await.unwrap();
                 let transfer_back = sourced(ordinary_realm::next_request_for_actor(
                     &revoke.authority_commit,
@@ -606,6 +616,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     revoke.authority_commit.commit.committed_at
                         + chrono::TimeDelta::milliseconds(1),
                 ));
+                let transfer_back = ordinary_realm::source_request(&pool, transfer_back).await;
                 uow.commit_event(transfer_back).await.unwrap();
                 assert!(
                     store
@@ -635,6 +646,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                         "new_governance_station_id":next_station}),
                     tail.commit.committed_at + chrono::TimeDelta::milliseconds(1),
                 ));
+                let change = ordinary_realm::source_request(&pool, change).await;
                 uow.commit_event(change.clone()).await.unwrap();
                 let mut heads = vec![
                     arkret_wire::CommitStreamHead {
@@ -779,6 +791,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 "expected_revision":{"commit_id":moderation_grant.authority_commit.commit.commit_id,"stream_position":moderation_grant.authority_commit.commit.stream_position}}),
             moderation_at + chrono::TimeDelta::milliseconds(1),
         ));
+        let revoke = ordinary_realm::source_request(&pool, revoke).await;
         uow.commit_event(revoke.clone()).await.unwrap();
         assert!(
             store
@@ -821,6 +834,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         &alice,
         circle_membership(&circle, &alice, "leave", json!("join"), None),
     );
+    let same_parent_leave = ordinary_realm::source_request(&pool, same_parent_leave).await;
     uow.commit_event(same_parent_leave.clone()).await.unwrap();
     let same_parent_join = circle_request(
         &same_parent_leave.authority_commit,
@@ -828,6 +842,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         &alice,
         circle_membership(&circle, &alice, "join", json!("leave"), Some(&first_parent)),
     );
+    let same_parent_join = ordinary_realm::source_request(&pool, same_parent_join).await;
     uow.commit_event(same_parent_join.clone()).await.unwrap();
     let answer = store
         .mls_member_group_state_material_read(&material_request, &ordinary_realm::station(), None)
@@ -865,6 +880,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     // Parent leave: the old Circle join is effective-invalid at once; no
     // Circle Event is synthesized and the canonical row is not rewritten.
     let realm_leave = realm_membership(&parent_tail, &alice, &alice, "leave", "parent leave");
+    let realm_leave = ordinary_realm::source_request(&pool, realm_leave).await;
     uow.commit_event(realm_leave.clone()).await.unwrap();
     let after_leave = circle_member(&pool, &circle, &alice).await;
     if activated {
@@ -924,6 +940,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         "join",
         "parent rejoin",
     );
+    let rejoin = ordinary_realm::source_request(&pool, rejoin).await;
     uow.commit_event(rejoin.clone()).await.unwrap();
     let second_parent = ordinary_realm::parent_membership_revision(&pool, &realm, &alice).await;
     assert_ne!(second_parent, first_parent);
@@ -981,6 +998,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         &alice,
         circle_membership(&circle, &alice, "join", json!("leave"), Some(&first_parent)),
     );
+    let stale = ordinary_realm::source_request(&pool, stale).await;
     assert_eq!(
         refusal_code(&uow.commit_event(stale).await.unwrap_err()),
         Some(ConflictCode::FailedPrecondition)
@@ -998,6 +1016,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             Some(&second_parent),
         ),
     );
+    let misplaced = ordinary_realm::source_request(&pool, misplaced).await;
     assert!(matches!(
         uow.commit_event(misplaced).await.unwrap_err(),
         PersistenceError::SchemaViolation(_)
@@ -1010,6 +1029,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         &alice,
         circle_membership(&circle, &alice, "leave", json!("join"), None),
     );
+    let circle_leave = ordinary_realm::source_request(&pool, circle_leave).await;
     uow.commit_event(circle_leave.clone()).await.unwrap();
     let circle_rejoin = circle_request(
         &circle_leave.authority_commit,
@@ -1023,6 +1043,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             Some(&second_parent),
         ),
     );
+    let circle_rejoin = ordinary_realm::source_request(&pool, circle_rejoin).await;
     uow.commit_event(circle_rejoin.clone()).await.unwrap();
     let restored = circle_member(&pool, &circle, &alice).await;
     assert!(restored.effective);
@@ -1057,6 +1078,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         "ban",
         "parent ban",
     );
+    let ban = ordinary_realm::source_request(&pool, ban).await;
     uow.commit_event(ban).await.unwrap();
     let after_ban = circle_member(&pool, &circle, &alice).await;
     assert!(!after_ban.effective);

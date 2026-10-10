@@ -34,6 +34,9 @@ env:
   SOLAND_KEYSTORE_PATH: ${{ github.workspace }}/_drill/keystore/soland.v1
   SOLAND_KEYSTORE_MASTER_KEY_FILE: ${{ github.workspace }}/_drill/secrets/keystore-master-key
   SOLAND_DEVELOPMENT_MODE: "true"
+  # This keystore drill has no Account Authority deployment. Override the
+  # checked-in local development URL instead of discovering an absent peer.
+  SOLAND_ACCOUNT_AUTHORITY_URL: ""
   SOLAND_BIND: 127.0.0.1:8989
   SOLAND_OBJECT_STORAGE_LOCAL_ROOT: ${{ github.workspace }}/_drill/blobs
 

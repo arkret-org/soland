@@ -3352,6 +3352,8 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         commit.verify_commit_id_matches_content().map_err(invalid)?;
         #[derive(QueryableByName)]
         struct BoundLeaveRow {
+            #[diesel(sql_type=Nullable<Jsonb>)]
+            circle_leave_parent_revision: Option<Value>,
             #[diesel(sql_type=Jsonb)]
             envelope: Value,
             #[diesel(sql_type=Jsonb)]
@@ -3373,7 +3375,7 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").execute(&mut *conn).await?;
             let row = sql_query(
-                "SELECT e.envelope,c.commit_json,f.original_submission_json AS submission_json, \
+                "SELECT e.envelope,c.commit_json,f.circle_leave_parent_revision,f.original_submission_json AS submission_json, \
                  f.accepted_commit_json AS accepted_json,k.producer_source_fact AS fact_json, \
                  m.value AS member_value,j.envelope AS join_envelope,jc.commit_json AS join_commit_json \
                  FROM canonical_events e JOIN realm_commits c ON c.event_pk=e.pk \
@@ -3449,8 +3451,12 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
                         .map_err(PersistenceError::database)?).map_err(invalid)?;
                     value.membership == CircleMembership::Join
                         && value.member_id == actor && Some(&value.circle_id) == circle_leave.as_ref().map(|leave| &leave.circle_id)
-                        && match value.parent_membership_revision {
-                            Some(bound) => parent_join_at_revision_in_connection(conn, &event.realm_id, &actor, &bound).await?,
+                        && value.parent_membership_revision.is_some()
+                        && match row.circle_leave_parent_revision {
+                            Some(bound) => {
+                                let bound: arkret_wire::CurrentRevision = decode_json(bound, "bound Circle leave parent revision")?;
+                                parent_join_at_revision_in_connection(conn, &event.realm_id, &actor, &bound).await?
+                            },
                             None => false,
                         }
                 }
@@ -3832,14 +3838,45 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
         let token = ids::parse_event_id(event.event_id.as_str())
             .ok_or_else(|| invalid("invalid Event token"))?;
         let mut conn = pg_conn(&self.pool).await?;
+        // Freeze the parent cut before sending the original own Circle leave.
+        // Its old canonical join may already be effective-invalid after a
+        // parent rejoin; that does not authorize content, but the new exact
+        // parent cut can bind delivery of this explicit cleanup write result.
+        let own_circle_leave = if event.kind == arkret_wire::EventKind::CircleMemberState
+            && matches!(event.scope_ref, arkret_wire::ScopeRef::Circle { .. })
+            && event.actor_id.as_account_id().is_some()
+            && event.executed_by.is_none()
+        {
+            let payload: arkret_models_collaboration::events_payloads::CircleMemberStatePayload =
+                serde_json::from_value(
+                    serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(invalid)?;
+            payload.membership
+                == arkret_models_collaboration::governance::circle::CircleMembership::Leave
+                && payload.member_id == event.actor_id
+        } else {
+            false
+        };
         let written = sql_query(
-            "INSERT INTO authority_forward_attempts (event_pk,status,reason_code,attempted_at,original_submission_json) \
-             SELECT pk,'forwarding',NULL,$3,$2 FROM canonical_events WHERE id=$1 AND envelope=$4 \
-             ON CONFLICT(event_pk) DO UPDATE SET original_submission_json=EXCLUDED.original_submission_json \
+            "INSERT INTO authority_forward_attempts (event_pk,status,reason_code,attempted_at,original_submission_json,circle_leave_parent_revision) \
+             SELECT e.pk,'forwarding',NULL,$3,$2, \
+                 CASE WHEN $5 THEN (SELECT jsonb_build_object('commit_id',m.current_commit_id,'stream_position',m.current_stream_position) \
+                    FROM member_state_current_results m WHERE m.realm_id=$6 AND m.member_id=$7 AND m.membership='join' \
+                      AND (EXISTS(SELECT 1 FROM realm_commits c WHERE c.commit_id=m.current_commit_id AND c.realm_id=m.realm_id \
+                           AND c.stream_position=m.current_stream_position AND c.stream_ref=jsonb_build_object('kind','realm','realm_id',m.realm_id)) \
+                        OR EXISTS(SELECT 1 FROM replica_stream_anchors a WHERE a.realm_id=m.realm_id AND a.stream_key=$8 \
+                           AND a.anchor_stream_position>=m.current_stream_position))) END \
+             FROM canonical_events e WHERE e.id=$1 AND e.envelope=$4 \
+             ON CONFLICT(event_pk) DO UPDATE SET original_submission_json=EXCLUDED.original_submission_json, \
+                circle_leave_parent_revision=CASE WHEN authority_forward_attempts.original_submission_json IS NULL \
+                  THEN EXCLUDED.circle_leave_parent_revision ELSE authority_forward_attempts.circle_leave_parent_revision END \
              WHERE authority_forward_attempts.original_submission_json IS NULL \
                 OR authority_forward_attempts.original_submission_json=EXCLUDED.original_submission_json"
         ).bind::<Binary,_>(token.to_vec()).bind::<Jsonb,_>(serde_json::to_value(submission).map_err(PersistenceError::database)?)
          .bind::<Timestamptz,_>(at).bind::<Jsonb,_>(serde_json::to_value(event).map_err(PersistenceError::database)?)
+         .bind::<Bool,_>(own_circle_leave).bind::<Text,_>(event.realm_id.as_str()).bind::<Text,_>(event.actor_id.to_string())
+         .bind::<Text,_>(stream_key(&arkret_wire::CommitStreamRef::Realm { realm_id: event.realm_id.clone() })?)
          .execute(&mut *conn).await.map_err(PersistenceError::database)?;
         if written != 1 {
             return Err(forward_original_conflict(

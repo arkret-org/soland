@@ -9,8 +9,6 @@ use arkret_models_collaboration::agent_sidecar::{
     AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarMlsContext, AgentSidecarState,
     PendingSidecarAccessReconciliation,
 };
-#[cfg(test)]
-use arkret_models_collaboration::events_payloads::sidecar::AgentSidecarExchangeControlPayload;
 use arkret_models_collaboration::events_payloads::sidecar::{
     SidecarContextAttachPayload, SidecarCreatePayload,
 };

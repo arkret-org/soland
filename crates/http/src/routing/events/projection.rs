@@ -8,8 +8,6 @@
 //! rows and typed SDK response models. The retired post-accept Cell/Seal
 //! publisher is intentionally absent.
 
-#[cfg(test)]
-pub(super) use super::is_valid_discoverability;
 pub(super) use super::{
     discussion_track_for_projection_event, message_id_from_event_id, now,
     strand_id_for_projection_event,
@@ -31,8 +29,6 @@ pub use event_json::*;
 #[cfg(test)]
 use invite::*;
 pub use operation_fields::*;
-#[cfg(test)]
-pub use soland_services::projection::tombstone::*;
 pub use timeline::*;
 
 #[cfg(test)]

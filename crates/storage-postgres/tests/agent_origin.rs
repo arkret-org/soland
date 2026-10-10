@@ -1,9 +1,17 @@
 //! Actual original admission, immutable source and current-cut regressions.
 //! These fixtures require PostgreSQL; no memory/skip fallback exists.
 #[path = "../../test-support/src/device_authorization_history.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared device history fixture."
+)]
 mod device_history_fixture;
 use device_history_fixture as device_authorization_history;
 #[path = "../../test-support/src/pcr_genesis.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared PCR fixture."
+)]
 mod pcr_genesis_fixture;
 use arkret_wire::{
     DetachedSignatureContext, Did, DidCoreId, DidUrl, EventKind, RealmCommitId, RealmId,

@@ -533,7 +533,19 @@ async fn fill_to_head(
                 .iter()
                 .find(|entry| entry.target.commit_id == item.commit().commit_id)
                 .map(|entry| &entry.producer_signer_fact);
-            store_scanned(state, realm_id, anchored, located, &held, item, fact).await?;
+            store_scanned(
+                state,
+                realm_id,
+                anchored,
+                located,
+                &held,
+                item,
+                ScannedItemEvidence {
+                    producer_signer_fact: fact,
+                    exact_self_result_account: None,
+                },
+            )
+            .await?;
             held = item.commit().clone();
         }
         if !page.truncated {
@@ -752,7 +764,34 @@ pub(crate) async fn ensure_forwarded_target(
                     .map_err(temporary)?;
             }
             require_forward_source(state, session, event, located).await?;
-            store_scanned(state, &event.realm_id, anchored, located, &held, item, fact).await?;
+            let own_circle_leave = if is_target
+                && expected == Some(commit)
+                && event.kind == arkret_wire::EventKind::CircleMemberState
+            {
+                let payload: arkret_models_collaboration::events_payloads::CircleMemberStatePayload =
+                    serde_json::from_value(serde_json::to_value(&event.payload).map_err(temporary)?)
+                        .map_err(temporary)?;
+                session.session_grant.as_ref().filter(|_| {
+                    payload.membership == arkret_models_collaboration::governance::circle::CircleMembership::Leave
+                        && payload.member_id == event.actor_id
+                }).map(|grant| &grant.account_id)
+                    .filter(|account| event.actor_id.as_account_id() == Some(*account))
+            } else {
+                None
+            };
+            store_scanned(
+                state,
+                &event.realm_id,
+                anchored,
+                located,
+                &held,
+                item,
+                ScannedItemEvidence {
+                    producer_signer_fact: fact,
+                    exact_self_result_account: own_circle_leave,
+                },
+            )
+            .await?;
             require_forward_source(state, session, event, located).await?;
             held = commit.clone();
             if is_target {
@@ -1113,6 +1152,12 @@ async fn require_forward_visibility(
     }
 }
 
+struct ScannedItemEvidence<'a> {
+    producer_signer_fact:
+        Option<&'a arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+    exact_self_result_account: Option<&'a arkret_wire::AccountId>,
+}
+
 async fn store_scanned(
     state: &AppState,
     realm_id: &RealmId,
@@ -1120,8 +1165,9 @@ async fn store_scanned(
     located: &mut LocatedRealmAuthority,
     held: &RealmCommit,
     item: &CommittedEventView,
-    fact: Option<&arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+    evidence: ScannedItemEvidence<'_>,
 ) -> Result<(), String> {
+    let fact = evidence.producer_signer_fact;
     let commit = item.commit();
     ensure_historical_method_key(state, located, &commit.signature).await?;
     let commits = state.authority_commits();
@@ -1148,7 +1194,12 @@ async fn store_scanned(
                     commit: commit.clone(),
                     producer_signer_fact: fact.cloned(),
                     genesis_event_ref: None,
-                    role: CommittedReplicaRole::HeldStream,
+                    role: evidence.exact_self_result_account.map_or(
+                        CommittedReplicaRole::HeldStream,
+                        |account| CommittedReplicaRole::AcceptedOwnCircleLeave {
+                            member_account_id: account.clone(),
+                        },
+                    ),
                     received_at: crate::wire::now(),
                     // A scanned item carries no Welcome; its item's
                     // committed replication queues them.

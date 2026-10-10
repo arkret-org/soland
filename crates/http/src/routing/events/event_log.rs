@@ -47,8 +47,6 @@ use super::now;
 #[cfg(test)]
 use super::projection::retention_tombstone_for_event;
 #[cfg(test)]
-use super::projection::{retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag};
-#[cfg(test)]
 use super::realm_allows_plaintext_service_for_data_class;
 use super::realm_event_visible_to_session;
 #[cfg(test)]

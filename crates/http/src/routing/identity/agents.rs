@@ -28,8 +28,6 @@
 use std::collections::BTreeSet;
 
 #[cfg(test)]
-use arkret_event_draft::ProjectedEventOperation as Operation;
-#[cfg(test)]
 use arkret_identifiers::Did;
 use arkret_identifiers::{BlobRef, DidCoreId, EventId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{

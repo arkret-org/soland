@@ -1,6 +1,3 @@
-#[cfg(test)]
-use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-
 use super::*;
 
 /// Renew only this Station's attestations, using the accepted directional

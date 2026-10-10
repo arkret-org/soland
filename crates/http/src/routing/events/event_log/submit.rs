@@ -1,10 +1,3 @@
-#[cfg(test)]
-use std::hash::Hasher;
-#[cfg(test)]
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::OnceLock;
-
 use arkret_event_draft::EventPayloadExt as _;
 
 use super::*;
@@ -38,6 +31,10 @@ fn stamp_projection_operation_received_at(
 
 #[cfg(test)]
 #[derive(Debug)]
+#[expect(
+    dead_code,
+    reason = "The test fixture retains its complete envelope while each unit case inspects only its relevant fields."
+)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: EventId,
     pub(in crate::routing) actor: arkret_wire::ActorId,
@@ -100,6 +97,10 @@ pub(super) fn map_event_hash_collision(
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
+#[expect(
+    dead_code,
+    reason = "The test fixture retains its complete envelope while each unit case inspects only its relevant fields."
+)]
 pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) realm_id: String,
     pub(in crate::routing) actor_id: String,
@@ -148,6 +149,10 @@ pub(in crate::routing) struct InternalEventAdmission {
 
 #[cfg(test)]
 #[derive(Debug, Clone)]
+#[expect(
+    dead_code,
+    reason = "The test fixture retains its complete envelope while each unit case inspects only its relevant fields."
+)]
 enum InternalEventBinding {
     AppletFormal {
         event_id: String,

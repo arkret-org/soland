@@ -23,5 +23,12 @@ pub async fn accepted_pcr_account(pool: &PgPool, station_did: Did) -> ActorId {
         .admit_founding_device(&persistence)
         .await
         .expect("accepted PCR founding device");
+    // Retain the actual accepted device key for later fixture signatures.
+    // Each new Event still prepares its historical source at the real PG cut.
+    crate::ordinary_realm::human_profile::register_fixture_signer(
+        &fixture.history.account,
+        fixture.history.device_verification_method.clone(),
+        fixture.history.founding_device_signing_seed,
+    );
     ActorId::account(fixture.history.account.clone())
 }

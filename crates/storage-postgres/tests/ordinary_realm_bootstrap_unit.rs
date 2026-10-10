@@ -14,7 +14,6 @@ mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
-mod support;
 
 use arkret_models_collaboration::authority_commit::{
     OrdinaryRealmBootstrapUnitKind, OrdinaryRealmBootstrapUnitSubmission,
@@ -31,7 +30,7 @@ use soland_storage::{
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
-    Db, PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgInviteCurrentResultStore,
+    PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgInviteCurrentResultStore,
     account_snapshot_material,
 };
 
@@ -3643,7 +3642,6 @@ async fn account_scan_withholds_expired_and_redacted_messages_on_their_commits()
 #[tokio::test]
 async fn peer_stream_scan_refuses_non_hosting_peers_and_serves_a_hosting_peer_its_interval() {
     use arkret_wire::StreamScanDirection::After;
-    use soland_storage::AccountStreamScan;
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
@@ -7474,7 +7472,7 @@ fn assert_message_revision_window_and_redaction<'a>(
         );
         let own_edit = source_if_human(&pool, own_edit).await;
         uow.commit_event(own_edit.clone()).await.unwrap();
-        let mut late_edit = realm_event_request_as(
+        let late_edit = realm_event_request_as(
             &own_edit,
             &author,
             arkret_wire::EventKind::MessageRevise,

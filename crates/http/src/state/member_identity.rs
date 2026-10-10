@@ -8,8 +8,6 @@ use arkret_models_identity::HandleClaim;
 use arkret_models_identity::HandleClaimStatus;
 #[cfg(any(test, feature = "test-support"))]
 use serde_json::Value;
-#[cfg(test)]
-pub use soland_storage::MemberIdentityReplacementEdge;
 pub use soland_storage::{
     HandleClaimEvidenceRecord, MemberIdentityEventRecord, MemberIdentitySubjectKey,
 };

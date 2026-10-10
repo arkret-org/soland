@@ -3,12 +3,17 @@
 #[allow(dead_code)]
 mod device_authorization_history;
 #[path = "support/human_profile.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Human fixture."
+)]
 mod human_profile;
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
-#[path = "../../test-support/src/pcr_genesis.rs"]
-#[allow(dead_code)]
-mod pcr_genesis;
 
 use std::sync::Arc;
 
@@ -18,24 +23,6 @@ use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::{
     PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPersistenceStore,
 };
-
-fn fixture(label: &str) -> pcr_genesis::PcrGenesisFixture {
-    pcr_genesis::PcrGenesisFixture::new_with(
-        human_profile::station_did(&ordinary_realm::station()),
-        device_authorization_history::DeviceHistoryFixtureOptions {
-            local_id: label.to_owned(),
-            founding_device_id: arkret_wire::DeviceId::new(format!(
-                "ak:device:01904100-0000-7000-8000-{}",
-                arkret_canonical::sha256_bytes(label.as_bytes())[..6]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-            ))
-            .unwrap(),
-            ..Default::default()
-        },
-    )
-}
 
 fn prepared(
     job: &soland_storage::PendingFrankingProof,
@@ -98,7 +85,7 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
     let pool = database.pool();
     let label = uuid::Uuid::now_v7().to_string();
     let account = human_profile::admit(&pool, &ordinary_realm::station(), &label).await;
-    let fixture = fixture(&label);
+    let fixture = human_profile::fixture(&ordinary_realm::station(), &label);
     assert_eq!(account, fixture.history.account);
     let actor = ActorId::account(account.clone());
     let did = human_profile::station_did(&ordinary_realm::station());
@@ -150,6 +137,30 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
             fixture.history.founding_device_signing_seed,
         )
     };
+    let strand = seal(ordinary_realm::event_for_actor(
+        EventKind::StrandCreate,
+        scope.clone(),
+        actor.clone(),
+        serde_json::json!({"object":{
+            "schema":"ak.schema.strand.v1","realm_id":realm,"tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
+            "metadata":{"title":"Encrypted receipt"},"state":"active","created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)
+        }}),
+        at,
+    ));
+    let mut request = ordinary_realm::request_for_event(&previous, strand.clone(), at);
+    request.authority_commit = app
+        .prepare_self_event_transaction(
+            &strand,
+            &ordinary_realm::station(),
+            method.clone(),
+            &key,
+            at,
+        )
+        .await
+        .unwrap();
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(strand.clone()));
+    uow.commit_event(request.clone()).await.unwrap();
+    previous = request.authority_commit;
     let mut group = arkret_mls::ArkretMlsIdentity::new_test_human_device(
         actor.clone(),
         fixture.history.founding_device_id.clone(),
@@ -221,30 +232,6 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
         .await
         .unwrap();
     request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(genesis.clone()));
-    uow.commit_event(request.clone()).await.unwrap();
-    previous = request.authority_commit;
-    let strand = seal(ordinary_realm::event_for_actor(
-        EventKind::StrandCreate,
-        scope.clone(),
-        actor.clone(),
-        serde_json::json!({"object":{
-            "schema":"ak.schema.strand.v1","realm_id":realm,"tracks":{"discussion":{"is_primary":true,"profile":"discussion"}},
-            "metadata":{"title":"Encrypted receipt"},"state":"active","created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)
-        }}),
-        at,
-    ));
-    let mut request = ordinary_realm::request_for_event(&previous, strand.clone(), at);
-    request.authority_commit = app
-        .prepare_self_event_transaction(
-            &strand,
-            &ordinary_realm::station(),
-            method.clone(),
-            &key,
-            at,
-        )
-        .await
-        .unwrap();
-    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(strand.clone()));
     uow.commit_event(request.clone()).await.unwrap();
     previous = request.authority_commit;
     let header = EventContentPreEncryptionHeader::reconstruct(
