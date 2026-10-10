@@ -360,10 +360,6 @@ pub struct AuthorityCommitTransaction {
 /// rechecked inside the same transaction that commits the Event. This is an
 /// internal persistence guard, never a caller-supplied protocol claim.
 #[derive(Clone, Debug, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Atomic commit guards retain typed producer evidence without changing the public storage API."
-)]
 pub enum SelfProducerCommitGuard {
     /// The locally configured MIMI facade authored this Event. The exact
     /// binding and independently verified reporter/sender are rechecked at cut.
@@ -945,10 +941,6 @@ pub struct MlsRosterAuthorityFacts {
 }
 
 #[derive(Clone, Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Preserve the public authorized roster read API and its exact signed request."
-)]
 pub enum MlsMemberRosterSelectorRead {
     NotFound,
     RevisionUnavailable,
@@ -1358,10 +1350,6 @@ pub struct SignalScopeAuthority {
 /// Station may authorize from its verified replica without holding Genesis
 /// FullView; the governing Station must return the exact accepted Genesis.
 #[derive(Clone, Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Preserve the public group material read API and its complete Genesis carrier."
-)]
 pub enum MlsMemberGroupStateMaterialRead {
     NotFound,
     RevisionUnavailable,
