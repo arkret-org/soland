@@ -227,8 +227,8 @@ where
     if status == StatusCode::CONFLICT
         && remote_code == Some(arkret_wire::ErrorCode::DuplicateConflict)
     {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::DuplicateConflict,
+        return Err(crate::app_error!(
+            DuplicateConflict,
             "device pairing stage idempotency conflict",
         ));
     }

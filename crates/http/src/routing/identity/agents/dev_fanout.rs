@@ -93,8 +93,7 @@ fn agent_provision_admission_error(
         Some(
             reason @ (ConflictCode::AgentProvisioningAlreadyDeclared
             | ConflictCode::AgentPcrGenesisDeclarationConflict),
-        ) => AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
-            .with_reason_code(reason.as_str()),
+        ) => crate::app_error!(FailedPrecondition, detail).with_reason_code(reason.as_str()),
         other => crate::routing::identity::account::profile_admission_error(other, detail),
     }
 }
@@ -338,7 +337,7 @@ fn agent_control_admission_error(
     use soland_storage::ConflictCode;
     match code {
         Some(ConflictCode::ReducerProjectionFailed) => {
-            AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
+            crate::app_error!(FailedPrecondition, detail)
                 .with_reason_code(arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED)
         }
         other => crate::routing::identity::account::profile_admission_error(other, detail),

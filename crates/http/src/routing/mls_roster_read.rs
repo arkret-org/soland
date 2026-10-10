@@ -4,7 +4,7 @@ use arkret_models_collaboration::mls_roster_authority::{
     MlsMemberRosterAuthorityReadRequestBody, MlsRosterAuthorityReadOutcome,
     MlsRosterAuthorityReadRequestBody,
 };
-use arkret_wire::{DidCoreId, ErrorCode};
+use arkret_wire::DidCoreId;
 use soland_services::authority_commit::{
     MlsRosterAuthorityApplicationRead as Read, MlsRosterAuthorityPreflight as Preflight,
 };
@@ -18,14 +18,14 @@ fn not_found() -> AppError {
 }
 
 fn unavailable() -> AppError {
-    AppError::new(
-        ErrorCode::RevisionUnavailable,
+    crate::app_error!(
+        RevisionUnavailable,
         "authorized MLS roster history is unavailable",
     )
 }
 
 fn cursor_invalid() -> AppError {
-    AppError::new(ErrorCode::CursorInvalid, "invalid MLS roster cursor")
+    crate::app_error!(CursorInvalid, "invalid MLS roster cursor")
 }
 
 fn validate_request(request: &MlsRosterAuthorityReadRequestBody) -> Result<(), AppError> {
@@ -33,7 +33,7 @@ fn validate_request(request: &MlsRosterAuthorityReadRequestBody) -> Result<(), A
         if request.cursor.is_some() {
             cursor_invalid()
         } else {
-            AppError::new(ErrorCode::SchemaViolation, "invalid MLS roster selector")
+            crate::app_error!(SchemaViolation, "invalid MLS roster selector")
         }
     })
 }
@@ -177,13 +177,10 @@ pub(super) async fn resolve_self_mls_roster_authority(
     let member_request = req
         .parse_json::<MlsMemberRosterAuthorityReadRequestBody>()
         .await
-        .map_err(|_| AppError::new(ErrorCode::SchemaViolation, "invalid MLS roster request"))?;
-    member_request.validate().map_err(|_| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
-            "invalid MLS member roster selector",
-        )
-    })?;
+        .map_err(|_| crate::app_error!(SchemaViolation, "invalid MLS roster request"))?;
+    member_request
+        .validate()
+        .map_err(|_| crate::app_error!(SchemaViolation, "invalid MLS member roster selector",))?;
     if member_request.caller_actor_id != caller
         || caller.route_service_id() != &state.service_core_id()
     {
@@ -305,7 +302,7 @@ pub(super) async fn resolve_peer_mls_roster_authority(
     let request = req
         .parse_json::<MlsRosterAuthorityReadRequestBody>()
         .await
-        .map_err(|_| AppError::new(ErrorCode::SchemaViolation, "invalid MLS roster request"))?;
+        .map_err(|_| crate::app_error!(SchemaViolation, "invalid MLS roster request"))?;
     validate_request(&request)?;
     if request.caller_actor_id.route_service_id() != &peer.source_service_id {
         return Err(not_found());

@@ -150,6 +150,46 @@ mod status_registry_gate;
 mod tests {
     use super::*;
 
+    async fn rendered_error(error: AppError) -> (Option<StatusCode>, serde_json::Value) {
+        use salvo::test::ResponseExt as _;
+
+        let mut response = Response::new();
+        error
+            .write(&mut Request::new(), &mut Depot::new(), &mut response)
+            .await;
+        let status = response.status_code;
+        let mut problem: serde_json::Value = response.take_json().await.unwrap();
+        problem.as_object_mut().unwrap().remove("instance");
+        (status, problem)
+    }
+
+    #[tokio::test]
+    async fn typed_constructors_preserve_registered_wire_and_context() {
+        for code in ErrorCode::ALL {
+            for context in [
+                None,
+                Some(arkret_wire::ErrorStatusContext::SessionIssuanceOrRefresh),
+            ] {
+                let mut original = AppError::new(*code, "exact diagnostic");
+                let mut typed = AppError::from_rejection(*code, "exact diagnostic");
+                if let Some(context) = context {
+                    original = original.with_status_context(context);
+                    typed = typed.with_status_context(context);
+                }
+                assert_eq!(
+                    rendered_error(original).await,
+                    rendered_error(typed).await,
+                    "{code:?} / {context:?}",
+                );
+            }
+        }
+        let original = AppError::new(ErrorCode::FailedPrecondition, "exact diagnostic")
+            .with_reason_code(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+        let typed = crate::app_error!(FailedPrecondition, "exact diagnostic")
+            .with_reason_code(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+        assert_eq!(rendered_error(original).await, rendered_error(typed).await);
+    }
+
     #[test]
     fn sdk_error_codes_are_soland_source_of_truth() {
         assert!(

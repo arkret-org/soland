@@ -4,20 +4,20 @@
 use arkret_models_collaboration::mls_roster_authority::MlsAttestAddRequestBody;
 use arkret_models_crypto::{KeyOperationSignature, peer_keypackage_claim_receipt_signing_bytes};
 use arkret_models_identity::{AuthenticatedServiceResolution, DidDocument};
-use arkret_wire::{DidCoreId, DidUrl, ErrorCode, project_did_to_core_id};
+use arkret_wire::{DidCoreId, DidUrl, project_did_to_core_id};
 use chrono::{DateTime, Utc};
 use soland_http::error::AppError;
 
 fn signature_invalid() -> AppError {
-    AppError::new(
-        ErrorCode::SignatureInvalid,
+    crate::app_error!(
+        SignatureInvalid,
         "MLS roster historical Station signature is invalid",
     )
 }
 
 fn dependency_unavailable() -> AppError {
-    AppError::new(
-        ErrorCode::RevisionUnavailable,
+    crate::app_error!(
+        RevisionUnavailable,
         "MLS roster historical Station resolution is unavailable",
     )
 }

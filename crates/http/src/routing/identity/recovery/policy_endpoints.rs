@@ -261,7 +261,7 @@ fn recovery_policy_publication_error(error: soland_services::ServiceError) -> Ap
         _ => None,
     };
     match registered {
-        Some(code) => AppError::new(code, error.detail()),
+        Some(code) => AppError::from_rejection(code, error.detail()),
         None => recovery_policy_service_error(error),
     }
 }

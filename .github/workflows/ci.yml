@@ -78,6 +78,10 @@ jobs:
         run: python scripts/check-test-support-surface.py
         working-directory: soland
 
+      - name: Typed error mapping gate regression tests
+        run: python -m unittest discover -s scripts -p test_check_error_mapping.py
+        working-directory: soland
+
       - name: Typed error mapping gate
         run: python scripts/check-error-mapping.py
         working-directory: soland

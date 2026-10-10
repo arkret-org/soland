@@ -805,8 +805,8 @@ fn persistence_error(error: soland_storage::PersistenceError) -> AppError {
 /// dependency, so `dependency_missing` is outside the operation's error set.
 fn handoff_unavailable(stage: &'static str, _error: impl std::fmt::Display) -> AppError {
     tracing::warn!(stage, "public Push Gateway registration handoff failed");
-    AppError::new(
-        ErrorCode::PushGatewayUnreachable,
+    crate::app_error!(
+        PushGatewayUnreachable,
         "public Push Gateway registration is unavailable",
     )
     .with_private_detail(stage)
@@ -819,8 +819,8 @@ fn unregistration_error(error: AppError) -> AppError {
     if error.code != ErrorCode::PushGatewayUnreachable {
         return error;
     }
-    let mut unavailable = AppError::new(
-        ErrorCode::TemporarilyUnavailable,
+    let mut unavailable = crate::app_error!(
+        TemporarilyUnavailable,
         "public Push Gateway unregistration is not yet confirmed",
     );
     unavailable.private_detail = error.private_detail;

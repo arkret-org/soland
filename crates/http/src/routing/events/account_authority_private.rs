@@ -26,8 +26,8 @@ pub(super) async fn read_agent_participation(
         .await
         .map_err(|_| AppError::json_invalid("invalid private Agent/controller Account binding"))?;
     if agent.station_id != state.service_core_id() || controller.station_id != agent.station_id {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "private participation read belongs to another Station",
         ));
     }
@@ -37,17 +37,14 @@ pub(super) async fn read_agent_participation(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                arkret_wire::ErrorCode::CapabilityDenied,
-                "Agent controller binding is unavailable",
-            )
+            crate::app_error!(CapabilityDenied, "Agent controller binding is unavailable",)
         })?;
     if record.controller_principal_id != controller.principal_id.as_str()
         || crate::routing::identity::agent_pcr::agent_controller_account(state, &record).await?
             != controller
     {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "private participation read names another controller Account",
         ));
     }
@@ -91,8 +88,8 @@ pub(super) async fn admit_event(
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if submission.event.kind != arkret_wire::EventKind::DeviceAuthorize {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::UnsupportedEventKind,
+        return Err(crate::app_error!(
+            UnsupportedEventKind,
             "the Account Authority private admission accepts only ak.device.authorize",
         ));
     }

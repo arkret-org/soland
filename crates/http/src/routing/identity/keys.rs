@@ -188,8 +188,8 @@ async fn keys_upload(
 
 fn directory_evidence_service_error(error: soland_services::ServiceError) -> AppError {
     if error.conflict_code() == Some(soland_storage::ConflictCode::TemporarilyUnavailable) {
-        AppError::new(
-            arkret_wire::ErrorCode::TemporarilyUnavailable,
+        crate::app_error!(
+            TemporarilyUnavailable,
             "current account-device evidence is temporarily unavailable",
         )
     } else {

@@ -1169,8 +1169,8 @@ fn validate_profile_request(body: &AccountUpdateProfileRequestBody) -> Result<()
         >(Value::Object(event.payload.clone().into_iter().collect()))
         && let Err(error) = update.validate_for_account_self_service()
     {
-        return Err(AppError::new(
-            arkret_wire::ErrorCode::UnsupportedProfilePatchPath,
+        return Err(crate::app_error!(
+            UnsupportedProfilePatchPath,
             error.to_string(),
         ));
     }
@@ -1190,35 +1190,35 @@ pub(crate) fn profile_admission_error(
     use soland_storage::ConflictCode;
     match code {
         Some(ConflictCode::AccountabilityGrantMissing) => {
-            AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
+            crate::app_error!(FailedPrecondition, detail)
                 .with_reason_code(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)
         }
         Some(ConflictCode::FailedPrecondition) => {
-            AppError::new(arkret_wire::ErrorCode::FailedPrecondition, detail)
+            crate::app_error!(FailedPrecondition, detail)
         }
         Some(ConflictCode::TemporarilyUnavailable | ConflictCode::CasConflict) => {
-            AppError::new(arkret_wire::ErrorCode::RevisionUnavailable, detail)
+            crate::app_error!(RevisionUnavailable, detail)
         }
         Some(ConflictCode::DuplicateConflict | ConflictCode::EventHashCollision) => {
-            AppError::new(arkret_wire::ErrorCode::DuplicateConflict, detail)
+            crate::app_error!(DuplicateConflict, detail)
         }
         Some(ConflictCode::SignatureInvalid) => {
-            AppError::new(arkret_wire::ErrorCode::SignatureInvalid, detail)
+            crate::app_error!(SignatureInvalid, detail)
         }
         Some(ConflictCode::SchemaViolation | ConflictCode::EventIdDigestMismatch) => {
             AppError::schema_violation(detail)
         }
         Some(ConflictCode::DeviceRevoked) => {
-            AppError::new(arkret_wire::ErrorCode::DeviceRevoked, detail)
+            crate::app_error!(DeviceRevoked, detail)
         }
         Some(ConflictCode::DeviceRevocationPending) => {
-            AppError::new(arkret_wire::ErrorCode::DeviceRevocationPending, detail)
+            crate::app_error!(DeviceRevocationPending, detail)
         }
         Some(ConflictCode::DeviceGenerationFenced) => {
-            AppError::new(arkret_wire::ErrorCode::DeviceGenerationFenced, detail)
+            crate::app_error!(DeviceGenerationFenced, detail)
         }
         Some(ConflictCode::DeviceUnauthorized) => {
-            AppError::new(arkret_wire::ErrorCode::DeviceUnauthorized, detail)
+            crate::app_error!(DeviceUnauthorized, detail)
         }
         _ => AppError::internal(detail),
     }

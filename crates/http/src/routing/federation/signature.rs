@@ -541,7 +541,7 @@ fn signature_error_with_code(message: impl Into<String>, code: ErrorCode) -> App
         federation_auth_detail = %detail,
         "federation request authentication failed"
     );
-    AppError::new(code, FEDERATION_AUTH_FAILURE_MESSAGE)
+    AppError::from_rejection(code, FEDERATION_AUTH_FAILURE_MESSAGE)
 }
 
 #[cfg(test)]

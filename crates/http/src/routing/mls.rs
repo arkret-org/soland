@@ -336,15 +336,14 @@ fn mls_attest_add_service_error(error: soland_services::ServiceError) -> AppErro
                 }
                 _ => arkret_wire::ErrorCode::Conflict,
             };
-            AppError::new(
+            AppError::from_rejection(
                 wire_code,
                 "MLS Add authority conflicts with accepted evidence",
             )
         }
-        ServiceError::SchemaViolation(_) => AppError::new(
-            arkret_wire::ErrorCode::SchemaViolation,
-            "invalid MLS Add authority request",
-        ),
+        ServiceError::SchemaViolation(_) => {
+            crate::app_error!(SchemaViolation, "invalid MLS Add authority request",)
+        }
         ServiceError::Database(_)
         | ServiceError::Internal(_)
         | ServiceError::UnsupportedEventKind(_) => {
@@ -413,8 +412,8 @@ fn mls_group_state_material_not_found() -> AppError {
 }
 
 fn mls_group_state_material_revision_unavailable() -> AppError {
-    AppError::new(
-        arkret_wire::ErrorCode::RevisionUnavailable,
+    crate::app_error!(
+        RevisionUnavailable,
         "authorized MLS group-state material is unavailable at the requested cut",
     )
 }

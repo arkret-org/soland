@@ -25,7 +25,7 @@ pub(super) fn recovery_store_error(error: PersistenceError) -> AppError {
         }
         soland_services::ServiceErrorKind::Internal => AppError::internal(error.detail()),
         soland_services::ServiceErrorKind::UnsupportedEventKind => {
-            AppError::new(arkret_wire::ErrorCode::UnsupportedEventKind, error.detail())
+            crate::app_error!(UnsupportedEventKind, error.detail())
         }
     }
 }

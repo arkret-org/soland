@@ -684,7 +684,7 @@ fn unlock_consumption_error(error: soland_services::ServiceError) -> AppError {
             | ConflictCode::DeviceUnauthorized),
         ) => arkret_wire::ErrorCode::from_wire(code.as_str()).map_or_else(
             || AppError::capability_denied(error.to_string()),
-            |registered| AppError::new(registered, error.to_string()),
+            |registered| AppError::from_rejection(registered, error.to_string()),
         ),
         Some(ConflictCode::TemporarilyUnavailable) => {
             crate::app_error!(TemporarilyUnavailable, error.to_string())
