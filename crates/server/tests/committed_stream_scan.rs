@@ -143,7 +143,6 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
         development_mode: true,
         ..soland_test_support::app_config()
     };
-    config.jws_replay_window_seconds = 0;
     let (state, pool) = soland_test_support::app_state_with_pool(config);
     let human = ordinary_realm::human_profile::admit_for_station_did(
         &pool,

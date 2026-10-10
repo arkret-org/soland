@@ -101,7 +101,7 @@ parking_lot = { workspace = true }
 proptest = { workspace = true }
 salvo = { workspace = true, features = ["test"] }
 soland-domain = { workspace = true }
-soland-http = { workspace = true, features = ["test-support"] }
+soland-http = { workspace = true, features = ["test-support", "conformance-harness"] }
 soland-test-support = { workspace = true }
 # `test-util` enables the paused-clock test runtime
 # (`#[tokio::test(start_paused = true)]`) used to assert the federation

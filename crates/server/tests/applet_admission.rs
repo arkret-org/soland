@@ -2365,7 +2365,6 @@ impl Fixture {
         let mut config = AppConfig {
             development_mode: true,
             embedded_webvh_registration_bearer: Some("applet-fixture-registration".to_owned()),
-            jws_replay_window_seconds: 0,
             session_grant_introspection_url: Some(format!(
                 "{origin}/_coauth/internal/session-grants/introspect"
             )),

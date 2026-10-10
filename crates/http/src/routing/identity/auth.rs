@@ -29,6 +29,7 @@ use super::{
     render_error, validate_device_id,
 };
 use crate::state::AppState;
+#[cfg(any(test, feature = "conformance-harness"))]
 use crate::wire::{DevLoginRequestBody, SessionLoginOutcome};
 use crate::{JsonResult, ids, json_ok};
 
@@ -48,6 +49,7 @@ mod sessions;
 // Cross-submodule private helpers, re-exported at `pub(super)` so every
 // submodule's `use super::*;` glob can see them.
 pub(super) use login::account_existing_session_error;
+#[cfg(any(test, feature = "conformance-harness"))]
 use login::dev_login;
 pub(crate) use revocation::purge_device_delivery_state;
 pub use revocation::{
@@ -81,9 +83,11 @@ pub(super) fn local_router() -> Router {
     // issuance endpoint is mounted under `session-grants`. dev-login remains the only local
     // development session issuer; production clients present the grant + DPoP
     // directly to `/_arkret/self/*`.
-    Router::with_path("auth")
-        .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
-        .push(Router::with_path("dev-login").post(dev_login))
+    let router = Router::with_path("auth")
+        .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe));
+    #[cfg(any(test, feature = "conformance-harness"))]
+    let router = router.push(Router::with_path("dev-login").post(dev_login));
+    router
 }
 
 #[cfg(test)]

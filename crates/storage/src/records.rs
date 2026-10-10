@@ -84,8 +84,7 @@ pub struct AccountRecord {
     pub display_name: Option<String>,
     /// Free-form short description for directory rendering. Updated via
     /// `POST /_arkret/self/account/profile` (operationId
-    /// `ak.self.account.command.update_profile.v1`); rendered by `demo_actors` in directory
-    /// search results.
+    /// `ak.self.account.command.update_profile.v1`).
     pub bio: Option<String>,
     /// Canonical content-addressed avatar Blob reference.
     pub avatar_blob_ref: Option<BlobRef>,

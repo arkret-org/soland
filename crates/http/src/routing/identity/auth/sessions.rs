@@ -579,7 +579,10 @@ async fn enforce_session_device_revocation_gate(
     .await;
     let current = match current {
         Ok(current) => current,
-        Err(error) if state.config().development_mode && session.session_grant.is_none() => {
+        #[cfg(any(test, feature = "conformance-harness"))]
+        Err(error)
+            if state.config().development_harness_enabled() && session.session_grant.is_none() =>
+        {
             // Only an unbound bootstrap placeholder receives the local dev-login
             // exception. A previously authorized instance cannot become a
             // placeholder again after revocation or while its mirror rebuilds.

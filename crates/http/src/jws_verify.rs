@@ -1404,7 +1404,6 @@ mod did_binding_tests {
                     std::env::temp_dir().join("soland-did-binding-test"),
                 ),
                 did_resolver_allow_methods: vec!["web".to_owned()],
-                jws_replay_window_seconds: 0,
                 ..crate::config::AppConfig::test_default()
             },
             Db { pool: None },

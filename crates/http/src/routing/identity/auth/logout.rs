@@ -35,7 +35,10 @@ pub(super) async fn logout(
     // Authorization bearer as a local session bearer and perform the
     // principal-side termination directly. Production keeps the strict
     // grant+DPoP+introspection contract below.
-    if state.config().development_mode && state.config().session_grant_introspection_url.is_none() {
+    #[cfg(any(test, feature = "conformance-harness"))]
+    if state.config().development_harness_enabled()
+        && state.config().session_grant_introspection_url.is_none()
+    {
         let grant_jwt = bearer_token(req)
             .map(str::to_owned)
             .ok_or_else(|| AppError::unauthenticated("missing local development bearer"))?;
@@ -213,6 +216,7 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 /// push registrations), mirroring the production
 /// principal-side effects without an Account Authority process round-trip. The durable
 /// device authorization remains active across logout and re-login.
+#[cfg(any(test, feature = "conformance-harness"))]
 async fn dev_mode_local_logout(
     state: &AppState,
     token: &str,

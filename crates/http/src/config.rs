@@ -396,16 +396,6 @@ pub struct AppConfig {
     /// `soland.embedded` if the embedded provider is enabled, otherwise the
     /// first configured external provider.
     pub default_webvh_provider_id: Option<String>,
-    /// JWS replay protection window in seconds.
-    /// Move and Seal signatures whose signed `hlc` is older than
-    /// `now - replay_window_seconds` OR newer than `now +
-    /// replay_window_seconds` are rejected.
-    ///
-    /// Default 300s = 5 min — matches the Arkret spec recommendation in
-    /// `signatures-and-replay.md`. Set to `0` to disable (dev / tests
-    /// using fixed-time fixtures rely on this; production deployments
-    /// MUST keep this > 0).
-    pub jws_replay_window_seconds: u64,
     /// Base64-encoded 32-byte ed25519 seed for the NotaryWorker
     /// signing identity (env `SOLAND_NOTARY_SIGNING_KEY`). When `Some(_)`
     /// the worker uses a deterministic ed25519-dalek signing key derived
@@ -906,15 +896,14 @@ pub enum NotarySigningKeyOrigin {
 
 impl AppConfig {
     /// Single source of truth for test configs. Defaults take the
-    /// production posture (`development_mode = false`, replay-window
-    /// enforcement and per-family overrides on, demo seeding off);
+    /// production posture (`development_mode = false`, per-family
+    /// validation on, demo seeding off);
     /// individual tests opt into relaxed settings explicitly via
     /// struct-update syntax:
     ///
     /// ```ignore
     /// let config = AppConfig {
     ///     development_mode: true,
-    ///     jws_replay_window_seconds: 0,
     ///     ..AppConfig::test_default()
     /// };
     /// ```
@@ -957,7 +946,6 @@ impl AppConfig {
             external_webvh_registration_bearer: None,
             external_webvh_provider_active: false,
             default_webvh_provider_id: None,
-            jws_replay_window_seconds: 300,
             notary_signing_key_seed: None,
             key_store: KeyStoreConfig::Disabled,
             federation_fanout_topology: FederationFanoutTopology::Mesh,
@@ -1087,8 +1075,8 @@ impl AppConfig {
             );
         }
         let oidc_client_id = env_non_empty(values, "SOLAND_OAUTH_CLIENT_ID");
-        // Default to a production-safe posture (no `dev_login`, no relaxed DID
-        // validation, no admin snapshot endpoints). Local development must opt
+        // Formal signature and DID validation never depend on this flag.
+        // Local network development must opt
         // in explicitly via `SOLAND_DEVELOPMENT_MODE=true`.
         let development_mode = env_bool(values, "SOLAND_DEVELOPMENT_MODE")?.unwrap_or(false);
         // Production first provisioning is authorized later, after the
@@ -1196,18 +1184,6 @@ impl AppConfig {
             );
         }
         let default_webvh_provider_id = env_non_empty(values, "SOLAND_DEFAULT_WEBVH_PROVIDER_ID");
-        // 0 disables replay-window enforcement; default 5 min per spec.
-        let jws_replay_window_seconds = lookup(values, "SOLAND_JWS_REPLAY_WINDOW_SECONDS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(300);
-        // T3 — 0 disables Move/Seal replay-window enforcement. Fine for
-        // fixed-time test fixtures (dev mode); a production misconfiguration.
-        if !development_mode && jws_replay_window_seconds == 0 {
-            anyhow::bail!(
-                "SOLAND_JWS_REPLAY_WINDOW_SECONDS must be > 0 when SOLAND_DEVELOPMENT_MODE is false (0 disables replay protection)"
-            );
-        }
         let notary_signing_key_seed = load_notary_signing_key_seed(values)?;
         let key_store = KeyStoreConfig::from_values(values)?;
         validate_persistence_key_store(database_url.as_deref(), &key_store)?;
@@ -1475,7 +1451,6 @@ impl AppConfig {
             // `main.rs` flips this to true after a successful boot probe.
             external_webvh_provider_active: false,
             default_webvh_provider_id,
-            jws_replay_window_seconds,
             notary_signing_key_seed,
             key_store,
             federation_fanout_topology,
@@ -1545,14 +1520,14 @@ impl AppConfig {
     /// current config. Returned values are stable strings safe to surface
     /// in `/health` and the soland-local `/_soland/describe`:
     ///
-    ///   - `"development"` — `SOLAND_DEVELOPMENT_MODE=true`; any authenticated session may call
-    ///     admin endpoints.
+    ///   - `"development"` — an explicit harness build with `SOLAND_DEVELOPMENT_MODE=true`; a local
+    ///     harness session may call admin endpoints.
     ///   - `"principal_id_allowlist"` — production mode, `SOLAND_ADMIN_PRINCIPAL_IDS` is non-empty;
     ///     admin endpoints accept calls whose session actor appears in the allowlist.
     ///   - `"closed"` — production mode with neither admin allowlist nor introspection configured;
     ///     admin endpoints are effectively locked.
     pub fn admin_auth_mode(&self) -> &'static str {
-        if self.development_mode {
+        if self.development_harness_enabled() {
             "development"
         } else if !self.admin_principal_ids.is_empty() {
             "principal_id_allowlist"
@@ -1561,17 +1536,18 @@ impl AppConfig {
         }
     }
 
-    /// String mirror of [`Self::development_mode`]: `"development"` or
-    /// `"production"`. Exposed on `/health` and the soland-local
-    /// `/_soland/describe` so operators can see at a glance whether proof
-    /// verification is running in the relaxed dev-mode path.
+    /// The formal verifier always validates cryptographic proofs and rejects
+    /// registered public test material, including inside a harness build.
     #[inline]
     pub fn proof_verifier_mode(&self) -> &'static str {
-        if self.development_mode {
-            "development"
-        } else {
-            "production"
-        }
+        "production"
+    }
+
+    /// Synthetic local credentials exist only in an isolated harness build.
+    /// Development network and diagnostic settings do not enable them.
+    #[inline]
+    pub fn development_harness_enabled(&self) -> bool {
+        cfg!(any(test, feature = "conformance-harness")) && self.development_mode
     }
 
     #[inline]

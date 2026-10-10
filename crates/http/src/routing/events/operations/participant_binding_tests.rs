@@ -30,7 +30,6 @@ fn test_config() -> crate::config::AppConfig {
         ),
         development_mode: true,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-        jws_replay_window_seconds: 0,
         notary_signing_key_seed: Some([7u8; 32]),
         ..crate::config::AppConfig::test_default()
     }

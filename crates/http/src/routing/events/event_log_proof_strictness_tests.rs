@@ -9,7 +9,6 @@ pub(super) fn make_state(development_mode: bool) -> AppState {
         object_storage: ObjectStorageConfig::local(std::env::temp_dir().join("soland-test")),
         development_mode,
         did_resolver_allow_methods: vec!["web".to_owned(), "key".to_owned()],
-        jws_replay_window_seconds: 0,
         seed_demo_data: true,
         ..AppConfig::test_default()
     };
