@@ -480,7 +480,7 @@ impl AuthorityProtocolPort for AppState {
                 self, session, event,
             )
             .await
-            .inspect_err(|error| {
+            .inspect_err(|_error| {
                 #[cfg(feature = "conformance-harness")]
                 crate::routing::trace_submission_refusal(
                     "producer_preflight",
@@ -490,7 +490,7 @@ impl AuthorityProtocolPort for AppState {
                     } else {
                         "human"
                     },
-                    Some(error),
+                    Some(_error),
                 );
             })?;
         if let Some(governance) = remote_governance(self, &event.realm_id).await? {
@@ -543,7 +543,7 @@ impl AuthorityProtocolPort for AppState {
                     self, &request,
                 )
                 .await
-                .inspect_err(|error| {
+                .inspect_err(|_error| {
                     #[cfg(feature = "conformance-harness")]
                     crate::routing::trace_submission_refusal(
                         "key_backup_pointer_unit",
@@ -553,7 +553,7 @@ impl AuthorityProtocolPort for AppState {
                         } else {
                             "human"
                         },
-                        Some(error),
+                        Some(_error),
                     );
                 });
             }
@@ -576,7 +576,7 @@ impl AuthorityProtocolPort for AppState {
             super::authority_self_event_unit::SelfEventUnitEffects::default(),
         )
         .await
-        .inspect_err(|error| {
+        .inspect_err(|_error| {
             #[cfg(feature = "conformance-harness")]
             crate::routing::trace_submission_refusal(
                 "guarded_event_unit",
@@ -586,7 +586,7 @@ impl AuthorityProtocolPort for AppState {
                 } else {
                     "human"
                 },
-                Some(error),
+                Some(_error),
             );
         })
     }

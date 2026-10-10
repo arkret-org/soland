@@ -286,7 +286,7 @@ pub(super) async fn account_response(
     let response = match build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await {
         Ok(response) => response,
         Err(problem) => {
-            crate::error::render_problem_envelope(res, StatusCode::SERVICE_UNAVAILABLE, problem);
+            crate::error::render_problem_envelope(res, StatusCode::SERVICE_UNAVAILABLE, *problem);
             return;
         }
     };

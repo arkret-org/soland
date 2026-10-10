@@ -50,6 +50,7 @@ pub(crate) async fn purge_device_delivery_state(
 
 /// Derive a single-use development session credential. The credential is opaque
 /// to the client; what the server stores is its `session_credential_hash`.
+#[cfg(any(test, feature = "conformance-harness"))]
 pub fn token_for(actor: &str, device_id: &str, expires_ms: i64) -> String {
     let nonce = ids::generate("session");
     let mut hasher = Sha256::new();

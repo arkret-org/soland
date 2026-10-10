@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;
 
+#[cfg(any(test, feature = "test-support"))]
 use arkret_models_identity::HandleClaim;
 #[cfg(test)]
 use arkret_models_identity::HandleClaimStatus;
+#[cfg(any(test, feature = "test-support"))]
 use serde_json::Value;
 #[cfg(test)]
 pub use soland_storage::MemberIdentityReplacementEdge;
@@ -176,6 +178,7 @@ impl MemberIdentityRegistry {
 /// Build the storable evidence record for one closed HandleClaim status view.
 /// The durable key is the stable core `claim_digest`; freshness and revocation
 /// state remain explicit mutable status-view fields.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn handle_claim_record_from_envelope(
     envelope: &Value,
 ) -> Option<HandleClaimEvidenceRecord> {

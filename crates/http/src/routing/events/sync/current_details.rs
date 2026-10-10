@@ -340,7 +340,7 @@ pub(super) async fn frame(
     session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
     after: &SyncCursor,
-) -> Result<Option<AccountSubscribeFrame>, arkret_wire::Problem> {
+) -> Result<Option<AccountSubscribeFrame>, Box<arkret_wire::Problem>> {
     let Some(filter) = body.filter.as_ref() else {
         return Ok(None);
     };
@@ -383,7 +383,7 @@ pub(super) async fn frame(
                     Ok(joined) => joined,
                     Err(error) => {
                         tracing::warn!(%error, realm_id = %realm, "Account membership proof unavailable");
-                        return Err(continuation_unavailable());
+                        return Err(Box::new(continuation_unavailable()));
                     }
                 }
             }
@@ -421,7 +421,7 @@ pub(super) async fn frame(
                     }
                     Err(error) => {
                         tracing::warn!(%error, realm_id = %realm, "Account visible stream heads unavailable");
-                        return Err(continuation_unavailable());
+                        return Err(Box::new(continuation_unavailable()));
                     }
                 };
                 let (selected_heads, streams_limited) =
@@ -464,7 +464,7 @@ pub(super) async fn frame(
                     Ok(Freeze::Unavailable(code)) => Some(code),
                     Err(error) => {
                         tracing::warn!(%error, realm_id = %realm, "Account window freeze failed");
-                        return Err(continuation_unavailable());
+                        return Err(Box::new(continuation_unavailable()));
                     }
                 }
             }
@@ -503,7 +503,7 @@ pub(super) async fn frame(
         Ok(cursor) => cursor,
         Err(error) => {
             tracing::warn!(?error, "Realm detail continuation unavailable");
-            return Err(continuation_unavailable());
+            return Err(Box::new(continuation_unavailable()));
         }
     };
     let frame = AccountSubscribeFrame {
@@ -530,7 +530,7 @@ pub(super) async fn frame(
         // The freeze budget must make this unreachable; never emit a frame
         // the closed contract or its byte bound would reject.
         tracing::error!("Realm detail frame failed its own closed contract");
-        return Err(continuation_unavailable());
+        return Err(Box::new(continuation_unavailable()));
     }
     Ok(Some(frame))
 }

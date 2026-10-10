@@ -542,10 +542,15 @@ pub(crate) async fn member_station_bootstrap_floor(
         sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *conn)
             .await?;
-        let Some(join) =
+        let current =
             current_bootstrap_join_in_connection(conn, realm_id, account, membership_commit_id)
-                .await?
-        else {
+                .await?;
+        let join = if current.is_some() {
+            current
+        } else {
+            pending_circle_bootstrap_join(conn, realm_id, account, membership_commit_id).await?
+        };
+        let Some(join) = join else {
             return Ok(None);
         };
         let stream: CommitStreamRef =
@@ -563,6 +568,83 @@ pub(crate) async fn member_station_bootstrap_floor(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+/// A pending Circle anchor holds the accepted join before the private Circle
+/// object and its current rows arrive in the bootstrap Snapshot. It proves only
+/// the requested join's floor; it never authorizes issuing Snapshot material.
+async fn pending_circle_bootstrap_join(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    account: &AccountId,
+    membership_commit_id: &arkret_wire::RealmCommitId,
+) -> PersistenceResult<Option<JoinPositionRow>> {
+    #[derive(QueryableByName)]
+    struct PendingJoin {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        current_stream_position: i64,
+        #[diesel(sql_type = Jsonb)]
+        stream_ref: serde_json::Value,
+        #[diesel(sql_type = Jsonb)]
+        envelope: serde_json::Value,
+    }
+    let pending = sql_query(
+        "SELECT c.stream_position AS current_stream_position,c.stream_ref,e.envelope \
+         FROM replica_stream_anchors a JOIN realm_commits c \
+         ON c.realm_id=a.realm_id AND c.commit_id=a.join_commit_id \
+         JOIN canonical_events e ON e.pk=c.event_pk \
+         WHERE a.realm_id=$1 AND a.member_account_id=$2 AND a.join_commit_id=$3 \
+         AND a.anchor_commit_id IS NULL AND a.anchor_stream_position IS NULL \
+         AND c.stream_ref->>'kind'='circle' AND e.state='committed'",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Jsonb, _>(serde_json::to_value(account).map_err(PersistenceError::database)?)
+    .bind::<Text, _>(membership_commit_id.as_str())
+    .get_result::<PendingJoin>(&mut *conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?;
+    let Some(pending) = pending else {
+        return Ok(None);
+    };
+    let event: arkret_wire::Event =
+        serde_json::from_value(pending.envelope).map_err(PersistenceError::database)?;
+    let stream: CommitStreamRef =
+        serde_json::from_value(pending.stream_ref.clone()).map_err(PersistenceError::database)?;
+    if event.kind != EventKind::CircleMemberState || event.realm_id != *realm_id {
+        return Ok(None);
+    }
+    let payload: arkret_models_collaboration::events_payloads::circle::CircleMemberStatePayload =
+        serde_json::from_value(
+            serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+        )
+        .map_err(PersistenceError::database)?;
+    let member = ActorId::account(account.clone());
+    if payload.member_id != member
+        || payload.membership
+            != arkret_models_collaboration::governance::circle::CircleMembership::Join
+        || stream
+            != (CommitStreamRef::Circle {
+                realm_id: realm_id.clone(),
+                circle_id: payload.circle_id,
+            })
+    {
+        return Ok(None);
+    }
+    let Some(parent) = payload.parent_membership_revision else {
+        return Ok(None);
+    };
+    if !crate::authority_commit::parent_join_at_revision_in_connection(
+        conn, realm_id, &member, &parent,
+    )
+    .await?
+    {
+        return Ok(None);
+    }
+    Ok(Some(JoinPositionRow {
+        current_stream_position: pending.current_stream_position,
+        stream_ref: pending.stream_ref,
+    }))
 }
 
 pub async fn member_station_bootstrap_material(

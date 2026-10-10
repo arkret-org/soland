@@ -1165,6 +1165,35 @@ async fn committed_replication_persists_exact_source_bytes_and_remote_authority(
             .is_none()
     );
 
+    // An own join is not a license to skip an unheld predecessor while
+    // another hosted member is still joined. The locked OpeningJoin gate
+    // must retain Alice's existing anchor and write none of Bob's join.
+    let bob = remote_member("replica-bob-gap");
+    let bob_join = membership_request(&next.authority_commit, bob.clone(), &bob, "join");
+    assert_code(
+        &store
+            .install_committed_replica(&replica(&unit, &bob_join, true))
+            .await
+            .unwrap_err(),
+        ConflictCode::DependencyMissing,
+    );
+    assert!(
+        store
+            .committed_event(&bob_join.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .replica_stream_anchor(&realm_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .join_commit,
+        join.authority_commit.commit
+    );
+
     assert_eq!(
         store
             .install_committed_replica(&replica(&unit, &next, false))
@@ -4843,6 +4872,78 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         "the private Circle Create must not be fabricated before bootstrap"
     );
     drop(connection);
+    let account = remote.as_account_id().unwrap();
+    let join_id = &circle_join.authority_commit.commit.commit_id;
+    let join_floor = Some(circle_join.authority_commit.commit.stream_position);
+    assert_eq!(
+        member
+            .member_station_bootstrap_floor(&realm, account, join_id)
+            .await
+            .unwrap(),
+        join_floor,
+        "the accepted pending Circle join proves its floor without fabricating current rows"
+    );
+    assert_eq!(
+        member
+            .member_station_bootstrap_floor(&realm, creator.as_account_id().unwrap(), join_id)
+            .await
+            .unwrap(),
+        None,
+        "another Account cannot borrow the pending opening join"
+    );
+    assert_eq!(
+        member
+            .member_station_bootstrap_floor(
+                &realm,
+                account,
+                &create.authority_commit.commit.commit_id
+            )
+            .await
+            .unwrap(),
+        None,
+        "the floor proof binds the exact opening Commit"
+    );
+    assert!(
+        member
+            .member_station_bootstrap_material(&realm, account, join_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a pending floor proof cannot authorize issuing a Snapshot"
+    );
+    // Simulate a local parent current advancing independently while bootstrap
+    // is pending. The held Circle join still binds its original parent revision.
+    let mut connection = member.pool.get().await.unwrap();
+    let advance_parent = |delta: i64| {
+        diesel::sql_query(
+        "UPDATE member_state_current_results SET current_stream_position=current_stream_position+$3 \
+         WHERE realm_id=$1 AND member_id=$2",
+    ).bind::<Text,_>(realm.as_str()).bind::<Text,_>(remote.to_string()).bind::<BigInt,_>(delta)
+    };
+    assert_eq!(
+        advance_parent(1).execute(&mut *connection).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        member
+            .member_station_bootstrap_floor(&realm, account, join_id)
+            .await
+            .unwrap(),
+        None,
+        "a pending Circle join cannot borrow a different parent current revision"
+    );
+    assert_eq!(
+        advance_parent(-1).execute(&mut *connection).await.unwrap(),
+        1
+    );
+    drop(connection);
+    assert_eq!(
+        member
+            .member_station_bootstrap_floor(&realm, account, join_id)
+            .await
+            .unwrap(),
+        join_floor
+    );
     let pending_scan = arkret_wire::StreamScanRequest {
         realm_id: realm.clone(),
         stream_ref: stream.clone(),

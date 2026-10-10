@@ -29,6 +29,7 @@ FROM debian:bookworm-slim AS runtime
 # (5.5) — the HEALTHCHECK now invokes the bundled `soland healthcheck`
 # subcommand, which keeps the image distroless-compatible.
 RUN apt-get update \
+    && apt-get upgrade --yes \
     && apt-get install -y --no-install-recommends tini ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

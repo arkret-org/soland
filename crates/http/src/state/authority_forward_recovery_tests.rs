@@ -152,7 +152,7 @@ async fn authenticated_context(
             pk: AccountPk(0),
             principal_id: account.principal_id.clone(),
             station_id: account.station_id.clone(),
-            localpart: "forward-recovery-reader".into(),
+            localpart: format!("forward-recovery-{}", uuid::Uuid::now_v7().simple()),
             display_name: None,
             bio: None,
             avatar_blob_ref: None,
@@ -1502,6 +1502,199 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
         Some(commit.clone())
     );
     assert_eq!(opening_footprint(&origin_pool, realm).await, before_replay);
+
+    // Alice remains joined while Bob joins at the same Station after an
+    // unheld Realm successor. OpeningJoin must not skip that gap: recovery
+    // reads the authorized continuous prefix and keeps Alice's old anchor.
+    let bob = historical_human::HumanFixture::new(&origin_pool, origin.service_did()).await;
+    let bob_actor = ActorId::account(bob.pcr.history.account.clone());
+    let gap_at = commit.committed_at + Duration::seconds(1);
+    let gap_event = historical_human::signed_ordinary_event(
+        &governor,
+        &join.authority_commit,
+        EventKind::RealmProfile,
+        serde_json::json!({"schema":"ak.schema.realm_profile.v1","title":"Authorized held-prefix gap"}),
+        gap_at,
+    );
+    let mut gap =
+        historical_human::request_for_event(&governor, &join.authority_commit, gap_event, gap_at);
+    seal_service_commit(&mut gap.authority_commit.commit, &governor_state);
+    uow.commit_event(gap.clone()).await.unwrap();
+    let mut bob_join = foreign_request(
+        &origin, &bob, &governor, &gap.authority_commit, EventKind::MemberState,
+        serde_json::json!({"realm_id":realm,"member_id":bob_actor,"membership":"join","reason":"second hosted member"}),
+    ).await;
+    seal_service_commit(&mut bob_join.authority_commit.commit, &governor_state);
+    uow.commit_event(bob_join.clone()).await.unwrap();
+    let bob_event = &bob_join.authority_commit.event;
+    let bob_commit = &bob_join.authority_commit.commit;
+    let bob_session = authenticated_context(&origin_pool, &bob).await;
+    store
+        .queue_event(bob_event, bob_commit.committed_at)
+        .await
+        .unwrap();
+    let bob_intent =
+        SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(bob_event.clone()));
+    store
+        .retain_forwarded_submission(bob_event, &bob_intent, bob_commit.committed_at)
+        .await
+        .unwrap();
+    store
+        .retain_forwarded_acceptance(bob_event, bob_commit, bob_commit.committed_at)
+        .await
+        .unwrap();
+    let opening_scan = StreamScanRequest {
+        realm_id: realm.clone(),
+        stream_ref: commit.stream_ref.clone(),
+        direction: StreamScanDirection::After(None),
+        limit: 128,
+    };
+    let continuous_scan = StreamScanRequest {
+        direction: StreamScanDirection::After(Some(commit.stream_position)),
+        ..opening_scan.clone()
+    };
+    let soland_storage::PeerStreamScan::Page(opening_page) = source
+        .scan_stream_for_peer(
+            &opening_scan,
+            &origin.service_core_id(),
+            &governor_state.service_core_id(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("the joined hosted members authorize the opening scan")
+    };
+    let soland_storage::PeerStreamScan::Page(continuous_page) = source
+        .scan_stream_for_peer(
+            &continuous_scan,
+            &origin.service_core_id(),
+            &governor_state.service_core_id(),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("Alice still authorizes the continuous gap")
+    };
+    assert_eq!(continuous_page.committed_events.len(), 2);
+    assert_eq!(
+        continuous_page.committed_events[0].commit(),
+        &gap.authority_commit.commit
+    );
+    assert_eq!(continuous_page.committed_events[1].commit(), bob_commit);
+    assert!(
+        store
+            .committed_event(&gap.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let reply_listener = listener.clone();
+    let reply_account = bob.pcr.history.account.clone();
+    let reply_governor = governor_state.service_core_id();
+    let reply = tokio::spawn(async move {
+        assert_eq!(
+            tcp_scan(
+                reply_listener.clone(),
+                opening_page,
+                opening_scan,
+                reply_account.clone(),
+                reply_governor.clone()
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            tcp_scan(
+                reply_listener,
+                continuous_page,
+                continuous_scan,
+                reply_account,
+                reply_governor
+            )
+            .await,
+            1
+        );
+        2
+    });
+    assert_eq!(
+        super::super::replica_anchor::ensure_forwarded_target(
+            &origin,
+            &governor_state.service_core_id(),
+            bob_event,
+            Some(bob_commit),
+            &mut located,
+            &bob_session,
+        )
+        .await
+        .unwrap(),
+        Some(bob_commit.clone())
+    );
+    assert_eq!(
+        reply.await.unwrap(),
+        2,
+        "recovery must scan the gap instead of requesting a new bootstrap"
+    );
+    let recovered_gap = store
+        .committed_event(&gap.authority_commit.event.event_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered_gap.event, gap.authority_commit.event);
+    assert_eq!(recovered_gap.commit, gap.authority_commit.commit);
+    assert_eq!(
+        store
+            .committed_event(&bob_event.event_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .commit,
+        *bob_commit
+    );
+    assert_eq!(
+        store
+            .replica_anchor_for_stream(&commit.stream_ref)
+            .await
+            .unwrap()
+            .unwrap()
+            .join_commit,
+        *commit
+    );
+
+    // A different, properly signed own join cannot replace the original
+    // while its anchor is pending. It must not start a peer read or write.
+    let replacement = foreign_request(
+        &origin, &human, &governor, &join.authority_commit, EventKind::MemberState,
+        serde_json::json!({"realm_id":realm,"member_id":actor,"membership":"join","reason":"pending anchor replacement candidate"}),
+    ).await;
+    {
+        let mut connection = origin_pool.get().await.unwrap();
+        diesel::sql_query("UPDATE replica_stream_anchors SET anchor_commit_id=NULL, anchor_stream_position=NULL, anchored_at=NULL WHERE realm_id=$1")
+            .bind::<diesel::sql_types::Text, _>(realm.as_str())
+            .execute(&mut *connection).await.unwrap();
+    }
+    let pending_before = opening_footprint(&origin_pool, realm).await;
+    let replacement_error = super::super::replica_anchor::ensure_forwarded_target(
+        &origin,
+        &governor_state.service_core_id(),
+        &replacement.authority_commit.event,
+        Some(&replacement.authority_commit.commit),
+        &mut located,
+        &session,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        replacement_error,
+        "forward opening join differs from the pending anchor"
+    );
+    assert_eq!(opening_footprint(&origin_pool, realm).await, pending_before);
+    let unchanged = store
+        .replica_anchor_for_stream(&commit.stream_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.join_commit, *commit);
+    assert!(unchanged.anchored_head.is_none());
 }
 #[tokio::test]
 async fn accepted_own_leave_returns_original_bound_result_after_terminal_membership_and_keeps_reads_closed()

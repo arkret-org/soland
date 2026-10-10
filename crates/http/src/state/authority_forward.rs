@@ -608,6 +608,7 @@ async fn forwarded_genesis_material(
 
 /// A: forward one self-submitted Event to its current governance Station and
 /// relay that Station's outcome.
+#[cfg(feature = "test-support")]
 pub(crate) async fn forward_self_event(
     state: &AppState,
     governance: &DidCoreId,

@@ -572,7 +572,40 @@ pub(crate) async fn ensure_forwarded_target(
         .await
         .map_err(temporary)?
     {
-        Some(anchor) if anchor.anchored_head.is_some() => anchor,
+        Some(anchor) if anchor.anchored_head.is_some() => {
+            let accepted_own_join = expected.is_some_and(|commit| {
+                commit != &anchor.join_commit
+                    && super::committed_replication::hosted_member_join(state, event, commit)
+                        .is_some_and(|member| {
+                            event.actor_id.as_account_id() == Some(&member)
+                                && session
+                                    .session_grant
+                                    .as_ref()
+                                    .map(|grant| &grant.account_id)
+                                    == Some(&member)
+                        })
+            });
+            if accepted_own_join {
+                // A rejoin may reopen after all hosted members left. Acquire
+                // its exact authorized Full, then let the locked installer
+                // decide whether this is an opening or a direct successor.
+                open_forwarded_join(
+                    state,
+                    governance,
+                    event,
+                    expected,
+                    located,
+                    session,
+                    Some(anchor),
+                    &mut pages_left,
+                    &mut total_bytes,
+                    MAX_TOTAL_BYTES,
+                )
+                .await?
+            } else {
+                anchor
+            }
+        }
         prior => {
             open_forwarded_join(
                 state,
@@ -756,15 +789,9 @@ async fn open_forwarded_join(
     max_total_bytes: usize,
 ) -> Result<ReplicaStreamAnchor, String> {
     let commit = expected.ok_or("forward recovery has no authorized replica anchor")?;
-    if !matches!(commit.stream_ref, CommitStreamRef::Realm { .. })
-        || !matches!(event.scope_ref, arkret_wire::ScopeRef::Realm { .. })
-        || !matches!(
-            event.kind,
-            arkret_wire::EventKind::MemberState | arkret_wire::EventKind::InviteAccept
-        )
-    {
-        return Err("forward recovery has no authorized replica anchor".into());
-    }
+    // The same hosted opening-join classifier used by committed replication
+    // includes Circle joins. Their parent Realm revision is rechecked by the
+    // transactional OpeningJoin installer before it can create an anchor.
     let member = super::committed_replication::hosted_member_join(state, event, commit)
         .ok_or("forward recovery is not a hosted opening join")?;
     if event.actor_id.as_account_id() != Some(&member)
@@ -778,7 +805,19 @@ async fn open_forwarded_join(
     }
     require_forward_source(state, session, event, located).await?;
     let commits = state.authority_commits();
-    let anchor = if let Some(anchor) = prior {
+    let held_fallback = prior
+        .as_ref()
+        .filter(|anchor| {
+            anchor.join_commit != *commit
+                && anchor.join_commit.stream_ref == commit.stream_ref
+                && anchor.member_account_id.station_id == state.service_core_id()
+                && anchor
+                    .anchored_head
+                    .as_ref()
+                    .is_some_and(|head| head.stream_ref == commit.stream_ref)
+        })
+        .cloned();
+    let anchor = if let Some(anchor) = prior.filter(|_| held_fallback.is_none()) {
         if anchor.member_account_id != member || anchor.join_commit != *commit {
             return Err("forward opening join differs from the pending anchor".into());
         }
@@ -885,7 +924,7 @@ async fn open_forwarded_join(
         }
         let (full, fact) = original.ok_or("forward recovery page budget exhausted")?;
         require_forward_source(state, session, event, located).await?;
-        commits
+        let installed = commits
             .install_committed_replica(&CommittedReplica {
                 local_service_id: state.service_core_id(),
                 authority: located.current_authority(),
@@ -899,17 +938,29 @@ async fn open_forwarded_join(
                 received_at: crate::wire::now(),
                 welcomes: Vec::new(),
             })
-            .await
-            .map_err(temporary)?;
+            .await;
+        if let Err(error) = installed {
+            if error.conflict_code() == Some(soland_storage::ConflictCode::DependencyMissing)
+                && let Some(anchor) = held_fallback
+            {
+                // Another hosted member may still authorize the old interval.
+                // The failed transaction wrote nothing; continue through the
+                // ordinary contiguous scan rather than skipping its gap.
+                require_forward_source(state, session, event, located).await?;
+                return Ok(anchor);
+            }
+            return Err(temporary(error));
+        }
         require_forward_source(state, session, event, located).await?;
         let anchor = commits
             .replica_anchor_for_stream(&commit.stream_ref)
             .await
             .map_err(temporary)?
             .ok_or("verified opening join created no pending anchor")?;
-        if anchor.member_account_id != member || anchor.join_commit != *commit {
-            return Err("verified opening join differs from its pending anchor".into());
-        }
+        // The installer may retain the existing anchor when another hosted
+        // member is still joined. In that case it required direct succession
+        // rather than opening a new interval; the ordinary held-prefix and
+        // exact target checks below remain mandatory.
         anchor
     };
     require_forward_source(state, session, event, located).await?;

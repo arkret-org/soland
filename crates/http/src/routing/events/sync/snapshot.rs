@@ -13,7 +13,7 @@ pub(crate) async fn build_sync_snapshot(
     after_cursor: &SyncCursor,
 ) -> Result<
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
-    arkret_wire::Problem,
+    Box<arkret_wire::Problem>,
 > {
     if let Some(frame) = current_details::frame(state, session, body, after_cursor).await? {
         return Ok(frame);

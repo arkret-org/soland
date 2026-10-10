@@ -41,6 +41,7 @@ fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> 
 /// Lifecycle gate for new session issuance. Wire codes come from the spec
 /// error-code-registry. These are account-lifecycle denials rather than
 /// generic policy denials, so the stable wire code names the lifecycle state.
+#[cfg(any(test, feature = "conformance-harness"))]
 pub(crate) fn account_new_session_tuple(
     state: &AppState,
     actor: &str,

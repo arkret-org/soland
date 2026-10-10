@@ -29,10 +29,12 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 use super::{append_audit_log, bearer_token, dpop_token, now, render_error};
 #[cfg(any(test, feature = "conformance-harness"))]
 use super::{handle_for_did, normalize_localpart, validate_device_id};
+#[cfg(any(test, feature = "conformance-harness"))]
+use crate::ids;
 use crate::state::AppState;
 #[cfg(any(test, feature = "conformance-harness"))]
 use crate::wire::{DevLoginRequestBody, SessionLoginOutcome};
-use crate::{JsonResult, ids, json_ok};
+use crate::{JsonResult, json_ok};
 
 mod login;
 mod logout;
