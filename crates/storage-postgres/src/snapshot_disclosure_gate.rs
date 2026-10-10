@@ -591,7 +591,7 @@ async fn pending_circle_bootstrap_join(
     let pending = sql_query(
         "SELECT c.stream_position AS current_stream_position,c.stream_ref,e.envelope \
          FROM replica_stream_anchors a JOIN realm_commits c \
-         ON c.realm_id=a.realm_id AND c.commit_id=a.join_commit_id \
+         ON c.realm_id=a.realm_id AND c.commit_id=a.join_commit_id AND c.stream_key=a.stream_key \
          JOIN canonical_events e ON e.pk=c.event_pk \
          WHERE a.realm_id=$1 AND a.member_account_id=$2 AND a.join_commit_id=$3 \
          AND a.anchor_commit_id IS NULL AND a.anchor_stream_position IS NULL \

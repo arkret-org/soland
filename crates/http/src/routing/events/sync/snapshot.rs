@@ -28,7 +28,7 @@ async fn build_global_sync_snapshot(
     after_cursor: &SyncCursor,
 ) -> Result<
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
-    arkret_wire::Problem,
+    Box<arkret_wire::Problem>,
 > {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // Capture the Station-CAS retention coordinate before reading the
@@ -272,11 +272,11 @@ async fn build_global_sync_snapshot(
     Ok(response)
 }
 
-fn account_unavailable() -> arkret_wire::Problem {
-    arkret_wire::Problem::from_code(
+fn account_unavailable() -> Box<arkret_wire::Problem> {
+    Box::new(arkret_wire::Problem::from_code(
         "temporarily_unavailable",
         "Account global cut could not be proved",
-    )
+    ))
 }
 
 #[cfg(test)]
