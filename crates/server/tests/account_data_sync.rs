@@ -302,7 +302,9 @@ impl GrantSession {
         .add_header("dpop", proof.header_value, true)
         .add_header("Arkret-Operation", operation, true);
         let request = if let Some(body) = body {
-            request.json(&body)
+            request
+                .add_header("content-type", "application/json", true)
+                .body(arkret_canonical::canonical_json_bytes(&body).unwrap())
         } else {
             request
         };
@@ -328,7 +330,12 @@ async fn signed_account_data_round_trip_enforces_cas_and_tombstone() {
     let session = account_grant_session(&fixture).await;
     let key = arkret_wire::AccountDataKey::PUSH_RULES;
     let set = signed_account_data_event(&session.state, &fixture, key);
-    let body = json!({"set_event": set});
+    let body = serde_json::to_value(
+        arkret_models_identity::account::AccountDataReplaceRequestBody {
+            set_event: arkret_wire::EventAdmissionSubmission::new(set.clone()),
+        },
+    )
+    .unwrap();
     let (status, created) = session
         .request(
             "PUT",
@@ -356,7 +363,14 @@ async fn signed_account_data_round_trip_enforces_cas_and_tombstone() {
         .request(
             "PUT",
             arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
-            Some(json!({"set_event": stale})),
+            Some(
+                serde_json::to_value(
+                    arkret_models_identity::account::AccountDataReplaceRequestBody {
+                        set_event: arkret_wire::EventAdmissionSubmission::new(stale),
+                    },
+                )
+                .unwrap(),
+            ),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
@@ -382,7 +396,14 @@ async fn signed_account_data_round_trip_enforces_cas_and_tombstone() {
         .request(
             "DELETE",
             arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_DELETE_V1,
-            Some(json!({"set_event": tombstone})),
+            Some(
+                serde_json::to_value(
+                    arkret_models_identity::account::AccountDataDeleteRequestBody {
+                        set_event: arkret_wire::EventAdmissionSubmission::new(tombstone),
+                    },
+                )
+                .unwrap(),
+            ),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{deleted}");
@@ -455,17 +476,27 @@ async fn development_bearer_session_cannot_produce_account_data_events() {
     let app = service(state.clone());
     let key = arkret_wire::AccountDataKey::PUSH_RULES;
     let event = signed_account_data_event(&state, &fixture, key);
-    let response = TestClient::put(format!("http://server/_arkret/self/account_data/{key}"))
+    let mut response = TestClient::put(format!("http://server/_arkret/self/account_data/{key}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "Arkret-Operation",
             arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
             true,
         )
-        .json(&json!({"set_event": event}))
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(
+                &arkret_models_identity::account::AccountDataReplaceRequestBody {
+                    set_event: arkret_wire::EventAdmissionSubmission::new(event),
+                },
+            )
+            .unwrap(),
+        )
         .send(&app)
         .await;
-    assert_eq!(response.status_code, Some(StatusCode::FORBIDDEN));
+    let status = response.status_code;
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::FORBIDDEN), "{body}");
     let actor = arkret_wire::ActorId::account(fixture.history.account.clone()).to_string();
     assert!(
         state
@@ -481,31 +512,54 @@ async fn development_bearer_session_cannot_produce_account_data_events() {
 
 #[tokio::test]
 async fn account_data_write_rejects_another_actors_signed_event() {
-    let state = soland_test_support::app_state(test_config());
-    let holder = PcrGenesisFixture::new(state.service_did());
-    let token = account_session(&state, &holder).await;
-    let other = PcrGenesisFixture::new(state.service_did());
-    other.admit(&state).await.expect("second accepted PCR");
+    let service_did = soland_test_support::fixture_service_identity(&test_config())
+        .identity()
+        .unwrap()
+        .did
+        .clone();
+    let holder = PcrGenesisFixture::new(service_did);
+    let session = account_grant_session(&holder).await;
+    let other = PcrGenesisFixture::new(session.state.service_did());
+    other
+        .admit(&session.state)
+        .await
+        .expect("second accepted PCR");
     let key = arkret_wire::AccountDataKey::PUSH_RULES;
-    let event = signed_account_data_event(&state, &other, key);
-    let app = service(state);
-    let response = TestClient::put(format!("http://server/_arkret/self/account_data/{key}"))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .add_header(
-            "Arkret-Operation",
+    let event = signed_account_data_event(&session.state, &other, key);
+    let (status, body) = session
+        .request(
+            "PUT",
             arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
-            true,
+            Some(
+                serde_json::to_value(
+                    arkret_models_identity::account::AccountDataReplaceRequestBody {
+                        set_event: arkret_wire::EventAdmissionSubmission::new(event),
+                    },
+                )
+                .unwrap(),
+            ),
         )
-        .json(&json!({"set_event": event}))
-        .send(&app)
         .await;
     assert!(
-        matches!(
-            response.status_code,
-            Some(StatusCode::FORBIDDEN | StatusCode::BAD_REQUEST)
-        ),
-        "holder isolation must reject a different actor's Event"
+        matches!(status, StatusCode::FORBIDDEN | StatusCode::BAD_REQUEST),
+        "holder isolation must reject a different actor's Event: {body}"
     );
+    for account in [&holder.history.account, &other.history.account] {
+        assert!(
+            session
+                .state
+                .test_persistence()
+                .account_data()
+                .get(
+                    &arkret_wire::ActorId::account(account.clone()).to_string(),
+                    key
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "holder isolation refuses before writing either account"
+        );
+    }
 }
 
 #[tokio::test]
@@ -518,11 +572,69 @@ async fn signed_read_cursor_round_trip_replays_without_entering_the_realm_log() 
     let fixture = PcrGenesisFixture::new(service_did);
     let session = account_grant_session(&fixture).await;
     let persistence = session.state.test_persistence();
-    let unit = ordinary_realm::bootstrap_unit_for_account(
+    let mut unit = ordinary_realm::bootstrap_unit_for_account(
         &format!("read-cursor-{}", uuid::Uuid::now_v7()),
         &fixture.history.account,
         &session.state.service_did(),
     );
+    let identity = soland_test_support::fixture_service_identity(session.state.config());
+    let station_key = SigningKey::from_bytes(&soland_test_support::fixture_signing_seed(
+        session.state.config(),
+        &identity,
+    ));
+    let mut previous = None;
+    // Freeze the real device source before signing each final Station Commit.
+    for (index, transaction) in unit.transactions.iter_mut().enumerate() {
+        transaction.event.producer_proof = None;
+        transaction.event = soland_test_support::signed_event::sign_fixture_event(
+            transaction.event.clone(),
+            fixture.history.did.as_str(),
+            fixture.history.founding_device_id.as_str(),
+            fixture.history.founding_device_signing_seed,
+        );
+        transaction.producer_signer_fact = persistence
+            .authority_commits()
+            .prepare_human_signer_fact(&transaction.event, transaction.commit.committed_at)
+            .await
+            .unwrap()
+            .map(Into::into);
+        assert!(transaction.producer_signer_fact.is_some());
+        transaction.commit.producer_signer_fact_digest = transaction
+            .producer_signer_fact
+            .as_ref()
+            .map(|fact| fact.digest().unwrap());
+        transaction.commit.previous_commit_ref = previous;
+        transaction.commit.commit_id =
+            arkret_wire::RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+                arkret_canonical::canonical_json_bytes(
+                    &arkret_canonical::canonical::unsigned_value(
+                        &transaction.commit,
+                        &["commit_id", "signature"],
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            ));
+        transaction.commit.signature = arkret_signatures::detached_object::sign_detached_object(
+            &arkret_canonical::canonical::unsigned_value(&transaction.commit, &["signature"])
+                .unwrap(),
+            arkret_wire::DetachedSignatureContext::RealmCommit,
+            arkret_wire::DidUrl::new(format!("{}#notary-key", session.state.service_did()))
+                .unwrap(),
+            transaction.commit.committed_at,
+            &station_key,
+        )
+        .unwrap();
+        previous = Some(transaction.commit.commit_id.clone());
+        unit.submission.events[index] =
+            arkret_wire::EventAdmissionSubmission::new(transaction.event.clone());
+    }
+    unit.exact_request_body = arkret_canonical::canonical_json_bytes(
+        &arkret_models_collaboration::authority_commit::SelfAuthoritySubmitRequest::OrdinaryRealmBootstrap(
+            unit.submission.clone(),
+        ),
+    )
+    .unwrap();
     unit.validate().unwrap();
     persistence
         .authority_commits()
