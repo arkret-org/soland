@@ -128,10 +128,12 @@ jobs:
         run: cargo +1.98 clippy --all-targets --locked -- -D warnings
         working-directory: soland
 
-      - name: KeyStore keygen
-        run: |
-          cargo +1.98 clippy --locked -p soland-keystore-keygen --all-targets -- -D warnings
-          cargo +1.98 test --locked -p soland-keystore-keygen
+      - name: KeyStore keygen Clippy
+        run: cargo +1.98 clippy --locked -p soland-keystore-keygen --all-targets -- -D warnings
+        working-directory: soland
+
+      - name: KeyStore keygen tests
+        run: cargo +1.98 test --locked -p soland-keystore-keygen
         working-directory: soland
 
       - name: Clippy with OpenTelemetry
@@ -279,7 +281,7 @@ jobs:
 
       - name: Snapshot baseline schema
         run: |
-          pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
+          pg_dump --schema-only --no-owner --no-privileges \
             "$DATABASE_URL" > /tmp/schema.baseline.sql
         env:
           PGPASSWORD: soland
@@ -292,14 +294,18 @@ jobs:
 
       - name: Snapshot cycled schema
         run: |
-          pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
+          pg_dump --schema-only --no-owner --no-privileges \
             "$DATABASE_URL" > /tmp/schema.cycled.sql
         env:
           PGPASSWORD: soland
 
       - name: Diff cycled schema against baseline
         run: |
-          if ! diff -u /tmp/schema.baseline.sql /tmp/schema.cycled.sql; then
+          # pg_dump randomizes these psql safety tokens on every invocation.
+          # Compare all schema SQL unchanged; retain the original dumps too.
+          sed '/^\\restrict /d; /^\\unrestrict /d' /tmp/schema.baseline.sql > /tmp/schema.baseline.ddl.sql
+          sed '/^\\restrict /d; /^\\unrestrict /d' /tmp/schema.cycled.sql > /tmp/schema.cycled.ddl.sql
+          if ! diff -u /tmp/schema.baseline.ddl.sql /tmp/schema.cycled.ddl.sql; then
             echo "::error::Migration up→down→up cycle did not round-trip cleanly."
             echo "::error::Each migration's down.sql must exactly invert its up.sql."
             exit 1

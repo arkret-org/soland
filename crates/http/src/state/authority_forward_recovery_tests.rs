@@ -2375,7 +2375,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
         Some(commit.clone())
     );
     assert_eq!(opening_footprint(&origin_pool, realm).await, before_replay);
-    Box::pin(circle_own_leave_bound_result_cases(
+    let final_parent = Box::pin(circle_own_leave_bound_result_cases(
         &origin,
         &origin_pool,
         &governor_state,
@@ -2391,7 +2391,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     .await;
     // Author, sign and admit the real own leave on Gov; Origin keeps its frozen
     // request and the authentic original acceptance without yet installing it.
-    let mut leave = Box::pin(foreign_request(&origin, &human, &governor, &join.authority_commit,
+    let mut leave = Box::pin(foreign_request(&origin, &human, &governor, &final_parent,
         EventKind::MemberState, serde_json::json!({"realm_id":realm,"member_id":actor,"membership":"leave","reason":"original own leave recovery"}))).await;
     seal_service_commit(&mut leave.authority_commit.commit, &governor_state);
     Box::pin(uow.commit_event(leave.clone())).await.unwrap();
@@ -2415,7 +2415,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     let scan = StreamScanRequest {
         realm_id: realm.clone(),
         stream_ref: lc.stream_ref.clone(),
-        direction: StreamScanDirection::After(Some(commit.stream_position)),
+        direction: StreamScanDirection::After(Some(final_parent.commit.stream_position)),
         limit: 128,
     };
     let soland_storage::PeerStreamScan::Page(page) = source
@@ -2765,7 +2765,7 @@ async fn circle_own_leave_bound_result_cases(
     listener: Arc<RegisteredTlsPeer>,
     located: &mut crate::routing::realm_join::LocatedRealmAuthority,
     session: &SessionIdentityState,
-) {
+) -> soland_storage::AuthorityCommitTransaction {
     use diesel_async::RunQueryDsl as _;
     register_original_peer_history(&listener, governor_state, governor_pool).await;
     let source = PgAuthorityCommitStore {
@@ -2776,11 +2776,29 @@ async fn circle_own_leave_bound_result_cases(
     };
     let uow = PgEventCommitUnitOfWork::new(governor_pool.clone());
     let actor = ActorId::account(human.pcr.history.account.clone());
+    let mut parent_join = parent_join.clone();
     let mut previous = parent_join.clone();
     let mut terminal = None;
-    for (index, state) in ["join", "leave", "join"].into_iter().enumerate() {
+    for (index, state) in ["join", "leave", "join", "leave", "join"]
+        .into_iter()
+        .enumerate()
+    {
+        if index == 3 {
+            parent_join = Box::pin(circle_cleanup_parent_rejoin(
+                origin,
+                governor_state,
+                governor_pool,
+                human,
+                governor,
+                &parent_join,
+                listener.clone(),
+                located,
+                session,
+            ))
+            .await;
+        }
         let mut payload = serde_json::json!({"circle_id":circle_id,"member_id":actor,"membership":state,
-            "expected_membership":match index { 0 => None, 1 => Some("join"), _ => Some("leave") }});
+            "expected_membership":if index == 0 { None } else if state == "leave" { Some("join") } else { Some("leave") }});
         if state == "join" {
             payload["parent_membership_revision"] = serde_json::json!({"commit_id":parent_join.commit.commit_id,
                 "stream_position":parent_join.commit.stream_position});
@@ -2811,6 +2829,19 @@ async fn circle_own_leave_bound_result_cases(
             .retain_forwarded_acceptance(event, commit, commit.committed_at)
             .await
             .unwrap();
+        if index == 3 {
+            Box::pin(circle_cleanup_install_refusals(
+                origin,
+                origin_pool,
+                governor_state,
+                human,
+                governor,
+                event,
+                commit,
+                request.authority_commit.producer_signer_fact.clone(),
+            ))
+            .await;
+        }
         let scan = StreamScanRequest {
             realm_id: event.realm_id.clone(),
             stream_ref: commit.stream_ref.clone(),
@@ -2865,7 +2896,10 @@ async fn circle_own_leave_bound_result_cases(
         ))
         .await;
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(outcome.unwrap(), Some(commit.clone()));
+        assert_eq!(
+            outcome.unwrap_or_else(|error| panic!("Circle phase {index} {state}: {error}")),
+            Some(commit.clone())
+        );
         assert_eq!(reply.await.unwrap(), 1);
         if state == "leave" {
             assert!(
@@ -3011,6 +3045,376 @@ async fn circle_own_leave_bound_result_cases(
             .await
             .unwrap(),
         "a real accepted Circle rejoin cannot revive an old leave result"
+    );
+    parent_join
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The regression reuses two actual Stations, their signed parent history and authenticated recovery context."
+)]
+async fn circle_cleanup_parent_rejoin(
+    origin: &AppState,
+    governor_state: &AppState,
+    governor_pool: &PgPool,
+    human: &historical_human::HumanFixture,
+    governor: &historical_human::HumanFixture,
+    old_parent: &soland_storage::AuthorityCommitTransaction,
+    listener: Arc<RegisteredTlsPeer>,
+    located: &mut crate::routing::realm_join::LocatedRealmAuthority,
+    session: &SessionIdentityState,
+) -> soland_storage::AuthorityCommitTransaction {
+    let source = PgAuthorityCommitStore {
+        pool: governor_pool.clone(),
+    };
+    let store = origin.authority_commits();
+    let uow = PgEventCommitUnitOfWork::new(governor_pool.clone());
+    let head = source
+        .held_stream_head_commit(&old_parent.commit.stream_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    let full = source
+        .committed_event(&head.event_ref)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut previous = old_parent.clone();
+    previous.event = full.event;
+    previous.commit = full.commit;
+    previous.producer_signer_fact = source
+        .producer_signer_fact(&previous.event, &previous.commit)
+        .await
+        .unwrap();
+    for membership in ["leave", "join"] {
+        let mut request = Box::pin(foreign_request(origin,human,governor,&previous,EventKind::MemberState,
+            serde_json::json!({"realm_id":old_parent.event.realm_id,"member_id":old_parent.event.actor_id,
+                "membership":membership,"reason":"real parent replacement before explicit Circle cleanup"}))).await;
+        seal_service_commit(&mut request.authority_commit.commit, governor_state);
+        Box::pin(uow.commit_event(request.clone())).await.unwrap();
+        let event = &request.authority_commit.event;
+        let commit = &request.authority_commit.commit;
+        store.queue_event(event, commit.committed_at).await.unwrap();
+        store
+            .retain_forwarded_submission(
+                event,
+                &SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(event.clone())),
+                commit.committed_at,
+            )
+            .await
+            .unwrap();
+        store
+            .retain_forwarded_acceptance(event, commit, commit.committed_at)
+            .await
+            .unwrap();
+        let scan = StreamScanRequest {
+            realm_id: event.realm_id.clone(),
+            stream_ref: commit.stream_ref.clone(),
+            direction: StreamScanDirection::After(
+                (membership == "leave").then_some(previous.commit.stream_position),
+            ),
+            limit: 128,
+        };
+        let soland_storage::PeerStreamScan::Page(page) = source
+            .scan_stream_for_peer(
+                &scan,
+                &human.pcr.history.account.station_id,
+                &governor_state.service_core_id(),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("parent original interval missing");
+        };
+        assert_eq!(page.committed_events.len(), 1);
+        let (rl, rg, rp, ra, rc) = (
+            listener.clone(),
+            governor_state.clone(),
+            governor_pool.clone(),
+            human.pcr.history.account.clone(),
+            commit.clone(),
+        );
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reply_stop = stop.clone();
+        let reply = tokio::spawn(async move {
+            assert_eq!(
+                tcp_scan(rl.clone(), page, scan, ra.clone(), rg.service_core_id()).await,
+                1
+            );
+            if membership == "join" {
+                tcp_opening_bootstrap(rl, rg, rp, ra, rc, reply_stop).await
+            } else {
+                tcp_original_service_history_once(rl, rg, rp).await
+            }
+        });
+        let result = Box::pin(super::super::replica_anchor::ensure_forwarded_target(
+            origin,
+            &governor_state.service_core_id(),
+            event,
+            Some(commit),
+            located,
+            session,
+        ))
+        .await;
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(result.unwrap(), Some(commit.clone()));
+        assert_eq!(reply.await.unwrap(), 1);
+        previous = request.authority_commit;
+    }
+    previous
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The negative regression uses the exact accepted Full and its two Station fixtures."
+)]
+async fn circle_cleanup_install_refusals(
+    origin: &AppState,
+    pool: &PgPool,
+    governor_state: &AppState,
+    human: &historical_human::HumanFixture,
+    governor: &historical_human::HumanFixture,
+    event: &arkret_wire::Event,
+    commit: &arkret_wire::RealmCommit,
+    fact: Option<arkret_models_collaboration::authority_commit::HistoricalProducerSignerFact>,
+) {
+    use diesel_async::RunQueryDsl as _;
+    #[derive(diesel::QueryableByName)]
+    struct Witness {
+        #[diesel(sql_type=diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        parent: Option<serde_json::Value>,
+    }
+    let store = origin.authority_commits();
+    Box::pin(circle_cleanup_missing_parent_is_frozen(
+        origin, pool, human, event,
+    ))
+    .await;
+    let baseline = opening_footprint(pool, &event.realm_id).await;
+    let replica = CommittedReplica {
+        local_service_id: origin.service_core_id(),
+        authority: governor_state
+            .authority_commits()
+            .current_authority(&event.realm_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        event: event.clone(),
+        commit: commit.clone(),
+        producer_signer_fact: fact,
+        genesis_event_ref: None,
+        role: CommittedReplicaRole::AcceptedOwnCircleLeave {
+            member_account_id: human.pcr.history.account.clone(),
+        },
+        received_at: commit.committed_at,
+        welcomes: Vec::new(),
+    };
+    for role in [
+        CommittedReplicaRole::HeldStream,
+        CommittedReplicaRole::AcceptedOwnCircleLeave {
+            member_account_id: governor.pcr.history.account.clone(),
+        },
+    ] {
+        let mut rejected = replica.clone();
+        rejected.role = role;
+        assert_eq!(
+            store
+                .install_committed_replica(&rejected)
+                .await
+                .unwrap_err()
+                .conflict_code(),
+            Some(soland_storage::ConflictCode::CapabilityDenied)
+        );
+        assert_eq!(opening_footprint(pool, &event.realm_id).await, baseline);
+    }
+    let mut no_fact = replica.clone();
+    no_fact.producer_signer_fact = None;
+    assert!(store.install_committed_replica(&no_fact).await.is_err());
+    assert_eq!(opening_footprint(pool, &event.realm_id).await, baseline);
+    let mut wrong_fact = replica.clone();
+    wrong_fact
+        .producer_signer_fact
+        .as_mut()
+        .unwrap()
+        .as_human_mut()
+        .unwrap()
+        .event_id = human.unit.transactions[0].event.event_id.clone();
+    assert!(store.install_committed_replica(&wrong_fact).await.is_err());
+    assert_eq!(opening_footprint(pool, &event.realm_id).await, baseline);
+    let mut conn = pool.get().await.unwrap();
+    let old=diesel::sql_query("SELECT circle_leave_parent_revision AS parent FROM authority_forward_attempts WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+        .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec()).get_result::<Witness>(&mut *conn).await.unwrap().parent;
+    assert!(old.is_some());
+    let original_intent =
+        SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(event.clone()));
+    for keep_original in [true, false] {
+        diesel::sql_query("UPDATE authority_forward_attempts SET accepted_commit_json=NULL,original_submission_json=$2 WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+            .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec())
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>,_>(keep_original.then(||serde_json::to_value(&original_intent).unwrap()))
+            .execute(&mut *conn).await.unwrap();
+        drop(conn);
+        assert_eq!(
+            store
+                .install_committed_replica(&replica)
+                .await
+                .unwrap_err()
+                .conflict_code(),
+            Some(soland_storage::ConflictCode::CapabilityDenied)
+        );
+        assert_eq!(opening_footprint(pool, &event.realm_id).await, baseline);
+        conn = pool.get().await.unwrap();
+        diesel::sql_query("UPDATE authority_forward_attempts SET original_submission_json=$2,accepted_commit_json=$3 WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+            .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec())
+            .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(&original_intent).unwrap())
+            .bind::<diesel::sql_types::Jsonb,_>(serde_json::to_value(commit).unwrap())
+            .execute(&mut *conn).await.unwrap();
+    }
+    diesel::sql_query("UPDATE member_state_current_results SET current_stream_position=current_stream_position+1 WHERE realm_id=$1 AND member_id=$2")
+        .bind::<diesel::sql_types::Text,_>(event.realm_id.as_str()).bind::<diesel::sql_types::Text,_>(event.actor_id.to_string()).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    store
+        .retain_forwarded_submission(event, &original_intent, commit.committed_at)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .install_committed_replica(&replica)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(soland_storage::ConflictCode::CapabilityDenied)
+    );
+    conn = pool.get().await.unwrap();
+    let unchanged=diesel::sql_query("SELECT circle_leave_parent_revision AS parent FROM authority_forward_attempts WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+        .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec()).get_result::<Witness>(&mut *conn).await.unwrap().parent;
+    assert_eq!(
+        unchanged, old,
+        "a replay must not replace its first parent cut"
+    );
+    diesel::sql_query("UPDATE member_state_current_results SET current_stream_position=current_stream_position-1 WHERE realm_id=$1 AND member_id=$2")
+        .bind::<diesel::sql_types::Text,_>(event.realm_id.as_str()).bind::<diesel::sql_types::Text,_>(event.actor_id.to_string()).execute(&mut *conn).await.unwrap();
+    #[derive(diesel::QueryableByName)]
+    struct CleanupCut {
+        #[diesel(sql_type=diesel::sql_types::Jsonb)]
+        value: serde_json::Value,
+    }
+    let diagnostic = diesel::sql_query("SELECT jsonb_build_object('anchor_member',a.member_account_id,'join_commit',a.join_commit_id, \
+        'member_commit',m.current_commit_id,'member_value',m.value,'parent',f.circle_leave_parent_revision, \
+        'parent_commit',p.current_commit_id,'parent_position',p.current_stream_position,'parent_state',p.membership, \
+        'join_payload',j.envelope->'payload','active',circle.value->>'state') AS value \
+        FROM canonical_events e JOIN authority_forward_attempts f ON f.event_pk=e.pk \
+        LEFT JOIN replica_stream_anchors a ON a.realm_id=e.envelope->>'realm_id' AND a.stream_key=(SELECT stream_key FROM realm_commits WHERE commit_id=$2) \
+        LEFT JOIN circle_member_state_current_results m ON m.realm_id=a.realm_id AND m.circle_id=e.envelope->'scope_ref'->>'circle_id' AND m.member_id=$3 \
+        LEFT JOIN member_state_current_results p ON p.realm_id=a.realm_id AND p.member_id=$3 \
+        LEFT JOIN canonical_events j ON j.pk=(SELECT event_pk FROM realm_commits WHERE commit_id=a.join_commit_id) \
+        LEFT JOIN circle_current_results circle ON circle.circle_id=e.envelope->'scope_ref'->>'circle_id' WHERE e.id=$1")
+        .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec())
+        .bind::<diesel::sql_types::Text,_>(commit.previous_commit_ref.as_ref().unwrap().as_str())
+        .bind::<diesel::sql_types::Text,_>(event.actor_id.to_string())
+        .get_result::<CleanupCut>(&mut *conn).await.unwrap().value;
+    // The replacement parent Snapshot cannot disclose metadata of this
+    // effective-invalid Circle. Its own canonical join is still held, and
+    // only the separately accepted cleanup result may install its leave.
+    assert!(diagnostic["active"].is_null());
+    assert_eq!(diagnostic["join_commit"], diagnostic["member_commit"]);
+    assert_eq!(
+        diagnostic["parent"]["commit_id"],
+        diagnostic["parent_commit"]
+    );
+    assert_eq!(
+        diagnostic["parent"]["stream_position"],
+        diagnostic["parent_position"]
+    );
+    assert_ne!(
+        diagnostic["parent"],
+        diagnostic["join_payload"]["parent_membership_revision"]
+    );
+    diesel::sql_query("UPDATE authority_forward_attempts SET circle_leave_parent_revision=NULL WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+        .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec()).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    // An exact duplicate cannot fill an originally absent cut from later current.
+    store
+        .retain_forwarded_submission(
+            event,
+            &SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(event.clone())),
+            commit.committed_at,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .install_committed_replica(&replica)
+            .await
+            .unwrap_err()
+            .conflict_code(),
+        Some(soland_storage::ConflictCode::CapabilityDenied)
+    );
+    assert_eq!(opening_footprint(pool, &event.realm_id).await, baseline);
+    let mut conn = pool.get().await.unwrap();
+    let absent=diesel::sql_query("SELECT circle_leave_parent_revision AS parent FROM authority_forward_attempts WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+        .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec()).get_result::<Witness>(&mut *conn).await.unwrap().parent;
+    assert_eq!(absent, None);
+    diesel::sql_query("UPDATE authority_forward_attempts SET circle_leave_parent_revision=$2 WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+        .bind::<diesel::sql_types::Binary,_>(event.event_id.token_bytes().to_vec()).bind::<diesel::sql_types::Nullable<diesel::sql_types::Jsonb>,_>(old)
+        .execute(&mut *conn).await.unwrap();
+}
+
+async fn circle_cleanup_missing_parent_is_frozen(
+    origin: &AppState,
+    pool: &PgPool,
+    human: &historical_human::HumanFixture,
+    event: &arkret_wire::Event,
+) {
+    use diesel_async::RunQueryDsl as _;
+    #[derive(diesel::QueryableByName)]
+    struct Witness {
+        #[diesel(sql_type=diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        parent: Option<serde_json::Value>,
+    }
+    let mut queued = event.clone();
+    queued.created_at += Duration::milliseconds(1);
+    let queued = soland_test_support::device_authorization_history::sign_event(
+        queued,
+        human.pcr.history.device_verification_method.clone(),
+        human.pcr.history.founding_device_signing_seed,
+    );
+    let store = origin.authority_commits();
+    store.queue_event(&queued, queued.created_at).await.unwrap();
+    let intent = SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(queued.clone()));
+    let mut conn = pool.get().await.unwrap();
+    // Model a local parent cut whose declared revision has no held source.
+    // A forwarding intent may be retained, but cannot freeze a proven join.
+    diesel::sql_query("UPDATE member_state_current_results SET current_stream_position=current_stream_position+1 WHERE realm_id=$1 AND member_id=$2")
+        .bind::<diesel::sql_types::Text,_>(event.realm_id.as_str()).bind::<diesel::sql_types::Text,_>(event.actor_id.to_string()).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    store
+        .retain_forwarded_submission(&queued, &intent, queued.created_at)
+        .await
+        .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    let absent=diesel::sql_query("SELECT circle_leave_parent_revision AS parent FROM authority_forward_attempts WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+        .bind::<diesel::sql_types::Binary,_>(queued.event_id.token_bytes().to_vec()).get_result::<Witness>(&mut *conn).await.unwrap().parent;
+    assert_eq!(absent, None);
+    diesel::sql_query("UPDATE member_state_current_results SET current_stream_position=current_stream_position-1 WHERE realm_id=$1 AND member_id=$2")
+        .bind::<diesel::sql_types::Text,_>(event.realm_id.as_str()).bind::<diesel::sql_types::Text,_>(event.actor_id.to_string()).execute(&mut *conn).await.unwrap();
+    drop(conn);
+    store
+        .retain_forwarded_submission(&queued, &intent, queued.created_at)
+        .await
+        .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    let unchanged=diesel::sql_query("SELECT circle_leave_parent_revision AS parent FROM authority_forward_attempts WHERE event_pk=(SELECT pk FROM canonical_events WHERE id=$1)")
+        .bind::<diesel::sql_types::Binary,_>(queued.event_id.token_bytes().to_vec()).get_result::<Witness>(&mut *conn).await.unwrap().parent;
+    assert_eq!(
+        unchanged, None,
+        "a now-proven parent cannot fill the first absent cut"
+    );
+    drop(conn);
+    assert!(
+        store
+            .committed_event(&queued.event_id)
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 
