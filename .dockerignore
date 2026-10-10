@@ -3,6 +3,13 @@
 # pour gigabytes into the build context.
 target
 **/target/
+target-*
+**/target-*/
+.shared-target
+.codex-tmp
+.local
+# Deployment configuration is supplied at runtime; keep .env.example in source.
+.env
 .git
 .github
 *.log
