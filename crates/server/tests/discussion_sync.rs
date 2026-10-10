@@ -109,22 +109,42 @@ async fn scan(
     )
 }
 
-fn next(
+fn seal_commit(state: &soland_http::state::AppState, commit: &mut arkret_wire::RealmCommit) {
+    let identity = soland_test_support::fixture_service_identity(state.config());
+    let key = ed25519_dalek::SigningKey::from_bytes(&soland_test_support::fixture_signing_seed(
+        state.config(),
+        &identity,
+    ));
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &arkret_canonical::canonical::unsigned_value(commit, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_did())).unwrap(),
+        commit.committed_at,
+        &key,
+    )
+    .unwrap();
+    commit.verify_commit_id_matches_content().unwrap();
+}
+
+async fn next(
+    state: &soland_http::state::AppState,
+    pool: &soland_storage_postgres::PgPool,
     previous: &soland_storage::AuthorityCommitTransaction,
     kind: EventKind,
     payload: Value,
-    station_did: &arkret_wire::Did,
+    actor: &arkret_wire::AccountId,
 ) -> soland_storage::EventCommitRequest {
-    let mut request = ordinary_realm::next_request(
+    let mut request = ordinary_realm::next_request_for_actor(
         previous,
         kind,
-        &ordinary_realm::human_profile::account(&ordinary_realm::station(), "ordinary-founder")
-            .principal_id,
+        arkret_wire::ActorId::account(actor.clone()),
         payload,
         previous.commit.committed_at,
     );
     request.authority_commit.commit.signature =
-        ordinary_realm::signature_for_did(station_did, previous.commit.committed_at);
+        ordinary_realm::signature_for_did(&state.service_did(), previous.commit.committed_at);
+    let mut request = Box::pin(ordinary_realm::source_request(pool, request)).await;
+    seal_commit(state, &mut request.authority_commit.commit);
     request
 }
 
@@ -133,9 +153,12 @@ async fn history_scenario(history: &str, via_invite: bool) {
         development_mode: true,
         ..soland_test_support::app_config()
     });
-    let human =
-        ordinary_realm::human_profile::admit(&pool, &state.service_core_id(), "ordinary-founder")
-            .await;
+    let human = ordinary_realm::human_profile::admit_for_station_did(
+        &pool,
+        state.service_did(),
+        "ordinary-founder",
+    )
+    .await;
     let persistence = state.test_persistence();
     let unit = ordinary_realm::bootstrap_unit_with_history_for_account(
         &format!("discussion-{history}-{}", uuid::Uuid::now_v7()),
@@ -144,6 +167,10 @@ async fn history_scenario(history: &str, via_invite: bool) {
         &human,
         &state.service_did(),
     );
+    let mut unit = Box::pin(ordinary_realm::source_bootstrap(&pool, unit)).await;
+    for transaction in &mut unit.transactions {
+        seal_commit(&state, &mut transaction.commit);
+    }
     unit.validate().unwrap();
     persistence
         .authority_commits()
@@ -153,6 +180,8 @@ async fn history_scenario(history: &str, via_invite: bool) {
     let initial = unit.transactions.last().unwrap();
     let realm_id = initial.event.realm_id.clone();
     let strand = next(
+        &state,
+        &pool,
         initial,
         EventKind::StrandCreate,
         json!({"object": {
@@ -161,34 +190,45 @@ async fn history_scenario(history: &str, via_invite: bool) {
             "metadata":{"title":"History floor"}, "state":"active",
             "created_by":initial.event.actor_id, "created_at":initial.commit.committed_at,
         }}),
-        &state.service_did(),
-    );
+        &human,
+    )
+    .await;
     persistence.commit_event(strand.clone()).await.unwrap();
     let strand_id = StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let default = next(
+        &state,
+        &pool,
         &strand.authority_commit,
         EventKind::RealmSetDefaultStrand,
         json!({
             "realm_id":realm_id, "strand_id":strand_id, "expected_default_strand_id":null,
         }),
-        &state.service_did(),
-    );
+        &human,
+    )
+    .await;
     persistence.commit_event(default.clone()).await.unwrap();
     let before = next(
+        &state,
+        &pool,
         &default.authority_commit,
         EventKind::MessageCreate,
         ordinary_realm::message_payload(&strand_id, "before join"),
-        &state.service_did(),
-    );
+        &human,
+    )
+    .await;
     persistence.commit_event(before.clone()).await.unwrap();
-    let bob = arkret_wire::DidCoreId::new("ak:did_core:web:discussion-reader.example").unwrap();
-    let bob_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        bob.clone(),
-        state.service_core_id(),
-    ));
+    let bob_account = Box::pin(ordinary_realm::human_profile::admit_for_station_did(
+        &pool,
+        state.service_did(),
+        "discussion-reader",
+    ))
+    .await;
+    let bob = bob_account.principal_id.clone();
+    let bob_actor = arkret_wire::ActorId::account(bob_account);
     let token = persisted_read_session(&state, &bob).await;
     let (previous, kind, payload) = if via_invite {
         let invite = next(
+            &state, &pool,
             &before.authority_commit,
             EventKind::InviteCreate,
             json!({
@@ -196,8 +236,8 @@ async fn history_scenario(history: &str, via_invite: bool) {
                 "introduction_evidence_digest": format!("sha256:{}", "a".repeat(64)),
                 "expires_at": arkret_canonical::format_timestamp_canonical(initial.commit.committed_at + chrono::Duration::days(7)),
             }),
-            &state.service_did(),
-        );
+            &human,
+        ).await;
         persistence.commit_event(invite.clone()).await.unwrap();
         let payload = json!({
             "invite_id": arkret_wire::InviteId::from_event_id(&invite.authority_commit.event.event_id),
@@ -216,13 +256,18 @@ async fn history_scenario(history: &str, via_invite: bool) {
         ordinary_realm::next_request(&previous, kind, &bob, payload, initial.commit.committed_at);
     join.authority_commit.commit.signature =
         ordinary_realm::signature_for_did(&state.service_did(), initial.commit.committed_at);
+    let mut join = Box::pin(ordinary_realm::source_request(&pool, join)).await;
+    seal_commit(&state, &mut join.authority_commit.commit);
     persistence.commit_event(join.clone()).await.unwrap();
     let after = next(
+        &state,
+        &pool,
         &join.authority_commit,
         EventKind::MessageCreate,
         ordinary_realm::message_payload(&strand_id, "after join"),
-        &state.service_did(),
-    );
+        &human,
+    )
+    .await;
     persistence.commit_event(after.clone()).await.unwrap();
     assert_eq!(
         before.authority_commit.event.created_at,

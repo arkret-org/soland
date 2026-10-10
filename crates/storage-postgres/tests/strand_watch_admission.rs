@@ -52,7 +52,7 @@ async fn write(
         payload,
         discussion.committed_at() + chrono::Duration::seconds(offset),
     );
-    ordinary_realm::source_request(pool, request).await
+    Box::pin(ordinary_realm::source_request(pool, request)).await
 }
 fn read_request(discussion: &ordinary_realm::Discussion) -> StrandWatchCurrentRequestBody {
     StrandWatchCurrentRequestBody {
@@ -97,7 +97,7 @@ async fn realm_watch_current_remains_provable_after_private_sidecar_history() {
         json!({}),
         discussion.committed_at(),
     );
-    let create = ordinary_realm::source_request(&pool, create).await;
+    let create = Box::pin(ordinary_realm::source_request(&pool, create)).await;
     uow.commit_event(create.clone()).await.unwrap();
     let sidecar = arkret_wire::SidecarId::from_event_id(&create.authority_commit.event.event_id);
     let scope = arkret_wire::ScopeRef::Sidecar {
@@ -127,7 +127,7 @@ async fn realm_watch_current_remains_provable_after_private_sidecar_history() {
     };
     attach.authority_commit.commit.stream_position = 0;
     attach.authority_commit.commit.previous_commit_ref = None;
-    let attach = ordinary_realm::source_request(&pool, attach).await;
+    let attach = Box::pin(ordinary_realm::source_request(&pool, attach)).await;
     uow.commit_event(attach).await.unwrap();
     assert!(matches!(
         read(&pool, &discussion).await,
@@ -140,7 +140,7 @@ async fn realm_watch_current_remains_provable_after_private_sidecar_history() {
         json!({"strand_id":discussion.strand_id,"watcher_actor_id":previous.event.actor_id,"level":"all"}),
         discussion.committed_at() + chrono::Duration::seconds(30),
     );
-    let watch = ordinary_realm::source_request(&pool, watch).await;
+    let watch = Box::pin(ordinary_realm::source_request(&pool, watch)).await;
     uow.commit_event(watch).await.unwrap();
     assert!(matches!(
         read(&pool, &discussion).await,

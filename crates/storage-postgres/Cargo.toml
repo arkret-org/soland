@@ -54,6 +54,8 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+salvo = { workspace = true, features = ["test"] }
+url.workspace = true
 soland-test-support.workspace = true
 soland-http = { workspace = true, features = ["test-support"] }
 arkret-schema-conformance.workspace = true

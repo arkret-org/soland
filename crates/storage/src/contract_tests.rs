@@ -18,11 +18,10 @@ use chrono::{Duration, Utc};
 
 use super::{
     AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
-    AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
-    AppletIdentityCommit, AppletRecordCommit, AppletStore, AuthorityCommitStore,
-    AuthorityCommitTransaction, AuthorityCommitWriteOutcome, CanonicalEventRecord,
-    ContactProjectionCommit, ContactRecord, ContactStore, CurrentRealmAuthority,
-    DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
+    AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore, AppletStore,
+    AuthorityCommitStore, AuthorityCommitTransaction, AuthorityCommitWriteOutcome,
+    CanonicalEventRecord, ContactProjectionCommit, ContactRecord, ContactStore,
+    CurrentRealmAuthority, DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
     DeviceMessageBatchInspection, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
     DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
     DeviceMessageTargetSnapshotGuard, DeviceRevocationGateSelector, EventBatchCommitRequest,
@@ -1355,915 +1354,612 @@ fn canonical_wire_event_record(
     }
 }
 
+/// Real factory-supplied inputs for the adapter-independent transaction assertions.
+/// The factory establishes accepted admin Device/Realm prerequisites and uses the
+/// registered preview; only the adapter can confer the private Applet unit tag.
+#[async_trait::async_trait]
+pub trait AppletFormalCommitFactory: Send + Sync {
+    async fn prepare_install(
+        &self,
+        applet_id: &arkret_wire::AppletId,
+        scope_label: &str,
+    ) -> AppletFormalCommitUnit;
+    async fn prepare_ghost(
+        &self,
+        applet_id: &arkret_wire::AppletId,
+        scope: &arkret_wire::ScopeRef,
+        external: &str,
+        actor_label: &str,
+    ) -> AppletFormalCommitUnit;
+}
+
+pub type AppletFormalFinalizer = std::sync::Arc<
+    dyn Fn(
+            &[arkret_wire::CommittedEventRef],
+            Option<serde_json::Value>,
+            Option<serde_json::Value>,
+        ) -> super::PersistenceResult<super::AppletUnitFinalization>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
+pub struct AppletFormalCommitUnit {
+    pub input: super::AppletAuthoringUnitWrite,
+    pub author: super::AppletCommitAuthor,
+    pub attester: super::AppletResolutionAttester,
+    pub finalize: AppletFormalFinalizer,
+    pub event_ids: Vec<String>,
+    pub effective_scope: arkret_wire::ScopeRef,
+}
+
+impl AppletFormalCommitUnit {
+    pub async fn commit(
+        &self,
+        store: &dyn AppletStore,
+    ) -> super::PersistenceResult<super::AppletAuthoringUnitOutcome> {
+        let finalize = self.finalize.clone();
+        let identity = self.input.expected_identity.clone();
+        let installation = self.input.expected_installation.clone();
+        store
+            .admit_authoring_unit(
+                self.input.clone(),
+                self.author.clone(),
+                self.attester.clone(),
+                std::sync::Arc::new(move |refs| {
+                    finalize(refs, identity.clone(), installation.clone())
+                }),
+            )
+            .await
+    }
+
+    async fn refresh_expected(&mut self, store: &dyn AppletStore) {
+        self.input.expected_identity = store
+            .get_identity(
+                self.input.package.applet_id.as_str(),
+                self.input
+                    .station_verification_method
+                    .as_str()
+                    .split('#')
+                    .next()
+                    .map(|did| {
+                        arkret_wire::project_did_to_core_id(&Did::new(did).unwrap()).unwrap()
+                    })
+                    .unwrap()
+                    .as_str(),
+            )
+            .await
+            .expect("read actual accepted identity");
+        self.input.expected_installation = store
+            .get(
+                self.input.package.applet_id.as_str(),
+                &applet_effective_scope_key(&self.effective_scope).unwrap(),
+            )
+            .await
+            .expect("read actual accepted installation");
+    }
+}
+
 pub struct AppletFormalCommitContractStores<'a> {
     pub unit_of_work: &'a dyn EventCommitUnitOfWork,
     pub authority: &'a dyn AuthorityCommitStore,
     pub events: &'a dyn EventStore,
     pub applets: &'a dyn AppletStore,
+    pub factory: &'a dyn AppletFormalCommitFactory,
 }
 
 fn contract_applet_id() -> arkret_wire::AppletId {
-    arkret_wire::AppletId::new(format!("ak:applet:{}", uuid::Uuid::now_v7()))
-        .expect("contract Applet id")
-}
-
-fn contract_applet_record(
-    applet_id: &arkret_wire::AppletId,
-    install_marker: &str,
-    ghosts: Vec<serde_json::Value>,
-) -> serde_json::Value {
-    let effective_scope = arkret_wire::ScopeRef::Realm {
-        realm_id: arkret_wire::RealmId::new(contract_realm_id("applet-install"))
-            .expect("contract Applet Realm id"),
-    };
-    contract_applet_record_for_scope(applet_id, install_marker, effective_scope, ghosts)
-}
-
-fn contract_applet_record_for_scope(
-    applet_id: &arkret_wire::AppletId,
-    install_marker: &str,
-    effective_scope: arkret_wire::ScopeRef,
-    ghosts: Vec<serde_json::Value>,
-) -> serde_json::Value {
-    serde_json::json!({
-        "applet_id": applet_id,
-        "owner_actor_id": "ak:did_core:webvh:z6mkcontractowner",
-        "effective_scope": effective_scope,
-        "package": {"namespaces": {}},
-        "status": "installed",
-        "revoked_at": null,
-        "install_body_digest": format!("sha256:{install_marker:0>64}"),
-        "bots": [],
-        "ghosts": ghosts,
-    })
-}
-
-fn contract_applet_identity(applet_id: &arkret_wire::AppletId) -> serde_json::Value {
-    let bot_suffix = applet_id
-        .as_str()
-        .strip_prefix("ak:applet:")
-        .expect("typed Applet id has its registered prefix");
-    serde_json::json!({
-        "applet_id": applet_id,
-        "target_station_id": "ak:did_core:webvh:z6mkcontractservice",
-        "service_id": format!("ak:did_core:web:service-{bot_suffix}.example")
-    })
-}
-
-fn contract_applet_actor(principal_id: &str) -> arkret_wire::ActorId {
-    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(principal_id).expect("contract managed principal"),
-        arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkcontractservice")
-            .expect("contract Station"),
-    ))
-}
-
-fn contract_applet_scope_key() -> String {
-    let scope = arkret_wire::ScopeRef::Realm {
-        realm_id: arkret_wire::RealmId::new(contract_realm_id("applet-install"))
-            .expect("contract Applet Realm id"),
-    };
-    applet_effective_scope_key(&scope).expect("contract Applet effective scope key")
-}
-
-fn contract_ghost(
-    ghost_actor_id: &str,
-    protocol: &str,
-    instance_id: &str,
-    external_id: &str,
-    request_marker: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "ghost_actor_id": contract_applet_actor(ghost_actor_id),
-        "managed_actor_provision_ref": "ak:event:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH",
-        "principal_control_realm_id": "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH",
-        "external_ref": {
-            "protocol": protocol,
-            "instance_id": instance_id,
-            "external_id": external_id,
-        },
-        "display_name": null,
-        "request_digest": format!("sha256:{request_marker:0>64}"),
-        "profile_event_ref": "ak:event:AcP3yA5jKnY2j6Rjdt6KNHMLT9DtEnVBnszNpKxeX2gR",
-        "accountability_grant_ref": "ak:event:AbAWwWC3ekOt5NnmX-QlGu2wvU1BPQmDeeubWjrKwye0",
-        "authorization_ref": "ak:grant:AXBcp13trH3bPXvj0eHppCpGqJZWL9yqE3cf2Tl43vyk",
-        "created_at": "2026-08-25T00:00:00.000Z",
-    })
-}
-
-fn contract_applet_event_request(
-    stream: &mut ContractCommitStream,
-    event: CanonicalEventRecord,
-) -> EventCommitRequest {
-    EventCommitRequest {
-        authority_commit: stream.accept(&event),
-        self_producer_guard: None,
-        applet_producer_guard: None,
-        widget_token_gate: None,
-        forwarded_producer_evidence: None,
-        forwarded_agent_producer: None,
-        agent_deployment_ceiling:
-            arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
-        parent_membership_admission: None,
-        contact_projection: None,
-
-        event,
-        device_revocation_transition: None,
-        device_revocation_gate: None,
-        projections: Vec::new(),
-        idempotency: None,
-        outbox: Vec::new(),
-        realm_fanout_source: None,
-    }
-}
-
-/// One Applet authority Event group, ordered on its own commit stream.
-///
-/// A batch is all-or-nothing, so every group gets its own Realm: a group the
-/// adapter rolls back leaves that stream empty and the retry of the same batch
-/// replays the same chained positions, while two groups racing for one Applet
-/// record never contend for a stream position and therefore fail on the Applet
-/// compare-and-set the contract is actually asserting.
-async fn contract_applet_event_group(
-    authority: &dyn AuthorityCommitStore,
-    namespace: &str,
-    realm_seed: &str,
-    group: &str,
-    count: u64,
-) -> Vec<EventCommitRequest> {
-    let actor_id = format!("ak:did_core:web:{namespace}-{group}.example");
-    let now = database_timestamp_now();
-    let mut stream =
-        ContractCommitStream::new(&contract_realm_id(&format!("{realm_seed}:{group}")));
-    stream.install(authority).await;
-    let realm_id = stream.authority.realm_id.to_string();
-    let mut requests = Vec::new();
-    for sequence in 0..count {
-        let event = canonical_wire_event_record(
-            arkret_wire::EventKind::AppletRegistration.as_str(),
-            &actor_id,
-            &realm_id,
-            sequence,
-            now + chrono::Duration::milliseconds(sequence as i64),
-        );
-        requests.push(contract_applet_event_request(&mut stream, event));
-    }
-    requests
-}
-
-fn contract_applet_batch(
-    applet_id: &arkret_wire::AppletId,
-    events: Vec<EventCommitRequest>,
-    expected_record: Option<serde_json::Value>,
-    record: serde_json::Value,
-) -> EventBatchCommitRequest {
-    let identity = contract_applet_identity(applet_id);
-    let expected_identity = expected_record.as_ref().map(|_| identity.clone());
-    EventBatchCommitRequest {
-        events,
-        realm_organization_proof: None,
-        invite_claim_proof: None,
-        event_approvals: None,
-        franking_replay_nonce: None,
-        applet_record: Some(AppletRecordCommit {
-            applet_id: applet_id.clone(),
-            identity: AppletIdentityCommit {
-                target_station_id: arkret_wire::DidCoreId::new(
-                    "ak:did_core:webvh:z6mkcontractservice".to_owned(),
-                )
-                .expect("contract target Station id"),
-                expected_record: expected_identity,
-                record: identity,
-            },
-            expected_record,
-            record,
-        }),
-        applet_authoring_preview: None,
-        agent_membership_cascade: None,
-    }
-}
-
-fn contract_event_ids(batch: &EventBatchCommitRequest) -> Vec<String> {
-    batch
-        .events
-        .iter()
-        .map(|request| request.event.event_id.clone())
-        .collect()
+    arkret_wire::AppletId::new(format!("ak:applet:{}", uuid::Uuid::now_v7())).unwrap()
 }
 
 async fn assert_contract_event_group_visibility(
     store: &dyn EventStore,
-    event_ids: &[String],
+    ids: &[String],
     expected: bool,
 ) {
-    for event_id in event_ids {
+    for id in ids {
         assert_eq!(
             store
-                .contains(event_id)
+                .contains(id)
                 .await
                 .expect("read Applet authority Event"),
             expected,
-            "Applet authority Event group must be all-or-nothing: {event_id}"
+            "Applet authority Event group must be all-or-nothing: {id}"
         );
     }
 }
 
-async fn install_contract_applet(
+async fn contract_installation(
     stores: &AppletFormalCommitContractStores<'_>,
-    namespace: &str,
-    realm_id: &str,
-    applet_id: &arkret_wire::AppletId,
-    record: serde_json::Value,
-) {
+    unit: &AppletFormalCommitUnit,
+) -> serde_json::Value {
     stores
-        .unit_of_work
-        .commit_event_batch(contract_applet_batch(
-            applet_id,
-            contract_applet_event_group(stores.authority, namespace, realm_id, "install", 1).await,
-            None,
-            record,
-        ))
+        .applets
+        .get(
+            unit.input.package.applet_id.as_str(),
+            &applet_effective_scope_key(&unit.effective_scope).unwrap(),
+        )
         .await
-        .expect("install contract Applet record");
+        .unwrap()
+        .expect("accepted installation")
 }
 
 pub async fn assert_applet_formal_commit_transaction_contract(
     stores: AppletFormalCommitContractStores<'_>,
     namespace: &str,
 ) {
-    // The target key cannot retarget a signed Bot Account or reinterpret a
-    // service/principal scalar as an Account. Both adapters must roll back
-    // the complete Event group when the identity fails this boundary.
+    // Spec applet-integration §4b: a registration/grant fixed set is accepted
+    // only through the closed native authoring aggregate. An ordinary batch
+    // carrying exactly those signed Events must still reject with zero writes.
+    let id = contract_applet_id();
+    let install = stores
+        .factory
+        .prepare_install(&id, &format!("{namespace}:closed-entry"))
+        .await;
+    let events = match &install.input.request {
+        super::AppletAdmissionRequest::Install(body) => {
+            std::iter::once(&body.authoring_request_basis.registration_event)
+                .chain(&body.authoring_request_basis.capability_grant_events)
+                .cloned()
+                .collect::<Vec<_>>()
+        }
+        _ => panic!("factory must prepare the Service install branch"),
+    };
+    // The production guard precedes generic submission of registration Events.
+    // An ordinary batch must not be able to acquire the private verified tag.
+    let current = stores
+        .authority
+        .current_authority(events[0].scope_ref.realm_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let head = stores
+        .authority
+        .stream_head(&arkret_wire::CommitStreamRef::Realm {
+            realm_id: current.realm_id.clone(),
+        })
+        .await
+        .unwrap();
+    let mut batch = Vec::new();
+    for event in events {
+        let fact = stores
+            .authority
+            .prepare_human_signer_fact(&event, install.input.accepted_at)
+            .await
+            .unwrap()
+            .map(Into::into);
+        let (commit, _) = (install.author)(
+            &event,
+            &current,
+            head.as_ref(),
+            install.input.accepted_at,
+            fact.as_ref(),
+            None,
+        )
+        .unwrap();
+        batch.push(EventCommitRequest {
+            event: CanonicalEventRecord { event_id: event.event_id.to_string(), actor_id: event.actor_id.to_string(),
+                realm_id: Some(event.realm_id.to_string()), kind: event.kind.as_str().to_owned(),
+                schema_id: event.kind.descriptor().and_then(|descriptor| descriptor.payload_schema_ref).unwrap_or(arkret_wire::SchemaId::EVENT_PAYLOAD_V1).to_owned(),
+                digest_suite: arkret_canonical::DigestSuite::Sha256,
+                canonical_digest: event.event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256).unwrap(),
+                canonical_bytes: arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap(),
+                envelope: serde_json::to_value(&event).unwrap(), received_at: install.input.accepted_at },
+            authority_commit: AuthorityCommitTransaction { expected_authority: current.clone(), event: event.clone(), commit,
+                producer_signer_fact: fact, mls_state: None, welcomes: vec![], recipient_queue_capacity: 0 },
+            self_producer_guard: None, applet_producer_guard: None, widget_token_gate: None,
+            forwarded_producer_evidence: None, forwarded_agent_producer: None,
+            agent_deployment_ceiling: arkret_models_collaboration::governance::agent_participation::ParticipationBits::ALL,
+            parent_membership_admission: None, contact_projection: None, device_revocation_transition: None,
+            device_revocation_gate: None, projections: vec![], idempotency: None, outbox: vec![], realm_fanout_source: None,
+        });
+    }
+    let error = stores
+        .unit_of_work
+        .commit_event_batch(EventBatchCommitRequest {
+            events: batch,
+            realm_organization_proof: None,
+            invite_claim_proof: None,
+            event_approvals: None,
+            franking_replay_nonce: None,
+            applet_record: None,
+            applet_authoring_preview: None,
+            agent_membership_cascade: None,
+        })
+        .await
+        .expect_err("ordinary batch cannot submit the Applet aggregate");
+    assert!(
+        matches!(error, PersistenceError::Conflict(ref detail) if detail == "applet_authoring_unit_required"),
+        "{error:?}"
+    );
+    assert_contract_event_group_visibility(stores.events, &install.event_ids, false).await;
+    install
+        .commit(stores.applets)
+        .await
+        .expect("closed Service install must succeed after the rejected ordinary batch");
+    assert_contract_event_group_visibility(stores.events, &install.event_ids, true).await;
+    assert_eq!(
+        contract_installation(&stores, &install).await["ghosts"],
+        serde_json::json!([])
+    );
+
+    // A structurally wrong managed Account in finalization must roll back the
+    // already authored fixed set as well as identity, installation and claims.
     for case in ["foreign-station", "service-actor", "scalar-principal"] {
-        let applet_id = contract_applet_id();
-        let actor = contract_applet_actor("ak:did_core:web:bot-invalid-identity.example");
-        let invalid_actor = match case {
+        let invalid_id = contract_applet_id();
+        let mut unit = stores
+            .factory
+            .prepare_install(&invalid_id, &format!("{namespace}:{case}"))
+            .await;
+        let principal = DidCoreId::new("ak:did_core:web:invalid-bot.example").unwrap();
+        let station = arkret_wire::project_did_to_core_id(
+            &Did::new(
+                unit.input
+                    .station_verification_method
+                    .as_str()
+                    .split('#')
+                    .next()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let actor = match case {
             "foreign-station" => {
                 serde_json::json!(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    actor.signing_principal_id().clone(),
-                    arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap(),
-                ),))
+                    principal.clone(),
+                    DidCoreId::new("ak:did_core:web:foreign.example").unwrap()
+                )))
             }
-            "service-actor" => serde_json::json!(arkret_wire::ActorId::service(
-                actor.signing_principal_id().clone(),
-            )),
-            _ => serde_json::json!(actor.signing_principal_id()),
+            "service-actor" => serde_json::json!(arkret_wire::ActorId::service(principal.clone())),
+            _ => serde_json::json!(principal),
         };
-        let mut batch = contract_applet_batch(
-            &applet_id,
-            contract_applet_event_group(
-                stores.authority,
-                namespace,
-                &contract_realm_id(&format!("{namespace}:{case}")),
-                case,
-                1,
-            )
-            .await,
-            None,
-            contract_applet_record(&applet_id, "1", Vec::new()),
-        );
-        batch.applet_record.as_mut().unwrap().record["bots"] =
-            serde_json::json!([{"bot_actor_id": invalid_actor}]);
-        let event_ids = contract_event_ids(&batch);
-        stores
-            .unit_of_work
-            .commit_event_batch(batch)
+        let finalize = unit.finalize.clone();
+        unit.finalize = std::sync::Arc::new(move |refs, identity, installation| {
+            let mut result = finalize(refs, identity, installation)?;
+            result.applet_record.record["bots"] = serde_json::json!([{"bot_actor_id": actor}]);
+            Ok(result)
+        });
+        let error = unit
+            .commit(stores.applets)
             .await
-            .expect_err("invalid Bot Account must reject the complete transaction");
-        assert_contract_event_group_visibility(stores.events, &event_ids, false).await;
+            .expect_err("invalid Bot Account must reject complete transaction");
+        match case {
+            "foreign-station" => assert!(
+                matches!(error, PersistenceError::SchemaViolation(ref detail) if detail == "managed Account belongs to another Station"),
+                "{error:?}"
+            ),
+            "service-actor" => assert!(
+                matches!(error, PersistenceError::Conflict(ref detail) if detail == "schema_violation: durable Applet bot_actor_id must identify an Account"),
+                "{error:?}"
+            ),
+            _ => assert!(
+                matches!(error, PersistenceError::Conflict(ref detail) if detail.starts_with("schema_violation: durable Applet bot_actor_id is not a full ActorId:")),
+                "{error:?}"
+            ),
+        }
+        assert_contract_event_group_visibility(stores.events, &unit.event_ids, false).await;
         assert!(
             stores
                 .applets
-                .get(applet_id.as_str(), &contract_applet_scope_key())
+                .get(
+                    invalid_id.as_str(),
+                    &applet_effective_scope_key(&unit.effective_scope).unwrap()
+                )
                 .await
-                .expect("read rejected Applet installation")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            stores
+                .applets
+                .get_identity(invalid_id.as_str(), station.as_str())
+                .await
+                .unwrap()
                 .is_none()
         );
     }
 
-    // A stale full-record CAS must roll back all four authority Events and the
-    // managed authority claim. Reusing the same group on a fresh exact record
-    // then proves that no hidden row from the failed transaction survived.
-    let stale_applet_id = contract_applet_id();
-    let stale_realm_id = contract_realm_id(&format!("{namespace}:stale"));
-    let stale_base = contract_applet_record(&stale_applet_id, "1", Vec::new());
-    install_contract_applet(
-        &stores,
-        namespace,
-        &stale_realm_id,
-        &stale_applet_id,
-        stale_base.clone(),
-    )
-    .await;
-    let committed_actor_id = format!("ak:did_core:web:{namespace}-committed.example");
-    let committed_ghost =
-        contract_ghost(&committed_actor_id, "bridge", "stale-cas", "committed", "2");
-    let committed_record =
-        contract_applet_record(&stale_applet_id, "1", vec![committed_ghost.clone()]);
-    stores
-        .unit_of_work
-        .commit_event_batch(contract_applet_batch(
-            &stale_applet_id,
-            contract_applet_event_group(
-                stores.authority,
-                namespace,
-                &stale_realm_id,
-                "stale-winner",
-                4,
-            )
-            .await,
-            Some(stale_base.clone()),
-            committed_record.clone(),
-        ))
+    // Independent Ghost subjects retain their own signed current previews.
+    // Their record CAS must still reject a stale writer after all four Events
+    // were authored, without any prefix or hidden managed claim surviving.
+    let base = contract_installation(&stores, &install).await;
+    let winner = stores
+        .factory
+        .prepare_ghost(&id, &install.effective_scope, "committed", "stale-winner")
+        .await;
+    let mut stale = stores
+        .factory
+        .prepare_ghost(&id, &install.effective_scope, "stale", "stale-loser")
+        .await;
+    winner.commit(stores.applets).await.unwrap();
+    assert_eq!(stale.input.expected_installation, Some(base));
+    let accepted = contract_installation(&stores, &winner).await;
+    assert_eq!(
+        stale
+            .commit(stores.applets)
+            .await
+            .expect_err("stale exact record must fail")
+            .conflict_code(),
+        Some(super::ConflictCode::CasConflict)
+    );
+    assert_eq!(contract_installation(&stores, &winner).await, accepted);
+    assert_contract_event_group_visibility(stores.events, &stale.event_ids, false).await;
+    stale.refresh_expected(stores.applets).await;
+    stale
+        .commit(stores.applets)
         .await
-        .expect("commit the current Applet record mutation");
-    let stale_actor_id = format!("ak:did_core:web:{namespace}-stale.example");
-    let stale_ghost = contract_ghost(&stale_actor_id, "bridge", "stale-cas", "stale", "3");
-    let stale_record = contract_applet_record(&stale_applet_id, "1", vec![stale_ghost.clone()]);
-    let stale_batch = contract_applet_batch(
-        &stale_applet_id,
-        contract_applet_event_group(
-            stores.authority,
-            namespace,
-            &stale_realm_id,
-            "stale-loser",
-            4,
+        .expect("same frozen four Events must succeed against actual winner");
+    assert_contract_event_group_visibility(stores.events, &stale.event_ids, true).await;
+    let merged = contract_installation(&stores, &stale).await;
+    assert_eq!(merged["ghosts"].as_array().unwrap().len(), 2);
+    assert_eq!(merged["ghosts"][0], accepted["ghosts"][0]);
+
+    // Spec §9.1: the same external tuple has one exact current preview subject,
+    // not two independently valid requests. Issuing a replacement invalidates
+    // the old request; accepting it consumes that preview. Preserve one winner,
+    // zero loser prefix and exact idempotent replay instead of mislabeling the
+    // mandated preview rejection as a record CasConflict.
+    let same_id = contract_applet_id();
+    let same_install = stores
+        .factory
+        .prepare_install(&same_id, &format!("{namespace}:same"))
+        .await;
+    same_install.commit(stores.applets).await.unwrap();
+    let left = stores
+        .factory
+        .prepare_ghost(
+            &same_id,
+            &same_install.effective_scope,
+            "same-user",
+            "same-left",
         )
-        .await,
-        Some(stale_base),
-        stale_record,
+        .await;
+    let right = stores
+        .factory
+        .prepare_ghost(
+            &same_id,
+            &same_install.effective_scope,
+            "same-user",
+            "same-right",
+        )
+        .await;
+    assert_eq!(
+        left.input.preview_subject_key,
+        right.input.preview_subject_key
     );
-    let stale_event_ids = contract_event_ids(&stale_batch);
-    let stale_error = stores
-        .unit_of_work
-        .commit_event_batch(stale_batch.clone())
+    assert_ne!(
+        left.input.request_digest, right.input.request_digest,
+        "a changed display basis must issue a real replacement preview"
+    );
+    let (l, r) = tokio::join!(left.commit(stores.applets), right.commit(stores.applets));
+    assert!(r.is_ok(), "the actual current preview must win: {r:?}");
+    let error = l.expect_err("replaced preview must lose without a prefix");
+    assert!(
+        matches!(error, PersistenceError::Conflict(ref detail) if detail == "failed_precondition: issued preview was replaced or expired" || detail == "failed_precondition: issued preview missing"),
+        "{error:?}"
+    );
+    assert_contract_event_group_visibility(stores.events, &left.event_ids, false).await;
+    assert_contract_event_group_visibility(stores.events, &right.event_ids, true).await;
+    let same_record = contract_installation(&stores, &right).await;
+    assert_eq!(same_record["ghosts"].as_array().unwrap().len(), 1);
+    let replay = right.commit(stores.applets).await.unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.committed_event_refs, r.unwrap().committed_event_refs);
+    assert_eq!(contract_installation(&stores, &right).await, same_record);
+    let reuse = stores
+        .factory
+        .prepare_ghost(
+            &same_id,
+            &same_install.effective_scope,
+            "same-user",
+            "unused-reuse-actor",
+        )
+        .await;
+    assert_eq!(
+        reuse.event_ids, right.event_ids,
+        "fresh reuse preview must name original accepted lineage"
+    );
+    let reused = reuse
+        .commit(stores.applets)
         .await
-        .expect_err("stale Applet record CAS must fail");
+        .expect("fresh exact reuse preview must succeed");
+    assert_eq!(reused.committed_event_refs, replay.committed_event_refs);
     assert_eq!(
-        stale_error.conflict_code(),
-        Some(super::ConflictCode::CasConflict)
-    );
-    assert_eq!(
-        stores
-            .applets
-            .get(stale_applet_id.as_str(), &contract_applet_scope_key())
-            .await
-            .expect("read current Applet record"),
-        Some(committed_record.clone())
-    );
-    assert_contract_event_group_visibility(stores.events, &stale_event_ids, false).await;
-    let merged_record =
-        contract_applet_record(&stale_applet_id, "1", vec![committed_ghost, stale_ghost]);
-    let mut fresh_retry = stale_batch;
-    fresh_retry.applet_record = Some(AppletRecordCommit {
-        applet_id: stale_applet_id.clone(),
-        identity: AppletIdentityCommit {
-            target_station_id: arkret_wire::DidCoreId::new(
-                "ak:did_core:webvh:z6mkcontractservice".to_owned(),
-            )
-            .expect("contract target Station id"),
-            expected_record: Some(contract_applet_identity(&stale_applet_id)),
-            record: contract_applet_identity(&stale_applet_id),
-        },
-        expected_record: Some(committed_record),
-        record: merged_record.clone(),
-    });
-    stores
-        .unit_of_work
-        .commit_event_batch(fresh_retry)
-        .await
-        .expect("fresh exact Applet record retry must commit");
-    assert_contract_event_group_visibility(stores.events, &stale_event_ids, true).await;
-    assert_eq!(
-        stores
-            .applets
-            .get(stale_applet_id.as_str(), &contract_applet_scope_key())
-            .await
-            .expect("read merged Applet record"),
-        Some(merged_record)
+        contract_installation(&stores, &reuse).await["ghosts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
 
-    // Two batches for one external tuple race from the same exact record. One
-    // whole four-Event authority group wins and the other leaves no prefix.
-    let same_applet_id = contract_applet_id();
-    let same_realm_id = contract_realm_id(&format!("{namespace}:same-external"));
-    let same_base = contract_applet_record(&same_applet_id, "4", Vec::new());
-    install_contract_applet(
-        &stores,
-        namespace,
-        &same_realm_id,
-        &same_applet_id,
-        same_base.clone(),
-    )
-    .await;
-    let same_actor_id = format!("ak:did_core:web:{namespace}-same.example");
-    let same_ghost_left = contract_ghost(
-        &same_actor_id,
-        "bridge",
-        "shared-instance",
-        "shared-user",
-        "5",
-    );
-    let same_ghost_right = contract_ghost(
-        &same_actor_id,
-        "bridge",
-        "shared-instance",
-        "shared-user",
-        "6",
-    );
-    let same_left_record = contract_applet_record(&same_applet_id, "4", vec![same_ghost_left]);
-    let same_right_record = contract_applet_record(&same_applet_id, "4", vec![same_ghost_right]);
-    let same_left = contract_applet_batch(
-        &same_applet_id,
-        contract_applet_event_group(stores.authority, namespace, &same_realm_id, "same-left", 4)
-            .await,
-        Some(same_base.clone()),
-        same_left_record.clone(),
-    );
-    let same_right = contract_applet_batch(
-        &same_applet_id,
-        contract_applet_event_group(stores.authority, namespace, &same_realm_id, "same-right", 4)
-            .await,
-        Some(same_base),
-        same_right_record.clone(),
-    );
-    let same_left_ids = contract_event_ids(&same_left);
-    let same_right_ids = contract_event_ids(&same_right);
-    let (same_left_result, same_right_result) = tokio::join!(
-        stores.unit_of_work.commit_event_batch(same_left),
-        stores.unit_of_work.commit_event_batch(same_right)
-    );
-    assert_eq!(
-        usize::from(same_left_result.is_ok()) + usize::from(same_right_result.is_ok()),
-        1,
-        "one external tuple must produce one durable authority group"
-    );
-    let same_loser_error = if same_left_result.is_ok() {
-        same_right_result
-            .as_ref()
-            .expect_err("right same-tuple batch must lose the exact CAS")
-    } else {
-        same_left_result
-            .as_ref()
-            .expect_err("left same-tuple batch must lose the exact CAS")
-    };
-    assert_eq!(
-        same_loser_error.conflict_code(),
-        Some(super::ConflictCode::CasConflict)
-    );
-    let (same_winner_record, same_winner_ids, same_loser_ids) = if same_left_result.is_ok() {
-        (same_left_record, same_left_ids, same_right_ids)
-    } else {
-        (same_right_record, same_right_ids, same_left_ids)
-    };
-    assert_eq!(
-        stores
-            .applets
-            .get(same_applet_id.as_str(), &contract_applet_scope_key())
-            .await
-            .expect("read same-tuple Applet record"),
-        Some(same_winner_record)
-    );
-    assert_contract_event_group_visibility(stores.events, &same_winner_ids, true).await;
-    assert_contract_event_group_visibility(stores.events, &same_loser_ids, false).await;
-
-    // Different Ghosts may race from the same observed record, but the losing
-    // stale transaction cannot overwrite the committed registration. Retrying
-    // against the exact winner then appends the second Ghost without loss.
-    let different_applet_id = contract_applet_id();
-    let different_realm_id = contract_realm_id(&format!("{namespace}:different-ghosts"));
-    let different_base = contract_applet_record(&different_applet_id, "7", Vec::new());
-    install_contract_applet(
-        &stores,
-        namespace,
-        &different_realm_id,
-        &different_applet_id,
-        different_base.clone(),
-    )
-    .await;
-    let different_left_actor_id = format!("ak:did_core:web:{namespace}-left.example");
-    let different_right_actor_id = format!("ak:did_core:web:{namespace}-right.example");
-    let different_left_ghost = contract_ghost(
-        &different_left_actor_id,
-        "bridge",
-        "different-instance",
-        "left-user",
-        "8",
-    );
-    let different_right_ghost = contract_ghost(
-        &different_right_actor_id,
-        "bridge",
-        "different-instance",
-        "right-user",
-        "9",
-    );
-    let different_left_record = contract_applet_record(
-        &different_applet_id,
-        "7",
-        vec![different_left_ghost.clone()],
-    );
-    let different_right_record = contract_applet_record(
-        &different_applet_id,
-        "7",
-        vec![different_right_ghost.clone()],
-    );
-    let different_left = contract_applet_batch(
-        &different_applet_id,
-        contract_applet_event_group(
-            stores.authority,
-            namespace,
-            &different_realm_id,
+    let different_id = contract_applet_id();
+    let different_install = stores
+        .factory
+        .prepare_install(&different_id, &format!("{namespace}:different"))
+        .await;
+    different_install.commit(stores.applets).await.unwrap();
+    let left = stores
+        .factory
+        .prepare_ghost(
+            &different_id,
+            &different_install.effective_scope,
+            "left-user",
             "different-left",
-            4,
         )
-        .await,
-        Some(different_base.clone()),
-        different_left_record.clone(),
-    );
-    let different_right = contract_applet_batch(
-        &different_applet_id,
-        contract_applet_event_group(
-            stores.authority,
-            namespace,
-            &different_realm_id,
+        .await;
+    let right = stores
+        .factory
+        .prepare_ghost(
+            &different_id,
+            &different_install.effective_scope,
+            "right-user",
             "different-right",
-            4,
         )
-        .await,
-        Some(different_base),
-        different_right_record.clone(),
-    );
-    let different_left_ids = contract_event_ids(&different_left);
-    let different_right_ids = contract_event_ids(&different_right);
-    let (different_left_result, different_right_result) = tokio::join!(
-        stores
-            .unit_of_work
-            .commit_event_batch(different_left.clone()),
-        stores
-            .unit_of_work
-            .commit_event_batch(different_right.clone())
-    );
+        .await;
+    let (l, r) = tokio::join!(left.commit(stores.applets), right.commit(stores.applets));
     assert_eq!(
-        usize::from(different_left_result.is_ok()) + usize::from(different_right_result.is_ok()),
+        usize::from(l.is_ok()) + usize::from(r.is_ok()),
         1,
-        "one exact Applet record CAS must win"
+        "one exact CAS must win"
     );
-    let different_loser_error = if different_left_result.is_ok() {
-        different_right_result
-            .as_ref()
-            .expect_err("right Ghost batch must lose the exact CAS")
+    let (winner, mut loser, loser_error) = if l.is_ok() {
+        (left, right, r.unwrap_err())
     } else {
-        different_left_result
-            .as_ref()
-            .expect_err("left Ghost batch must lose the exact CAS")
+        (right, left, l.unwrap_err())
     };
     assert_eq!(
-        different_loser_error.conflict_code(),
+        loser_error.conflict_code(),
         Some(super::ConflictCode::CasConflict)
     );
-    let (winner_record, winner_ghost, winner_ids, mut loser_batch, loser_ghost, loser_ids) =
-        if different_left_result.is_ok() {
-            (
-                different_left_record,
-                different_left_ghost,
-                different_left_ids,
-                different_right,
-                different_right_ghost,
-                different_right_ids,
-            )
-        } else {
-            (
-                different_right_record,
-                different_right_ghost,
-                different_right_ids,
-                different_left,
-                different_left_ghost,
-                different_left_ids,
-            )
-        };
+    assert_contract_event_group_visibility(stores.events, &winner.event_ids, true).await;
+    assert_contract_event_group_visibility(stores.events, &loser.event_ids, false).await;
+    let accepted = contract_installation(&stores, &winner).await;
+    loser.refresh_expected(stores.applets).await;
+    loser.commit(stores.applets).await.unwrap();
+    assert_contract_event_group_visibility(stores.events, &loser.event_ids, true).await;
+    let both = contract_installation(&stores, &loser).await;
+    assert_eq!(both["ghosts"].as_array().unwrap().len(), 2);
     assert_eq!(
-        stores
-            .applets
-            .get(different_applet_id.as_str(), &contract_applet_scope_key())
-            .await
-            .expect("read concurrent Ghost winner"),
-        Some(winner_record.clone()),
-        "the losing stale CAS must not erase the committed Ghost"
-    );
-    assert_contract_event_group_visibility(stores.events, &winner_ids, true).await;
-    assert_contract_event_group_visibility(stores.events, &loser_ids, false).await;
-    let both_record =
-        contract_applet_record(&different_applet_id, "7", vec![winner_ghost, loser_ghost]);
-    let loser_mutation = loser_batch
-        .applet_record
-        .as_mut()
-        .expect("losing batch carries Applet mutation");
-    loser_mutation.expected_record = Some(winner_record);
-    loser_mutation.record = both_record.clone();
-    stores
-        .unit_of_work
-        .commit_event_batch(loser_batch)
-        .await
-        .expect("different Ghost retry on exact winner must commit");
-    assert_contract_event_group_visibility(stores.events, &loser_ids, true).await;
-    assert_eq!(
-        stores
-            .applets
-            .get(different_applet_id.as_str(), &contract_applet_scope_key())
-            .await
-            .expect("read both concurrent Ghost registrations"),
-        Some(both_record)
+        both["ghosts"][0], accepted["ghosts"][0],
+        "retry must not erase the winning Ghost"
     );
 
-    // Two first installs for distinct scopes can both observe no identity,
-    // but only one insert-only managed identity winner may commit. The losing
-    // aggregate leaves no Event prefix and can then reuse the exact durable
-    // winner without manufacturing a second identity.
-    let winner_applet_id = contract_applet_id();
-    let winner_left_scope = arkret_wire::ScopeRef::Realm {
-        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:winner-left")))
-            .expect("contract first-winner left Realm id"),
-    };
-    let winner_right_scope = arkret_wire::ScopeRef::Realm {
-        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!(
-            "{namespace}:winner-right"
-        )))
-        .expect("contract first-winner right Realm id"),
-    };
-    let winner_left_key = applet_effective_scope_key(&winner_left_scope)
-        .expect("contract first-winner left scope key");
-    let winner_right_key = applet_effective_scope_key(&winner_right_scope)
-        .expect("contract first-winner right scope key");
-    let winner_left_record =
-        contract_applet_record_for_scope(&winner_applet_id, "12", winner_left_scope, Vec::new());
-    let winner_right_record =
-        contract_applet_record_for_scope(&winner_applet_id, "13", winner_right_scope, Vec::new());
-    let winner_left = contract_applet_batch(
-        &winner_applet_id,
-        contract_applet_event_group(
-            stores.authority,
-            namespace,
-            &contract_realm_id(&format!("{namespace}:winner-left-event")),
-            "winner-left",
-            1,
-        )
-        .await,
-        None,
-        winner_left_record.clone(),
-    );
-    let winner_right = contract_applet_batch(
-        &winner_applet_id,
-        contract_applet_event_group(
-            stores.authority,
-            namespace,
-            &contract_realm_id(&format!("{namespace}:winner-right-event")),
-            "winner-right",
-            1,
-        )
-        .await,
-        None,
-        winner_right_record.clone(),
-    );
-    let winner_left_event_ids = contract_event_ids(&winner_left);
-    let winner_right_event_ids = contract_event_ids(&winner_right);
-    let (winner_left_result, winner_right_result) = tokio::join!(
-        stores.unit_of_work.commit_event_batch(winner_left.clone()),
-        stores.unit_of_work.commit_event_batch(winner_right.clone())
-    );
-    assert_eq!(
-        usize::from(winner_left_result.is_ok()) + usize::from(winner_right_result.is_ok()),
-        1,
-        "concurrent first installs must persist one identity winner"
-    );
-    let (mut winner_retry, winner_loser_event_ids) = if winner_left_result.is_ok() {
-        assert_eq!(
-            winner_right_result
-                .as_ref()
-                .expect_err("right first install must lose")
-                .conflict_code(),
-            Some(super::ConflictCode::DuplicateConflict)
-        );
-        (winner_right, winner_right_event_ids)
+    // Distinct scopes share a single insert-only identity winner. The losing
+    // first install rolls back its registration/grants and retries with the
+    // accepted identity bytes, never replacing the immutable original winner.
+    let scopes_id = contract_applet_id();
+    let left = stores
+        .factory
+        .prepare_install(&scopes_id, &format!("{namespace}:scope-left"))
+        .await;
+    let right = stores
+        .factory
+        .prepare_install(&scopes_id, &format!("{namespace}:scope-right"))
+        .await;
+    assert!(left.input.expected_identity.is_none() && right.input.expected_identity.is_none());
+    assert!(matches!(
+        left.effective_scope,
+        arkret_wire::ScopeRef::Realm { .. }
+    ));
+    assert!(matches!(
+        right.effective_scope,
+        arkret_wire::ScopeRef::Circle { .. }
+    ));
+    let (l, r) = tokio::join!(left.commit(stores.applets), right.commit(stores.applets));
+    assert_eq!(usize::from(l.is_ok()) + usize::from(r.is_ok()), 1);
+    let (winner, mut loser, error) = if l.is_ok() {
+        (left, right, r.unwrap_err())
     } else {
-        assert_eq!(
-            winner_left_result
-                .as_ref()
-                .expect_err("left first install must lose")
-                .conflict_code(),
-            Some(super::ConflictCode::DuplicateConflict)
-        );
-        (winner_left, winner_left_event_ids)
+        (right, left, l.unwrap_err())
     };
-    assert_contract_event_group_visibility(stores.events, &winner_loser_event_ids, false).await;
-    winner_retry
-        .applet_record
-        .as_mut()
-        .expect("first-winner retry carries Applet mutation")
-        .identity
-        .expected_record = Some(contract_applet_identity(&winner_applet_id));
-    stores
-        .unit_of_work
-        .commit_event_batch(winner_retry)
-        .await
-        .expect("losing scope may reuse the exact accepted identity winner");
-    assert_contract_event_group_visibility(stores.events, &winner_loser_event_ids, true).await;
-    assert!(
-        stores
-            .applets
-            .get(winner_applet_id.as_str(), &winner_left_key)
-            .await
-            .expect("read first-winner left installation")
-            .is_some()
-    );
-    assert!(
-        stores
-            .applets
-            .get(winner_applet_id.as_str(), &winner_right_key)
-            .await
-            .expect("read first-winner right installation")
-            .is_some()
-    );
-    let accepted_identity = contract_applet_identity(&winner_applet_id);
     assert_eq!(
-        stores
-            .applets
-            .get_identity(
-                winner_applet_id.as_str(),
-                "ak:did_core:webvh:z6mkcontractservice"
-            )
-            .await
-            .expect("read accepted first-winner identity"),
-        Some(accepted_identity.clone())
+        error.conflict_code(),
+        Some(super::ConflictCode::DuplicateConflict)
     );
-    let conflicting_scope = arkret_wire::ScopeRef::Realm {
-        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!(
-            "{namespace}:winner-conflict"
-        )))
-        .expect("contract conflicting winner Realm id"),
-    };
-    let conflicting_scope_key = applet_effective_scope_key(&conflicting_scope)
-        .expect("contract conflicting winner scope key");
-    let mut conflicting_winner = contract_applet_batch(
-        &winner_applet_id,
-        contract_applet_event_group(
-            stores.authority,
-            namespace,
-            &contract_realm_id(&format!("{namespace}:winner-conflict-event")),
-            "winner-conflict",
-            1,
-        )
-        .await,
-        None,
-        contract_applet_record_for_scope(&winner_applet_id, "14", conflicting_scope, Vec::new()),
-    );
-    let conflicting_identity = serde_json::json!({
-        "applet_id": winner_applet_id,
-        "target_station_id": "ak:did_core:webvh:z6mkcontractservice",
-        "service_id": "ak:did_core:web:different-winner.example"
+    assert_contract_event_group_visibility(stores.events, &winner.event_ids, true).await;
+    assert_contract_event_group_visibility(stores.events, &loser.event_ids, false).await;
+    loser.refresh_expected(stores.applets).await;
+    let identity = loser.input.expected_identity.clone().unwrap();
+    loser.commit(stores.applets).await.unwrap();
+    assert_contract_event_group_visibility(stores.events, &loser.event_ids, true).await;
+    let mut conflicting = stores
+        .factory
+        .prepare_install(&scopes_id, &format!("{namespace}:scope-conflict"))
+        .await;
+    let finalize = conflicting.finalize.clone();
+    conflicting.finalize = std::sync::Arc::new(move |refs, identity, installation| {
+        let mut result = finalize(refs, identity, installation)?;
+        result.applet_record.identity.record["registry_id"] =
+            serde_json::json!("ak:did_core:web:other-registry.example");
+        Ok(result)
     });
-    let conflicting_mutation = conflicting_winner
-        .applet_record
-        .as_mut()
-        .expect("conflicting winner batch carries Applet mutation");
-    conflicting_mutation.identity.expected_record = Some(accepted_identity.clone());
-    conflicting_mutation.identity.record = conflicting_identity;
     assert_eq!(
-        stores
-            .unit_of_work
-            .commit_event_batch(conflicting_winner)
+        conflicting
+            .commit(stores.applets)
             .await
-            .expect_err("reuse with different identity bytes must fail")
+            .expect_err("different identity bytes cannot replace the accepted winner")
             .conflict_code(),
         Some(super::ConflictCode::DuplicateConflict)
     );
+    assert_contract_event_group_visibility(stores.events, &conflicting.event_ids, false).await;
     assert!(
         stores
             .applets
-            .get(winner_applet_id.as_str(), &conflicting_scope_key)
+            .get(
+                scopes_id.as_str(),
+                &applet_effective_scope_key(&conflicting.effective_scope).unwrap()
+            )
             .await
-            .expect("read rejected conflicting winner installation")
+            .unwrap()
             .is_none()
     );
     assert_eq!(
         stores
             .applets
             .get_identity(
-                winner_applet_id.as_str(),
-                "ak:did_core:webvh:z6mkcontractservice"
+                scopes_id.as_str(),
+                identity["target_station_id"].as_str().unwrap()
             )
             .await
-            .expect("re-read accepted identity after conflict"),
-        Some(accepted_identity)
+            .unwrap(),
+        Some(identity.clone()),
+        "rejected identity replacement must preserve the whole immutable winner"
     );
 
-    // The identity winner is independent of installations. Concurrently
-    // revoking the last two exact scopes must therefore serialize on that
-    // winner and persist exactly one global fence; neither adapter may leave
-    // the identity unfenced through a write-skew.
-    let fence_applet_id = contract_applet_id();
-    let left_scope = arkret_wire::ScopeRef::Realm {
-        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:fence-left")))
-            .expect("contract left fence Realm id"),
-    };
-    let right_scope = arkret_wire::ScopeRef::Circle {
-        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:fence-right")))
-            .expect("contract right fence Realm id"),
-        circle_id: arkret_wire::CircleId::new(
-            "ak:circle:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
-        )
-        .expect("contract right fence Circle id"),
-    };
-    let left_scope_key =
-        applet_effective_scope_key(&left_scope).expect("contract left Applet effective scope key");
-    let right_scope_key = applet_effective_scope_key(&right_scope)
-        .expect("contract right Applet effective scope key");
-    let left_record =
-        contract_applet_record_for_scope(&fence_applet_id, "10", left_scope, Vec::new());
-    let right_record =
-        contract_applet_record_for_scope(&fence_applet_id, "11", right_scope, Vec::new());
-    install_contract_applet(
-        &stores,
-        namespace,
-        &contract_realm_id(&format!("{namespace}:fence-left-event")),
-        &fence_applet_id,
-        left_record.clone(),
-    )
-    .await;
-    let mut right_install = contract_applet_batch(
-        &fence_applet_id,
-        contract_applet_event_group(
-            stores.authority,
-            namespace,
-            &contract_realm_id(&format!("{namespace}:fence-right-event")),
-            "fence-right-install",
-            1,
-        )
-        .await,
-        None,
-        right_record.clone(),
-    );
-    right_install
-        .applet_record
-        .as_mut()
-        .expect("right install carries Applet mutation")
-        .identity
-        .expected_record = Some(contract_applet_identity(&fence_applet_id));
-    stores
-        .unit_of_work
-        .commit_event_batch(right_install)
-        .await
-        .expect("install second exact scope under the accepted identity winner");
-
-    let left_fenced_at = database_timestamp_now();
-    let right_fenced_at = left_fenced_at + chrono::Duration::milliseconds(1);
+    // The final two scopes serialize their terminal fence on that same identity.
+    let left_record = contract_installation(&stores, &winner).await;
+    let right_record = contract_installation(&stores, &loser).await;
+    let station = identity["target_station_id"].as_str().unwrap();
+    let at = database_timestamp_now();
+    let right_at = at + chrono::Duration::milliseconds(1);
     let mut left_replacement = left_record.clone();
-    left_replacement["status"] = serde_json::Value::String("revoked".to_owned());
-    left_replacement["revoked_at"] =
-        serde_json::Value::String(arkret_canonical::format_timestamp_canonical(left_fenced_at));
     let mut right_replacement = right_record.clone();
-    right_replacement["status"] = serde_json::Value::String("revoked".to_owned());
-    right_replacement["revoked_at"] = serde_json::Value::String(
-        arkret_canonical::format_timestamp_canonical(right_fenced_at),
-    );
-    let target_station_id = "ak:did_core:webvh:z6mkcontractservice";
-    let (left_outcome, right_outcome) = tokio::join!(
+    for (replacement, fenced_at) in [
+        (&mut left_replacement, at),
+        (&mut right_replacement, right_at),
+    ] {
+        replacement["status"] = serde_json::json!("revoked");
+        replacement["revoked_at"] =
+            serde_json::json!(arkret_canonical::format_timestamp_canonical(fenced_at));
+    }
+    let left_key = applet_effective_scope_key(&winner.effective_scope).unwrap();
+    let right_key = applet_effective_scope_key(&loser.effective_scope).unwrap();
+    let (l, r) = tokio::join!(
         stores.applets.fence_installation(
-            fence_applet_id.as_str(),
-            &left_scope_key,
-            target_station_id,
+            scopes_id.as_str(),
+            &left_key,
+            station,
             &left_record,
             left_replacement,
-            left_fenced_at,
+            at
         ),
         stores.applets.fence_installation(
-            fence_applet_id.as_str(),
-            &right_scope_key,
-            target_station_id,
+            scopes_id.as_str(),
+            &right_key,
+            station,
             &right_record,
             right_replacement,
-            right_fenced_at,
+            right_at
         )
     );
-    let left_outcome = left_outcome.expect("fence left exact Applet scope");
-    let right_outcome = right_outcome.expect("fence right exact Applet scope");
-    assert!(left_outcome.updated && right_outcome.updated);
+    let l = l.unwrap();
+    let r = r.unwrap();
+    assert!(l.updated && r.updated);
     assert_eq!(
-        usize::from(left_outcome.globally_fenced) + usize::from(right_outcome.globally_fenced),
+        usize::from(l.globally_fenced) + usize::from(r.globally_fenced),
         1,
-        "the last exact scope must persist exactly one global identity fence"
+        "exactly one final global fence"
     );
-    let fenced_identity = stores
-        .applets
-        .get_identity(fence_applet_id.as_str(), target_station_id)
-        .await
-        .expect("read globally fenced Applet identity")
-        .expect("Applet identity winner remains durable after fencing");
     assert!(
-        fenced_identity
-            .get("globally_fenced_at")
-            .and_then(serde_json::Value::as_str)
-            .is_some(),
-        "the identity winner must carry the terminal global fence"
+        stores
+            .applets
+            .get_identity(scopes_id.as_str(), station)
+            .await
+            .unwrap()
+            .unwrap()["globally_fenced_at"]
+            .as_str()
+            .is_some()
     );
 }
 

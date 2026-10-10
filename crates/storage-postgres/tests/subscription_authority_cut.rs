@@ -41,7 +41,7 @@ async fn accepted_append_preserves_digest_policy_change_rebinds_and_missing_sour
         head.commit.committed_at,
     );
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let message = ordinary_realm::source_request(&pool, message).await;
+    let message = Box::pin(ordinary_realm::source_request(&pool, message)).await;
     uow.commit_event(message.clone()).await.unwrap();
     let after = store
         .realm_stream_subscription_cut(realm, account, &ordinary_realm::station())
@@ -56,7 +56,7 @@ async fn accepted_append_preserves_digest_policy_change_rebinds_and_missing_sour
         serde_json::json!({"from":"all_history_for_current_members","to":"since_join"}),
         head.commit.committed_at,
     );
-    let policy = ordinary_realm::source_request(&pool, policy).await;
+    let policy = Box::pin(ordinary_realm::source_request(&pool, policy)).await;
     uow.commit_event(policy.clone()).await.unwrap();
     let rebound = store
         .realm_stream_subscription_cut(realm, account, &ordinary_realm::station())
@@ -71,7 +71,7 @@ async fn accepted_append_preserves_digest_policy_change_rebinds_and_missing_sour
         serde_json::json!({"from":"since_join","to":"all_history_for_current_members"}),
         head.commit.committed_at,
     );
-    let reversal = ordinary_realm::source_request(&pool, reversal).await;
+    let reversal = Box::pin(ordinary_realm::source_request(&pool, reversal)).await;
     assert!(uow.commit_event(reversal.clone()).await.is_err());
     use soland_storage::EventStore as _;
     assert!(
