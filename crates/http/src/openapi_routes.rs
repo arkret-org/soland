@@ -283,7 +283,9 @@ pub async fn wait_for_sync_token(
         .and_then(arkret_wire::ServiceOperationId::from_wire);
     if query_alias
         || values.len() != 1
-        || operation.and_then(|op| op.wait_for_carrier("http_json"))
+        || operation
+            .filter(|op| op.matches_http_request(req.method().as_str(), req.uri().path()))
+            .and_then(|op| op.wait_for_carrier("http_json"))
             != Some(("header", "X-Arkret-Wait-For"))
     {
         render_error(

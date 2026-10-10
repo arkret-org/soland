@@ -32,7 +32,7 @@ async fn wait_carriers_are_closed_and_duplicates_are_rejected() {
             Some(StatusCode::BAD_REQUEST)
         );
     }
-    let duplicate = TestClient::get("http://localhost/path")
+    let duplicate = TestClient::get("http://localhost/_arkret/self/account/subscribe")
         .add_header(
             "Arkret-Operation",
             "ak.self.account.stream.subscribe.v1",
@@ -49,7 +49,51 @@ async fn wait_carriers_are_closed_and_duplicates_are_rejected() {
         .send(router())
         .await;
     assert_eq!(unregistered.status_code, Some(StatusCode::BAD_REQUEST));
-    let mut malformed = TestClient::get("http://localhost/path")
+    for (method, operation) in [
+        ("GET", "ak.self.blob.resource.get.v1"),
+        ("HEAD", "ak.self.blob.resource.head.v1"),
+    ] {
+        let builder = if method == "GET" {
+            TestClient::get("http://localhost/_arkret/self/blob/get")
+        } else {
+            TestClient::head("http://localhost/_arkret/self/blob/get")
+        };
+        let response = builder
+            .add_header("Arkret-Operation", operation, true)
+            .add_header("X-Arkret-Wait-For", "ak:cursor:01", true)
+            .send(router())
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NO_CONTENT));
+    }
+    // A caller cannot grant a different binding HTTP wait support merely by
+    // declaring a registered Account operation on its request.
+    for path in [
+        "/_arkret/ws",
+        "/_soland/self/strands/unknown",
+        "/unregistered",
+    ] {
+        let response = TestClient::get(format!("http://localhost{path}"))
+            .add_header(
+                "Arkret-Operation",
+                "ak.self.account.stream.subscribe.v1",
+                true,
+            )
+            .add_header("X-Arkret-Wait-For", "ak:cursor:01", true)
+            .send(router())
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::BAD_REQUEST));
+    }
+    let wrong_method = TestClient::post("http://localhost/_arkret/self/account/subscribe")
+        .add_header(
+            "Arkret-Operation",
+            "ak.self.account.stream.subscribe.v1",
+            true,
+        )
+        .add_header("X-Arkret-Wait-For", "ak:cursor:01", true)
+        .send(router())
+        .await;
+    assert_eq!(wrong_method.status_code, Some(StatusCode::BAD_REQUEST));
+    let mut malformed = TestClient::get("http://localhost/_arkret/self/account/subscribe")
         .add_header(
             "Arkret-Operation",
             "ak.self.account.stream.subscribe.v1",
