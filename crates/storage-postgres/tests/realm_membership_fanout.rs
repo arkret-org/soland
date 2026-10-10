@@ -44,6 +44,14 @@ use soland_storage::{
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPool};
 
+// Construct large native fixture futures in a separate synchronous frame.
+// Returning the pinned allocation before polling avoids stacking construction
+// temporaries on the parent poll frame in unoptimized Windows test builds.
+#[inline(never)]
+fn heap_future<F: std::future::Future>(make: impl FnOnce() -> F) -> std::pin::Pin<Box<F>> {
+    Box::pin(make())
+}
+
 fn bootstrap_snapshot(
     realm: &arkret_wire::RealmId,
     generation: u64,
@@ -304,9 +312,13 @@ fn assert_owed(
 /// member who leaves stops authorizing the intent.
 #[tokio::test]
 async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
+    heap_future(remote_joined_target_set_and_fanout_basis_commit_with_the_event_case).await;
+}
+
+async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event_case() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let unit = admit(&pool, "fanout-public", "public").await;
+    let unit = heap_future(|| admit(&pool, "fanout-public", "public")).await;
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let last = unit.transactions.last().unwrap();
@@ -314,7 +326,7 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
     let bob = remote_member("fanout-bob");
 
     let alice_join = membership_request(last, alice.clone(), &alice, "join");
-    let alice_join = ordinary_realm::source_request(&pool, alice_join).await;
+    let alice_join = heap_future(|| ordinary_realm::source_request(&pool, alice_join)).await;
     let outcome = uow.commit_event(alice_join.clone()).await.unwrap();
     assert_eq!(outcome.outbox_inserted, 1);
     assert_eq!(
@@ -344,7 +356,7 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
         }}),
         at,
     ));
-    let strand = ordinary_realm::source_request(&pool, strand).await;
+    let strand = heap_future(|| ordinary_realm::source_request(&pool, strand)).await;
     uow.commit_event(strand.clone()).await.unwrap();
     assert_owed(
         &fanout_rows(&pool, &strand).await,
@@ -363,7 +375,7 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
         }),
         at,
     ));
-    let default = ordinary_realm::source_request(&pool, default).await;
+    let default = heap_future(|| ordinary_realm::source_request(&pool, default)).await;
     uow.commit_event(default.clone()).await.unwrap();
 
     // The member Station is not a private plaintext service of this Realm:
@@ -375,14 +387,14 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
         message_payload(&strand_id, "plaintext stays on the governance Station"),
         at,
     ));
-    let message = ordinary_realm::source_request(&pool, message).await;
+    let message = heap_future(|| ordinary_realm::source_request(&pool, message)).await;
     let outcome = uow.commit_event(message.clone()).await.unwrap();
     assert_eq!(outcome.outbox_inserted, 0);
     assert!(fanout_rows(&pool, &message).await.is_empty());
 
     // A second member on the same Station adds a basis to one intent.
     let bob_join = membership_request(&message.authority_commit, bob.clone(), &bob, "join");
-    let bob_join = ordinary_realm::source_request(&pool, bob_join).await;
+    let bob_join = heap_future(|| ordinary_realm::source_request(&pool, bob_join)).await;
     uow.commit_event(bob_join.clone()).await.unwrap();
     let bob_ref = bob_join.authority_commit.event.event_id.clone();
     let mut expected = vec![(&alice, &alice_ref), (&bob, &bob_ref)];
@@ -394,7 +406,7 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
     // as her basis (`federation.md` section 4.1.1).
     let alice_leave =
         membership_request(&bob_join.authority_commit, alice.clone(), &alice, "leave");
-    let alice_leave = ordinary_realm::source_request(&pool, alice_leave).await;
+    let alice_leave = heap_future(|| ordinary_realm::source_request(&pool, alice_leave)).await;
     uow.commit_event(alice_leave.clone()).await.unwrap();
     assert_eq!(
         member_state(&pool, &realm_id, &alice).await.as_deref(),
@@ -410,7 +422,7 @@ async fn remote_joined_target_set_and_fanout_basis_commit_with_the_event() {
     // Bob leaves: nobody on the member Station stays joined, but Bob's own
     // leave is still owed to it as the last Commit it holds for Bob.
     let bob_leave = membership_request(&alice_leave.authority_commit, bob.clone(), &bob, "leave");
-    let bob_leave = ordinary_realm::source_request(&pool, bob_leave).await;
+    let bob_leave = heap_future(|| ordinary_realm::source_request(&pool, bob_leave)).await;
     let outcome = uow.commit_event(bob_leave.clone()).await.unwrap();
     assert_eq!(outcome.outbox_inserted, 1);
     let bob_leave_ref = bob_leave.authority_commit.event.event_id.clone();
@@ -458,80 +470,102 @@ async fn assert_refused(
 /// and every refusal writes nothing.
 #[tokio::test]
 async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
+    heap_future(member_state_join_leave_and_kick_follow_join_rule_and_capability_case).await;
+}
+
+async fn member_state_join_leave_and_kick_follow_join_rule_and_capability_case() {
+    // Accepted PCRs and devices belong to this database's one hosted Station;
+    // the FSM and capability guards depend on exact Accounts, not remote routing.
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let alice = accepted_pcr_account::accepted_pcr_account(
-        &pool,
-        device_authorization_history::did_web_station(&member_station()),
-    )
+    let alice = heap_future(|| {
+        accepted_pcr_account::accepted_pcr_account(
+            &pool,
+            device_authorization_history::did_web_station(&ordinary_realm::station()),
+        )
+    })
     .await;
-    let bob = accepted_pcr_account::accepted_pcr_account(
-        &pool,
-        device_authorization_history::did_web_station(&member_station()),
-    )
+    let bob = heap_future(|| {
+        accepted_pcr_account::accepted_pcr_account(
+            &pool,
+            device_authorization_history::did_web_station(&ordinary_realm::station()),
+        )
+    })
     .await;
 
     // An invite-only Realm has no self entry.
-    let invite = admit(&pool, "fsm-invite", "invite").await;
+    let invite = heap_future(|| admit(&pool, "fsm-invite", "invite")).await;
     let last = invite.transactions.last().unwrap();
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(last, alice.clone(), &alice, "join"),
-        ConflictCode::GateCheckFailed,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(last, alice.clone(), &alice, "join"),
+            ConflictCode::GateCheckFailed,
+        )
+    })
     .await;
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(last, alice.clone(), &alice, "knock"),
-        ConflictCode::GateCheckFailed,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(last, alice.clone(), &alice, "knock"),
+            ConflictCode::GateCheckFailed,
+        )
+    })
     .await;
 
-    let public = admit(&pool, "fsm-public", "public").await;
+    let public = heap_future(|| admit(&pool, "fsm-public", "public")).await;
     let last = public.transactions.last().unwrap();
     // Even the Realm root controller cannot enter someone else.
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(last, founder_actor(), &alice, "join"),
-        ConflictCode::CapabilityDenied,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(last, founder_actor(), &alice, "join"),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
     let alice_join = membership_request(last, alice.clone(), &alice, "join");
-    let alice_join = ordinary_realm::source_request(&pool, alice_join).await;
+    let alice_join = heap_future(|| ordinary_realm::source_request(&pool, alice_join)).await;
     uow.commit_event(alice_join.clone()).await.unwrap();
     // `join -> join` is not an edge.
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(&alice_join.authority_commit, alice.clone(), &alice, "join"),
-        ConflictCode::InvalidMembershipTransition,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(&alice_join.authority_commit, alice.clone(), &alice, "join"),
+            ConflictCode::InvalidMembershipTransition,
+        )
+    })
     .await;
     let bob_join = membership_request(&alice_join.authority_commit, bob.clone(), &bob, "join");
-    let bob_join = ordinary_realm::source_request(&pool, bob_join).await;
+    let bob_join = heap_future(|| ordinary_realm::source_request(&pool, bob_join)).await;
     uow.commit_event(bob_join.clone()).await.unwrap();
     // A member without `ak.realm.admin` cannot ban or remove another.
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(&bob_join.authority_commit, alice.clone(), &bob, "ban"),
-        ConflictCode::CapabilityDenied,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(&bob_join.authority_commit, alice.clone(), &bob, "ban"),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(&bob_join.authority_commit, alice.clone(), &bob, "leave"),
-        ConflictCode::CapabilityDenied,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(&bob_join.authority_commit, alice.clone(), &bob, "leave"),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
     // The root controller holds every action and bans Bob.
     let ban = membership_request(&bob_join.authority_commit, founder_actor(), &bob, "ban");
-    let ban = ordinary_realm::source_request(&pool, ban).await;
+    let ban = heap_future(|| ordinary_realm::source_request(&pool, ban)).await;
     uow.commit_event(ban.clone()).await.unwrap();
     let realm_id = public.transactions[0].event.realm_id.clone();
     assert_eq!(
@@ -539,30 +573,36 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
         Some("ban")
     );
     // Bob cannot lift his own ban, and a banned member cannot rejoin.
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(&ban.authority_commit, bob.clone(), &bob, "leave"),
-        ConflictCode::CapabilityDenied,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(&ban.authority_commit, bob.clone(), &bob, "leave"),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(&ban.authority_commit, bob.clone(), &bob, "join"),
-        ConflictCode::InvalidMembershipTransition,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(&ban.authority_commit, bob.clone(), &bob, "join"),
+            ConflictCode::InvalidMembershipTransition,
+        )
+    })
     .await;
 
     // A grant of `ak.realm.admin` from the root lets Alice remove Carol; once
     // the root revokes it, the same Alice is refused at the next cut.
-    let carol = accepted_pcr_account::accepted_pcr_account(
-        &pool,
-        device_authorization_history::did_web_station(&member_station()),
-    )
+    let carol = heap_future(|| {
+        accepted_pcr_account::accepted_pcr_account(
+            &pool,
+            device_authorization_history::did_web_station(&ordinary_realm::station()),
+        )
+    })
     .await;
     let carol_join = membership_request(&ban.authority_commit, carol.clone(), &carol, "join");
-    let carol_join = ordinary_realm::source_request(&pool, carol_join).await;
+    let carol_join = heap_future(|| ordinary_realm::source_request(&pool, carol_join)).await;
     uow.commit_event(carol_join.clone()).await.unwrap();
     let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
     let admin_grant = grant_request(
@@ -571,7 +611,7 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
         &["ak.realm.admin"],
         &root_event_ref,
     );
-    let admin_grant = ordinary_realm::source_request(&pool, admin_grant).await;
+    let admin_grant = heap_future(|| ordinary_realm::source_request(&pool, admin_grant)).await;
     uow.commit_event(admin_grant.clone()).await.unwrap();
     let kick = membership_request(
         &admin_grant.authority_commit,
@@ -579,7 +619,7 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
         &carol,
         "leave",
     );
-    let kick = ordinary_realm::source_request(&pool, kick).await;
+    let kick = heap_future(|| ordinary_realm::source_request(&pool, kick)).await;
     uow.commit_event(kick.clone()).await.unwrap();
     assert_eq!(
         member_state(&pool, &realm_id, &carol).await.as_deref(),
@@ -600,19 +640,21 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
         }),
         kick.authority_commit.commit.committed_at,
     ));
-    let revoke = ordinary_realm::source_request(&pool, revoke).await;
+    let revoke = heap_future(|| ordinary_realm::source_request(&pool, revoke)).await;
     uow.commit_event(revoke.clone()).await.unwrap();
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(&revoke.authority_commit, alice.clone(), &carol, "ban"),
-        ConflictCode::CapabilityDenied,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(&revoke.authority_commit, alice.clone(), &carol, "ban"),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
     // Alice leaves by her own Event, and a member who left holds no
     // administration even with the Realm's grants restored.
     let alice_leave = membership_request(&revoke.authority_commit, alice.clone(), &alice, "leave");
-    let alice_leave = ordinary_realm::source_request(&pool, alice_leave).await;
+    let alice_leave = heap_future(|| ordinary_realm::source_request(&pool, alice_leave)).await;
     uow.commit_event(alice_leave.clone()).await.unwrap();
     assert_eq!(
         member_state(&pool, &realm_id, &alice).await.as_deref(),
@@ -625,14 +667,16 @@ async fn member_state_join_leave_and_kick_follow_join_rule_and_capability() {
         &["ak.realm.admin", "ak.message.create"],
         &root_event_ref,
     );
-    let regrant = ordinary_realm::source_request(&pool, regrant).await;
+    let regrant = heap_future(|| ordinary_realm::source_request(&pool, regrant)).await;
     uow.commit_event(regrant.clone()).await.unwrap();
-    assert_refused(
-        &pool,
-        &uow,
-        membership_request(&regrant.authority_commit, alice.clone(), &carol, "ban"),
-        ConflictCode::CapabilityDenied,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            membership_request(&regrant.authority_commit, alice.clone(), &carol, "ban"),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
 }
 
@@ -839,10 +883,14 @@ async fn assert_accept_refused(
 /// leaving, the same account joins again through a fresh Invite.
 #[tokio::test]
 async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
+    heap_future(invite_accept_joins_member_atomically_and_second_accept_is_rejected_case).await;
+}
+
+async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected_case() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let unit = admit(&pool, "accept-invite", "invite").await;
+    let unit = heap_future(|| admit(&pool, "accept-invite", "invite")).await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let bob = remote_member("accept-bob");
     let bob_account = bob.as_account_id().unwrap().clone();
@@ -850,7 +898,7 @@ async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
     let carol_account = carol.as_account_id().unwrap().clone();
 
     let create = invite_create_request(unit.transactions.last().unwrap(), &bob_account);
-    let create = ordinary_realm::source_request(&pool, create).await;
+    let create = heap_future(|| ordinary_realm::source_request(&pool, create)).await;
     uow.commit_event(create.clone()).await.unwrap();
     let head = &create.authority_commit;
     for (request, code) in [
@@ -874,12 +922,12 @@ async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
             ConflictCode::FailedPrecondition,
         ),
     ] {
-        assert_accept_refused(&pool, &uow, request, code).await;
+        heap_future(|| assert_accept_refused(&pool, &uow, request, code)).await;
     }
     assert_eq!(member_state(&pool, &realm_id, &bob).await, None);
 
     let accept = accept_request(head, &bob, &create, "pending", Some(&bob_account), 5);
-    let accept = ordinary_realm::source_request(&pool, accept).await;
+    let accept = heap_future(|| ordinary_realm::source_request(&pool, accept)).await;
     uow.commit_event(accept.clone()).await.unwrap();
     let accept_commit = accept.authority_commit.commit.commit_id.to_string();
     let invite_id = arkret_wire::InviteId::from_event_id(&create.authority_commit.event.event_id);
@@ -913,24 +961,26 @@ async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
     );
 
     // `accepted` is terminal: a second accept is refused before any write.
-    assert_accept_refused(
-        &pool,
-        &uow,
-        accept_request(
-            &accept.authority_commit,
-            &bob,
-            &create,
-            "pending",
-            Some(&bob_account),
-            6,
-        ),
-        ConflictCode::InviteAlreadyTerminal,
-    )
+    heap_future(|| {
+        assert_accept_refused(
+            &pool,
+            &uow,
+            accept_request(
+                &accept.authority_commit,
+                &bob,
+                &create,
+                "pending",
+                Some(&bob_account),
+                6,
+            ),
+            ConflictCode::InviteAlreadyTerminal,
+        )
+    })
     .await;
 
     // After leaving, Bob returns only through a fresh Invite.
     let leave = membership_request(&accept.authority_commit, bob.clone(), &bob, "leave");
-    let leave = ordinary_realm::source_request(&pool, leave).await;
+    let leave = heap_future(|| ordinary_realm::source_request(&pool, leave)).await;
     uow.commit_event(leave.clone()).await.unwrap();
     assert_eq!(
         account_summary(&pool, &realm_id, &bob)
@@ -940,7 +990,7 @@ async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
         "leaving withdraws Bob's Realm from his Account summary"
     );
     let reinvite = invite_create_request(&leave.authority_commit, &bob_account);
-    let reinvite = ordinary_realm::source_request(&pool, reinvite).await;
+    let reinvite = heap_future(|| ordinary_realm::source_request(&pool, reinvite)).await;
     uow.commit_event(reinvite.clone()).await.unwrap();
     let rejoin = accept_request(
         &reinvite.authority_commit,
@@ -950,7 +1000,7 @@ async fn invite_accept_joins_member_atomically_and_second_accept_is_rejected() {
         Some(&bob_account),
         7,
     );
-    let rejoin = ordinary_realm::source_request(&pool, rejoin).await;
+    let rejoin = heap_future(|| ordinary_realm::source_request(&pool, rejoin)).await;
     uow.commit_event(rejoin.clone()).await.unwrap();
     assert_eq!(
         member_state(&pool, &realm_id, &bob).await.as_deref(),
@@ -2312,13 +2362,17 @@ fn read_shape(read: soland_storage::MemberCommittedEventRead) -> Option<bool> {
 /// the floor to the new join.
 #[tokio::test]
 async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
+    heap_future(account_stream_scan_serves_joined_member_from_its_join_commit_case).await;
+}
+
+async fn account_stream_scan_serves_joined_member_from_its_join_commit_case() {
     use arkret_wire::StreamScanDirection::{After, Before};
 
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let unit = admit(&pool, "scan-joined-member", "public").await;
+    let unit = heap_future(|| admit(&pool, "scan-joined-member", "public")).await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let last = unit.transactions.last().unwrap();
     let at = last.commit.committed_at;
@@ -2341,7 +2395,7 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         }}),
         at,
     ));
-    let strand = ordinary_realm::source_request(&pool, strand).await;
+    let strand = heap_future(|| ordinary_realm::source_request(&pool, strand)).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let default = sourced(next_request(
@@ -2355,24 +2409,26 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         }),
         at,
     ));
-    let default = ordinary_realm::source_request(&pool, default).await;
+    let default = heap_future(|| ordinary_realm::source_request(&pool, default)).await;
     uow.commit_event(default.clone()).await.unwrap();
     let join = membership_request(&default.authority_commit, bob.clone(), &bob, "join");
-    let join = ordinary_realm::source_request(&pool, join).await;
+    let join = heap_future(|| ordinary_realm::source_request(&pool, join)).await;
     uow.commit_event(join.clone()).await.unwrap();
     // A joined member without a grant cannot write a Message.
-    assert_refused(
-        &pool,
-        &uow,
-        sourced(ordinary_realm::next_human_request_for_actor(
-            &join.authority_commit,
-            arkret_wire::EventKind::MessageCreate,
-            bob.clone(),
-            message_payload(&strand_id, "not yet"),
-            at,
-        )),
-        ConflictCode::CapabilityDenied,
-    )
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            sourced(ordinary_realm::next_human_request_for_actor(
+                &join.authority_commit,
+                arkret_wire::EventKind::MessageCreate,
+                bob.clone(),
+                message_payload(&strand_id, "not yet"),
+                at,
+            )),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
     let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
     let grant = grant_request(
@@ -2381,7 +2437,7 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         &["ak.message.create"],
         &root_event_ref,
     );
-    let grant = ordinary_realm::source_request(&pool, grant).await;
+    let grant = heap_future(|| ordinary_realm::source_request(&pool, grant)).await;
     uow.commit_event(grant.clone()).await.unwrap();
     let bob_message = sourced(ordinary_realm::next_human_request_for_actor(
         &grant.authority_commit,
@@ -2390,7 +2446,7 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         message_payload(&strand_id, "hello from the second member"),
         at,
     ));
-    let bob_message = ordinary_realm::source_request(&pool, bob_message).await;
+    let bob_message = heap_future(|| ordinary_realm::source_request(&pool, bob_message)).await;
     uow.commit_event(bob_message.clone()).await.unwrap();
     let founder_message = sourced(next_request(
         &bob_message.authority_commit,
@@ -2399,7 +2455,8 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         message_payload(&strand_id, "welcome"),
         at,
     ));
-    let founder_message = ordinary_realm::source_request(&pool, founder_message).await;
+    let founder_message =
+        heap_future(|| ordinary_realm::source_request(&pool, founder_message)).await;
     uow.commit_event(founder_message.clone()).await.unwrap();
 
     let join_position = join.authority_commit.commit.stream_position;
@@ -2408,7 +2465,8 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         floor_commit_id: join.authority_commit.commit.commit_id.clone(),
         floor_reason: arkret_wire::ReadableFloorReason::MembershipJoin,
     };
-    let forward = page(scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await);
+    let forward =
+        page(heap_future(|| scanned(&store, scan_request(&realm_id, After(None), 10), &bob)).await);
     assert_eq!(forward.readable_floor.as_ref(), Some(&floor));
     assert!(!forward.truncated);
     assert_eq!(
@@ -2422,22 +2480,27 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         "own join, the founder's grant and both Messages in full"
     );
     // A cursor below the floor still starts at the floor.
-    let below = page(scanned(&store, scan_request(&realm_id, After(Some(2)), 1), &bob).await);
+    let below = page(
+        heap_future(|| scanned(&store, scan_request(&realm_id, After(Some(2)), 1), &bob)).await,
+    );
     assert_eq!(rows(&below), vec![(join_position, true)]);
     assert!(below.truncated);
     // Backfill stops at the floor without reporting truncation.
     let backfill = page(
-        scanned(
-            &store,
-            scan_request(&realm_id, Before(Some(join_position + 1)), 5),
-            &bob,
-        )
+        heap_future(|| {
+            scanned(
+                &store,
+                scan_request(&realm_id, Before(Some(join_position + 1)), 5),
+                &bob,
+            )
+        })
         .await,
     );
     assert_eq!(rows(&backfill), vec![(join_position, true)]);
     assert!(!backfill.truncated);
     assert_eq!(backfill.readable_floor.as_ref(), Some(&floor));
-    let newest = page(scanned(&store, scan_request(&realm_id, Before(None), 2), &bob).await);
+    let newest =
+        page(heap_future(|| scanned(&store, scan_request(&realm_id, Before(None), 2), &bob)).await);
     assert_eq!(
         rows(&newest),
         vec![(join_position + 3, true), (join_position + 2, true)]
@@ -2445,13 +2508,9 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
     assert!(newest.truncated);
 
     // The founder's interval still starts at the genesis Commit.
+    let founder = founder_actor();
     let founder_page = page(
-        scanned(
-            &store,
-            scan_request(&realm_id, After(None), 50),
-            &founder_actor(),
-        )
-        .await,
+        heap_future(|| scanned(&store, scan_request(&realm_id, After(None), 50), &founder)).await,
     );
     assert_eq!(
         founder_page
@@ -2618,10 +2677,10 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
         &bob,
         "leave",
     );
-    let leave = ordinary_realm::source_request(&pool, leave).await;
+    let leave = heap_future(|| ordinary_realm::source_request(&pool, leave)).await;
     uow.commit_event(leave.clone()).await.unwrap();
     assert_eq!(
-        scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await,
+        heap_future(|| scanned(&store, scan_request(&realm_id, After(None), 10), &bob)).await,
         soland_storage::AccountStreamScan::NotAuthorized
     );
     // After the leave only Bob's own Events stay readable to him.
@@ -2651,9 +2710,10 @@ async fn account_stream_scan_serves_joined_member_from_its_join_commit() {
     );
     assert!(!store.accepted_realm_reader(&realm_id, &bob).await.unwrap());
     let rejoin = membership_request(&leave.authority_commit, bob.clone(), &bob, "join");
-    let rejoin = ordinary_realm::source_request(&pool, rejoin).await;
+    let rejoin = heap_future(|| ordinary_realm::source_request(&pool, rejoin)).await;
     uow.commit_event(rejoin.clone()).await.unwrap();
-    let rejoined = page(scanned(&store, scan_request(&realm_id, After(None), 10), &bob).await);
+    let rejoined =
+        page(heap_future(|| scanned(&store, scan_request(&realm_id, After(None), 10), &bob)).await);
     assert_eq!(
         rejoined.readable_floor,
         Some(arkret_wire::ReadableFloor {
@@ -2715,22 +2775,32 @@ async fn grant_status(pool: &PgPool, grant: &EventCommitRequest) -> String {
 /// zero-write.
 #[tokio::test]
 async fn capability_revoke_and_relinquish_follow_their_target_guards() {
+    heap_future(capability_revoke_and_relinquish_follow_their_target_guards_case).await;
+}
+
+async fn capability_revoke_and_relinquish_follow_their_target_guards_case() {
+    // A local Device inventory cannot host another Station's PCR devices.
+    // Keep these no-Profile Accounts on the fixture's actual hosted Station.
     // Retain the exact requests for CAS/replay assertions without embedding
     // each nested source/admission future in this matrix's stack frame.
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let unit = Box::pin(admit(&pool, "grant-guards", "public")).await;
+    let unit = heap_future(|| admit(&pool, "grant-guards", "public")).await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
-    let alice = Box::pin(accepted_pcr_account::accepted_pcr_account(
-        &pool,
-        device_authorization_history::did_web_station(&member_station()),
-    ))
+    let alice = heap_future(|| {
+        accepted_pcr_account::accepted_pcr_account(
+            &pool,
+            device_authorization_history::did_web_station(&ordinary_realm::station()),
+        )
+    })
     .await;
-    let bob = Box::pin(accepted_pcr_account::accepted_pcr_account(
-        &pool,
-        device_authorization_history::did_web_station(&member_station()),
-    ))
+    let bob = heap_future(|| {
+        accepted_pcr_account::accepted_pcr_account(
+            &pool,
+            device_authorization_history::did_web_station(&ordinary_realm::station()),
+        )
+    })
     .await;
     let alice_join = membership_request(
         unit.transactions.last().unwrap(),
@@ -2738,10 +2808,10 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &alice,
         "join",
     );
-    let alice_join = Box::pin(ordinary_realm::source_request(&pool, alice_join)).await;
+    let alice_join = heap_future(|| ordinary_realm::source_request(&pool, alice_join)).await;
     uow.commit_event(alice_join.clone()).await.unwrap();
     let bob_join = membership_request(&alice_join.authority_commit, bob.clone(), &bob, "join");
-    let bob_join = Box::pin(ordinary_realm::source_request(&pool, bob_join)).await;
+    let bob_join = heap_future(|| ordinary_realm::source_request(&pool, bob_join)).await;
     uow.commit_event(bob_join.clone()).await.unwrap();
     let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
 
@@ -2771,12 +2841,14 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         }),
         bob_join.authority_commit.commit.committed_at,
     ));
-    Box::pin(assert_refused(
-        &pool,
-        &uow,
-        unauthorized_issue,
-        ConflictCode::CapabilityDenied,
-    ))
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            unauthorized_issue,
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
 
     let bob_grant = grant_request(
@@ -2785,7 +2857,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &["ak.message.create"],
         &root_event_ref,
     );
-    let bob_grant = Box::pin(ordinary_realm::source_request(&pool, bob_grant)).await;
+    let bob_grant = heap_future(|| ordinary_realm::source_request(&pool, bob_grant)).await;
     uow.commit_event(bob_grant.clone()).await.unwrap();
     let revision = bob_grant.authority_commit.commit.clone();
     let head = &bob_grant.authority_commit;
@@ -2803,47 +2875,53 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
             ConflictCode::GrantRelinquishNotSubject,
         ),
     ] {
-        Box::pin(assert_refused(
-            &pool,
-            &uow,
-            close_grant_request(head, kind, actor, &bob_grant, &revision),
-            code,
-        ))
+        heap_future(|| {
+            assert_refused(
+                &pool,
+                &uow,
+                close_grant_request(head, kind, actor, &bob_grant, &revision),
+                code,
+            )
+        })
         .await;
     }
     // Holding ak.capability.revoke is not enough to revoke another issuer's
     // grant.
     let alice_revoker = grant_request(head, &alice, &["ak.capability.revoke"], &root_event_ref);
-    let alice_revoker = Box::pin(ordinary_realm::source_request(&pool, alice_revoker)).await;
+    let alice_revoker = heap_future(|| ordinary_realm::source_request(&pool, alice_revoker)).await;
     uow.commit_event(alice_revoker.clone()).await.unwrap();
-    Box::pin(assert_refused(
-        &pool,
-        &uow,
-        close_grant_request(
-            &alice_revoker.authority_commit,
-            arkret_wire::EventKind::CapabilityRevoke,
-            &alice,
-            &bob_grant,
-            &revision,
-        ),
-        ConflictCode::CapabilityDenied,
-    ))
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            close_grant_request(
+                &alice_revoker.authority_commit,
+                arkret_wire::EventKind::CapabilityRevoke,
+                &alice,
+                &bob_grant,
+                &revision,
+            ),
+            ConflictCode::CapabilityDenied,
+        )
+    })
     .await;
     // The subject releases by exact revision only, once.
     let mut stale = revision.clone();
     stale.stream_position += 100;
-    Box::pin(assert_refused(
-        &pool,
-        &uow,
-        close_grant_request(
-            &alice_revoker.authority_commit,
-            arkret_wire::EventKind::CapabilityRelinquish,
-            &bob,
-            &bob_grant,
-            &stale,
-        ),
-        ConflictCode::CasConflict,
-    ))
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            close_grant_request(
+                &alice_revoker.authority_commit,
+                arkret_wire::EventKind::CapabilityRelinquish,
+                &bob,
+                &bob_grant,
+                &stale,
+            ),
+            ConflictCode::CasConflict,
+        )
+    })
     .await;
     let relinquish = close_grant_request(
         &alice_revoker.authority_commit,
@@ -2852,21 +2930,23 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &bob_grant,
         &revision,
     );
-    let relinquish = Box::pin(ordinary_realm::source_request(&pool, relinquish)).await;
+    let relinquish = heap_future(|| ordinary_realm::source_request(&pool, relinquish)).await;
     uow.commit_event(relinquish.clone()).await.unwrap();
     assert_eq!(grant_status(&pool, &bob_grant).await, "relinquished");
-    Box::pin(assert_refused(
-        &pool,
-        &uow,
-        close_grant_request(
-            &relinquish.authority_commit,
-            arkret_wire::EventKind::CapabilityRevoke,
-            &founder_actor(),
-            &bob_grant,
-            &revision,
-        ),
-        ConflictCode::CasConflict,
-    ))
+    heap_future(|| {
+        assert_refused(
+            &pool,
+            &uow,
+            close_grant_request(
+                &relinquish.authority_commit,
+                arkret_wire::EventKind::CapabilityRevoke,
+                &founder_actor(),
+                &bob_grant,
+                &revision,
+            ),
+            ConflictCode::CasConflict,
+        )
+    })
     .await;
     // The root controller revokes the grant it issued.
     let revoke = close_grant_request(
@@ -2876,7 +2956,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &alice_revoker,
         &alice_revoker.authority_commit.commit,
     );
-    let revoke = Box::pin(ordinary_realm::source_request(&pool, revoke)).await;
+    let revoke = heap_future(|| ordinary_realm::source_request(&pool, revoke)).await;
     uow.commit_event(revoke).await.unwrap();
     assert_eq!(grant_status(&pool, &alice_revoker).await, "revoked");
 }
@@ -2894,19 +2974,16 @@ struct JoinedRealm {
     bob_message: EventCommitRequest,
 }
 
-async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
+async fn joined_realm(pool: &PgPool, seed: &str) -> Box<JoinedRealm> {
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let unit = admit(pool, seed, "invite").await;
+    let unit = heap_future(|| admit(pool, seed, "invite")).await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let last = unit.transactions.last().unwrap();
     let at = last.commit.committed_at;
+    let station = ordinary_realm::station();
+    let bob_label = format!("{seed}-bob");
     let bob = arkret_wire::ActorId::account(
-        ordinary_realm::human_profile::admit(
-            pool,
-            &ordinary_realm::station(),
-            &format!("{seed}-bob"),
-        )
-        .await,
+        heap_future(|| ordinary_realm::human_profile::admit(pool, &station, &bob_label)).await,
     );
     let bob_account = bob.as_account_id().unwrap().clone();
     let strand = sourced(next_request(
@@ -2924,7 +3001,7 @@ async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
         }}),
         at,
     ));
-    let strand = ordinary_realm::source_request(pool, strand).await;
+    let strand = heap_future(|| ordinary_realm::source_request(pool, strand)).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let founder_message = sourced(next_request(
@@ -2934,10 +3011,11 @@ async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
         message_payload(&strand_id, "before Bob joins"),
         at,
     ));
-    let founder_message = ordinary_realm::source_request(pool, founder_message).await;
+    let founder_message =
+        heap_future(|| ordinary_realm::source_request(pool, founder_message)).await;
     uow.commit_event(founder_message.clone()).await.unwrap();
     let create = invite_create_request(&founder_message.authority_commit, &bob_account);
-    let create = ordinary_realm::source_request(pool, create).await;
+    let create = heap_future(|| ordinary_realm::source_request(pool, create)).await;
     uow.commit_event(create.clone()).await.unwrap();
     let accept = accept_request(
         &create.authority_commit,
@@ -2947,7 +3025,7 @@ async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
         Some(&bob_account),
         1,
     );
-    let accept = ordinary_realm::source_request(pool, accept).await;
+    let accept = heap_future(|| ordinary_realm::source_request(pool, accept)).await;
     uow.commit_event(accept.clone()).await.unwrap();
     let root_event_ref = realm_root_event_ref(pool, &realm_id).await;
     let grant = grant_request(
@@ -2956,7 +3034,7 @@ async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
         &["ak.message.create"],
         &root_event_ref,
     );
-    let grant = ordinary_realm::source_request(pool, grant).await;
+    let grant = heap_future(|| ordinary_realm::source_request(pool, grant)).await;
     uow.commit_event(grant.clone()).await.unwrap();
     let bob_message = sourced(ordinary_realm::next_human_request_for_actor(
         &grant.authority_commit,
@@ -2965,9 +3043,11 @@ async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
         message_payload(&strand_id, "hello after joining"),
         at,
     ));
-    let bob_message = ordinary_realm::source_request(pool, bob_message).await;
+    let bob_message = heap_future(|| ordinary_realm::source_request(pool, bob_message)).await;
     uow.commit_event(bob_message.clone()).await.unwrap();
-    JoinedRealm {
+    // The snapshot/window callers retain these exact requests across awaits.
+    // Keep their shared fixture state out of both test future frames.
+    Box::new(JoinedRealm {
         realm_id,
         strand_id,
         bob,
@@ -2976,7 +3056,7 @@ async fn joined_realm(pool: &PgPool, seed: &str) -> JoinedRealm {
         accept,
         grant,
         bob_message,
-    }
+    })
 }
 
 fn snapshot_signer() -> impl Fn(
@@ -3252,7 +3332,7 @@ async fn account_snapshot_serves_joined_member_floor() {
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let realm = joined_realm(&pool, "snapshot-joined").await;
+    let realm = Box::pin(joined_realm(&pool, "snapshot-joined")).await;
     let bob_account = realm.bob.as_account_id().unwrap().clone();
     let founder_account = founder_actor().as_account_id().unwrap().clone();
     let issuer = arkret_wire::DidCoreId::new(STATION).unwrap();
@@ -3424,7 +3504,7 @@ async fn account_window_starts_joined_member_at_its_join_commit() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
-    let realm = joined_realm(&pool, "window-joined").await;
+    let realm = Box::pin(joined_realm(&pool, "window-joined")).await;
     let bob_account = realm.bob.as_account_id().unwrap().clone();
     let issuer = arkret_wire::DidCoreId::new(STATION).unwrap();
     let join_position = realm.accept.authority_commit.commit.stream_position;
@@ -3501,6 +3581,7 @@ async fn account_window_starts_joined_member_at_its_join_commit() {
         message_payload(&realm.strand_id, "welcome"),
         realm.bob_message.authority_commit.commit.committed_at,
     ));
+    let founder_reply = heap_future(|| ordinary_realm::source_request(&pool, founder_reply)).await;
     uow.commit_event(founder_reply.clone()).await.unwrap();
     let backed = store
         .freeze_account_realm_window(&request(1), &sign)
@@ -3576,6 +3657,10 @@ async fn summary_title(
 /// restricted plaintext Message kept to its Commit (`federation.md` §4.1.1).
 #[tokio::test]
 async fn peer_scan_serves_joined_and_departed_member_intervals() {
+    heap_future(peer_scan_serves_joined_and_departed_member_intervals_case).await;
+}
+
+async fn peer_scan_serves_joined_and_departed_member_intervals_case() {
     use arkret_wire::StreamScanDirection::{After, Before};
     use soland_storage::AccountStreamScan;
 
@@ -3583,7 +3668,7 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let unit = admit(&pool, "peer-scan-intervals", "public").await;
+    let unit = heap_future(|| admit(&pool, "peer-scan-intervals", "public")).await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
     let last = unit.transactions.last().unwrap();
     let alice = remote_member("peer-scan-alice");
@@ -3601,7 +3686,7 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
         AccountStreamScan::NotAuthorized
     );
     let join = membership_request(last, alice.clone(), &alice, "join");
-    let join = ordinary_realm::source_request(&pool, join).await;
+    let join = heap_future(|| ordinary_realm::source_request(&pool, join)).await;
     uow.commit_event(join.clone()).await.unwrap();
     let strand = sourced(next_request(
         &join.authority_commit,
@@ -3618,7 +3703,7 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
         }}),
         at,
     ));
-    let strand = ordinary_realm::source_request(&pool, strand).await;
+    let strand = heap_future(|| ordinary_realm::source_request(&pool, strand)).await;
     uow.commit_event(strand.clone()).await.unwrap();
     let strand_id = arkret_wire::StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let default = sourced(next_request(
@@ -3632,7 +3717,7 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
         }),
         at,
     ));
-    let default = ordinary_realm::source_request(&pool, default).await;
+    let default = heap_future(|| ordinary_realm::source_request(&pool, default)).await;
     uow.commit_event(default.clone()).await.unwrap();
     let message = sourced(next_request(
         &default.authority_commit,
@@ -3641,7 +3726,7 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
         message_payload(&strand_id, "plaintext kept on the governing Station"),
         at,
     ));
-    let message = ordinary_realm::source_request(&pool, message).await;
+    let message = heap_future(|| ordinary_realm::source_request(&pool, message)).await;
     uow.commit_event(message.clone()).await.unwrap();
     let join_position = join.authority_commit.commit.stream_position;
 
@@ -3680,10 +3765,10 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
     // Alice leaves; Carol, a member of this Station, joins after her. The
     // member Station's right now ends at Alice's own leave.
     let leave = membership_request(&message.authority_commit, alice.clone(), &alice, "leave");
-    let leave = ordinary_realm::source_request(&pool, leave).await;
+    let leave = heap_future(|| ordinary_realm::source_request(&pool, leave)).await;
     uow.commit_event(leave.clone()).await.unwrap();
     let carol_join = membership_request(&leave.authority_commit, carol.clone(), &carol, "join");
-    let carol_join = ordinary_realm::source_request(&pool, carol_join).await;
+    let carol_join = heap_future(|| ordinary_realm::source_request(&pool, carol_join)).await;
     uow.commit_event(carol_join.clone()).await.unwrap();
     let leave_position = leave.authority_commit.commit.stream_position;
     let AccountStreamScan::Page(departed) = peer_page(
@@ -3713,6 +3798,49 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
         rows(&newest),
         vec![(leave_position, true), (join_position + 3, false)]
     );
+    assert!(
+        newest.truncated,
+        "older authorized rows remain above the join floor"
+    );
+    let before = newest
+        .committed_events
+        .last()
+        .unwrap()
+        .commit()
+        .stream_position;
+    let AccountStreamScan::Page(older) = peer_page(
+        &store,
+        scan_request(&realm_id, Before(Some(before)), 10),
+        &member_station(),
+    )
+    .await
+    else {
+        panic!("backfill continues to the departed member's join floor");
+    };
+    assert_eq!(
+        rows(&older),
+        vec![
+            (join_position + 2, true),
+            (join_position + 1, true),
+            (join_position, true),
+        ]
+    );
+    assert!(!older.truncated);
+    assert_eq!(older.readable_floor.as_ref(), Some(&floor));
+    assert_eq!(
+        older.committed_events.last().unwrap().commit().commit_id,
+        floor.floor_commit_id
+    );
+    let backfill_positions: Vec<_> = newest
+        .committed_events
+        .iter()
+        .chain(&older.committed_events)
+        .map(|item| item.commit().stream_position)
+        .collect();
+    assert_eq!(
+        backfill_positions,
+        (join_position..=leave_position).rev().collect::<Vec<_>>()
+    );
     let AccountStreamScan::Page(after_leave) = peer_page(
         &store,
         scan_request(&realm_id, After(Some(leave_position)), 10),
@@ -3729,7 +3857,7 @@ async fn peer_scan_serves_joined_and_departed_member_intervals() {
     // two intervals -- not even as a Commit.
     let bob = remote_member("peer-scan-bob");
     let bob_join = membership_request(&carol_join.authority_commit, bob.clone(), &bob, "join");
-    let bob_join = ordinary_realm::source_request(&pool, bob_join).await;
+    let bob_join = heap_future(|| ordinary_realm::source_request(&pool, bob_join)).await;
     uow.commit_event(bob_join.clone()).await.unwrap();
     let bob_position = bob_join.authority_commit.commit.stream_position;
     let AccountStreamScan::Page(gap) = peer_page(
@@ -4983,6 +5111,13 @@ async fn recipient_mls_add_attestation_outbox_is_atomic_durable_and_idempotent()
 /// Real franking signatures are exercised separately in franking_receipt_commit.
 #[tokio::test]
 async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expires() {
+    heap_future(|| {
+        circle_own_opening_join_anchors_remote_stream_and_membership_basis_expires_case()
+    })
+    .await;
+}
+
+async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expires_case() {
     let governor_db = TestDatabase::lease().await;
     let replica_db = TestDatabase::lease().await;
     let pool = governor_db.pool();
@@ -5071,7 +5206,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         })
         .await
         .unwrap();
-    let create = ordinary_realm::source_request(&pool, sourced(next_request_for_actor(
+    let create = heap_future(|| ordinary_realm::source_request(&pool, sourced(next_request_for_actor(
         &join.authority_commit,
         arkret_wire::EventKind::CircleCreate,
         creator.clone(),
@@ -5080,7 +5215,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
             "directory_visibility":"members","join_rule":"public","history_access":"since_join","state":"active","created_by":creator,"created_at":at
         }}),
         at,
-    ))).await;
+    )))).await;
     uow.commit_event(create.clone()).await.unwrap();
     assert!(
         fanout_rows(&pool, &create).await.is_empty(),
@@ -5094,23 +5229,25 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
     // Public entry still requires its explicit capability; Realm membership
     // alone is only the enclosing scope floor (circle.md section 9).
     let root_event_ref = realm_root_event_ref(&pool, &realm).await;
-    let grant = ordinary_realm::source_request(
-        &pool,
-        sourced(next_request_for_actor(
-            &create.authority_commit,
-            arkret_wire::EventKind::CapabilityGrant,
-            creator.clone(),
-            serde_json::json!({"grant":{
-                "schema":"ak.schema.capability.v1","realm_id":realm,
-                "issuer_id":creator,"subject":remote,"actions":["ak.circle.member.add"],
-                "resources":[{"kind":"circle","realm_id":realm,"circle_id":circle}],
-                "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,
-                    "authority_event_ref":root_event_ref,"authority_generation":0}],
-                "issued_at":arkret_canonical::format_timestamp_canonical(at)
-            }}),
-            at,
-        )),
-    )
+    let grant = heap_future(|| {
+        ordinary_realm::source_request(
+            &pool,
+            sourced(next_request_for_actor(
+                &create.authority_commit,
+                arkret_wire::EventKind::CapabilityGrant,
+                creator.clone(),
+                serde_json::json!({"grant":{
+                    "schema":"ak.schema.capability.v1","realm_id":realm,
+                    "issuer_id":creator,"subject":remote,"actions":["ak.circle.member.add"],
+                    "resources":[{"kind":"circle","realm_id":realm,"circle_id":circle}],
+                    "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,
+                        "authority_event_ref":root_event_ref,"authority_generation":0}],
+                    "issued_at":arkret_canonical::format_timestamp_canonical(at)
+                }}),
+                at,
+            )),
+        )
+    })
     .await;
     uow.commit_event(grant).await.unwrap();
     let stream = arkret_wire::CommitStreamRef::Circle {
@@ -5362,7 +5499,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         serde_json::json!({"circle_id":circle,"member_id":creator,"membership":"join",
             "parent_membership_revision":creator_parent,"expected_membership":null}),
     );
-    let creator_join = ordinary_realm::source_request(&pool, creator_join).await;
+    let creator_join = heap_future(|| ordinary_realm::source_request(&pool, creator_join)).await;
     uow.commit_event(creator_join.clone()).await.unwrap();
     assert_eq!(
         member
@@ -5380,7 +5517,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
             "metadata":{"title":"Withheld gap discussion"},"state":"active",
             "created_by":creator,"created_at":at}}),
     );
-    let strand = ordinary_realm::source_request(&pool, strand).await;
+    let strand = heap_future(|| ordinary_realm::source_request(&pool, strand)).await;
     uow.commit_event(strand.clone()).await.unwrap();
     assert_eq!(
         member
@@ -5395,7 +5532,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         arkret_wire::EventKind::MessageCreate,
         message_payload(&strand_id, "Circle plaintext stays at the governor"),
     );
-    let message = ordinary_realm::source_request(&pool, message).await;
+    let message = heap_future(|| ordinary_realm::source_request(&pool, message)).await;
     uow.commit_event(message.clone()).await.unwrap();
     assert!(fanout_rows(&pool, &message).await.is_empty());
     let leave = circle_transition(&message.authority_commit, "leave", Some("join"));
