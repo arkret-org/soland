@@ -103,11 +103,44 @@ fn request_result(
         })
         .unwrap();
     ContactCompletionResult::Accepted {
-        outcome: ContactAcceptedOutcome::Request {
+        outcome: Box::new(ContactAcceptedOutcome::Request {
             operation_id: intent.plan.operation_id.clone(),
             request_acceptance_receipt: receipt,
-        },
+        }),
     }
+}
+
+#[test]
+fn contact_completion_indirection_preserves_closed_json() {
+    let fixture = fixture(false);
+    let ContactCompletionResult::Accepted { outcome } = &fixture.result else {
+        panic!("fixture must contain an accepted result");
+    };
+    let expected = json!({ "result": "accepted", "outcome": outcome.as_ref() });
+    assert_eq!(serde_json::to_value(&fixture.result).unwrap(), expected);
+    let restored: ContactCompletionResult = serde_json::from_value(expected.clone()).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), expected);
+    let mut unknown = expected;
+    unknown["unknown"] = json!(true);
+    assert!(serde_json::from_value::<ContactCompletionResult>(unknown).is_err());
+
+    let ContactAcceptedOutcome::Request {
+        request_acceptance_receipt,
+        ..
+    } = outcome.as_ref()
+    else {
+        panic!("fixture must contain a request receipt");
+    };
+    let action = ContactCompletionAction::Reject {
+        request_receipt: Box::new(request_acceptance_receipt.clone()),
+    };
+    let expected = json!({ "action": "reject", "request_receipt": request_acceptance_receipt });
+    assert_eq!(serde_json::to_value(&action).unwrap(), expected);
+    let restored: ContactCompletionAction = serde_json::from_value(expected.clone()).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), expected);
+    let mut unknown = expected;
+    unknown["unknown"] = json!(true);
+    assert!(serde_json::from_value::<ContactCompletionAction>(unknown).is_err());
 }
 
 /// A confirmed Contact request whose peer is served by this Station
@@ -477,9 +510,8 @@ async fn different_completion_after_terminal_still_conflicts() {
 
         // A result that is not a valid terminal for this plan.
         let mut invalid_result = fixture.clone();
-        if let ContactCompletionResult::Accepted {
-            outcome: ContactAcceptedOutcome::Request { operation_id, .. },
-        } = &mut invalid_result.result
+        if let ContactCompletionResult::Accepted { outcome } = &mut invalid_result.result
+            && let ContactAcceptedOutcome::Request { operation_id, .. } = outcome.as_mut()
         {
             *operation_id =
                 arkret_wire::ProtocolOperationId::new("ak:operation:ak.self.contact.other")
@@ -564,15 +596,17 @@ async fn request_lookup_reads_detached_jws_receipts_and_rejects_bare_signatures(
             &binding.request_hash,
         )
     };
-    let Some(ContactCompletionResult::Accepted {
-        outcome:
-            ContactAcceptedOutcome::Request {
-                request_acceptance_receipt,
-                ..
-            },
-    }) = read().await.unwrap().and_then(|state| state.result)
+    let Some(ContactCompletionResult::Accepted { outcome }) =
+        read().await.unwrap().and_then(|state| state.result)
     else {
         panic!("the terminal request result is readable");
+    };
+    let ContactAcceptedOutcome::Request {
+        request_acceptance_receipt,
+        ..
+    } = *outcome
+    else {
+        panic!("the terminal result retains its request outcome");
     };
     arkret_signatures::contact_receipt::verify_contact_request_acceptance_receipt(
         &request_acceptance_receipt,

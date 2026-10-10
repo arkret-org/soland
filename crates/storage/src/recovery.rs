@@ -65,7 +65,7 @@ impl RevokeCommandTerminalWrite {
                     || step.response
                         != serde_json::to_value(resource)
                             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
-                    || resource.accepted_steps.first().is_none()
+                    || resource.accepted_steps.is_empty()
                 {
                     return Err(PersistenceError::SchemaViolation(
                         "accepted revoke step differs from prepared unit or terminal resource"

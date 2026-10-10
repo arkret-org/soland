@@ -80,7 +80,7 @@ pub async fn managed_principal_authority(
     Ok(None)
 }
 
-/// `device-lifecycle.md` 15 install revoke fence, ANDed into the MLS surfaces.
+/// `device-lifecycle.md` 15 install revoke fence, required by the MLS surfaces.
 ///
 /// An Applet-managed principal can only ever hold delegated devices: its
 /// `applet_managed_control` genesis is forbidden from carrying a founding

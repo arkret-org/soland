@@ -2676,7 +2676,7 @@ CREATE INDEX key_backups_device_idx ON public.key_backups USING btree (device_id
 -- to receive the same challenge while it is still valid, so a client retrying
 -- the issue call cannot invalidate the challenge it is already signing.
 -- `consumed_at` is the single-use flag: it is set under
--- `WHERE consumed_at IS NULL`, so two concurrent DELETEs consume exactly once.
+-- `WHERE consumed_at IS NULL`, so two concurrent DELETE requests consume exactly once.
 CREATE TABLE public.key_backup_delete_challenges (
     challenge_id text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),

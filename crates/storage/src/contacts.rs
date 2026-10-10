@@ -55,11 +55,12 @@ pub enum ContactCompletionAction {
         slot_predecessor: Option<arkret_wire::Hash>,
     },
     Response {
-        request_receipt: RequestAcceptanceReceipt,
-        absence: arkret_models_collaboration::contact_operations::OutgoingSlotAbsenceTranscript,
+        request_receipt: Box<RequestAcceptanceReceipt>,
+        absence:
+            Box<arkret_models_collaboration::contact_operations::OutgoingSlotAbsenceTranscript>,
     },
     Reject {
-        request_receipt: RequestAcceptanceReceipt,
+        request_receipt: Box<RequestAcceptanceReceipt>,
     },
     ScopeUpdate,
     Tombstone,
@@ -101,7 +102,7 @@ pub struct ContactDeliveryTarget {
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ContactCompletionResult {
     Accepted {
-        outcome: arkret_models_collaboration::contact_operations::ContactAcceptedOutcome,
+        outcome: Box<arkret_models_collaboration::contact_operations::ContactAcceptedOutcome>,
     },
     Rejected {
         problem: arkret_wire::problem_details::Problem,

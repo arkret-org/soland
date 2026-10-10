@@ -308,8 +308,8 @@ fn response(
         &bob(),
         &alice(),
         ContactCompletionAction::Response {
-            request_receipt: receipt,
-            absence: absence.clone(),
+            request_receipt: Box::new(receipt),
+            absence: Box::new(absence.clone()),
         },
         absence.observed_at,
     );

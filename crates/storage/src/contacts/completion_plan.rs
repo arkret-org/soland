@@ -168,7 +168,7 @@ impl ContactCompletionIntent {
                     false,
                 ));
                 operation_id == expected_operation
-                    && &receipt.request_receipt == request_receipt
+                    && &receipt.request_receipt == request_receipt.as_ref()
                     && receipt.response_event_ref == event.event_id
                     && receipt.producer_signer == self.producer_signer
                     && receipt.accepted_at == accepted_at
@@ -185,7 +185,7 @@ impl ContactCompletionIntent {
                 },
             ) => {
                 operation_id == expected_operation
-                    && &receipt.request_receipt == request_receipt
+                    && &receipt.request_receipt == request_receipt.as_ref()
                     && receipt.reject_event_ref == event.event_id
                     && receipt.producer_signer == self.producer_signer
                     && receipt.accepted_at == accepted_at
@@ -246,8 +246,7 @@ impl ContactCompletionIntent {
         }
         if let Some((lineage, proof, peer, round, version, predecessor, scopes, terminal)) =
             lineage_and_proof
-        {
-            if lineage.issuer != self.plan.holder
+            && (lineage.issuer != self.plan.holder
                 || lineage.peer != peer
                 || lineage.contact_round_id != round
                 || lineage.version != version
@@ -258,15 +257,14 @@ impl ContactCompletionIntent {
                 || lineage.terminal != terminal.then_some(true)
                 || proof.contact_round_id != round
                 || proof.peer != peer
-                || &proof.issuer_id != issuer
-            {
-                return Err(invalid(
-                    "Contact completion lineage or current proof changed its exact direction",
-                ));
-            }
-            // The transaction separately binds this proof to the actual current
-            // committed head; a larger numeric version alone is never enough.
+                || &proof.issuer_id != issuer)
+        {
+            return Err(invalid(
+                "Contact completion lineage or current proof changed its exact direction",
+            ));
         }
+        // The transaction separately binds this proof to the actual current
+        // committed head; a larger numeric version alone is never enough.
         Ok(())
     }
 }

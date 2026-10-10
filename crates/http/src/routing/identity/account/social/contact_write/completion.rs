@@ -23,7 +23,7 @@ pub(super) async fn resolve_completion(
         .and_then(|state| state.result);
     match result {
         Some(ContactCompletionResult::Accepted { outcome }) => {
-            json_ok(ContactOperationOutcome::Accepted { outcome })
+            json_ok(ContactOperationOutcome::Accepted { outcome: *outcome })
         }
         Some(ContactCompletionResult::Rejected { problem }) => {
             Err(AppError::from_frozen_problem(problem))
@@ -134,7 +134,9 @@ async fn materialize_one(
         .persistence()
         .finalize_contact_completion_intent(
             ready,
-            &ContactCompletionResult::Accepted { outcome },
+            &ContactCompletionResult::Accepted {
+                outcome: Box::new(outcome),
+            },
             delivery.as_ref(),
             counterpart_proof.as_ref(),
         )
@@ -210,7 +212,7 @@ async fn sign_outcome(
             .map_err(|error| AppError::internal(error.to_string()))?;
             let receipt = NormalResponseAcceptanceReceipt::sign_with(
                 payload.contact_round_id.clone(),
-                request_receipt.clone(),
+                request_receipt.as_ref().clone(),
                 event.event_id.clone(),
                 producer.clone(),
                 absence.digest().map_err(error)?,
@@ -245,7 +247,7 @@ async fn sign_outcome(
         ContactCompletionAction::Reject { request_receipt } => ContactAcceptedOutcome::Reject {
             operation_id,
             reject_acceptance_receipt: RejectAcceptanceReceipt::sign_with(
-                request_receipt.clone(),
+                request_receipt.as_ref().clone(),
                 event.event_id.clone(),
                 producer,
                 accepted_at,

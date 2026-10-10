@@ -276,7 +276,7 @@ pub async fn requeue_dead_letter(
     }
     let peer_url = peer_target.base_url;
 
-    // (2) The deployment egress policy must allow the target today. Requeueing
+    // (2) The deployment egress policy must allow the target today. Requeuing
     // past a still-denying policy is exactly what §4.4 forbids.
     let target = format!("{peer_url}{}", original.delivery.endpoint);
     crate::security::validate_http_url_for_egress(

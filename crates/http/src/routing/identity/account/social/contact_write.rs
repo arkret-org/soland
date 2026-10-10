@@ -2051,8 +2051,8 @@ fn plan_contact_commit<'a>(
                     invite_policy: None,
                 });
                 ContactCompletionAction::Response {
-                    request_receipt: request_receipt.clone(),
-                    absence,
+                    request_receipt: Box::new(request_receipt.clone()),
+                    absence: Box::new(absence),
                 }
             }
             ContactReservationBranch::Reject {
@@ -2092,7 +2092,7 @@ fn plan_contact_commit<'a>(
                     invite_policy: None,
                 });
                 ContactCompletionAction::Reject {
-                    request_receipt: request_receipt.clone(),
+                    request_receipt: Box::new(request_receipt.clone()),
                 }
             }
             ContactReservationBranch::ScopeUpdate {

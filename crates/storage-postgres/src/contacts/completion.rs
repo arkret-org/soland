@@ -483,7 +483,7 @@ async fn persist_result(
             200,
             serde_json::to_value(
                 arkret_models_collaboration::contact_operations::ContactOperationOutcome::Accepted {
-                    outcome: outcome.clone(),
+                    outcome: outcome.as_ref().clone(),
                 },
             )
             .map_err(invalid)?,
