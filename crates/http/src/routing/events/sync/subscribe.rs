@@ -255,17 +255,9 @@ pub(super) async fn account_response(
     // missed.
     let mut rx = state.subscribe_event_notifications();
     if let Some(event_id) = wait_for_event_id.as_deref() {
-        if !wait_for_account_projection_barrier(&state, &mut rx, event_id).await {
-            let current = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
-            let envelope = arkret_wire::problem_details::Problem::from_code(
-                "temporarily_unavailable",
-                "account projection did not reach the requested barrier before timeout",
-            )
-            .with_instance(arkret_identifiers::new_prefixed_uuid7("ak:request:"))
-            .with_extension(
-                "frontier",
-                current.cursor.map(Value::String).unwrap_or(Value::Null),
-            );
+        if let Some(envelope) = account_barrier_refusal(
+            wait_for_account_projection_barrier(&state, &mut rx, event_id).await,
+        ) {
             crate::error::render_problem_envelope(res, StatusCode::SERVICE_UNAVAILABLE, envelope);
             return;
         }
@@ -673,25 +665,44 @@ pub(crate) async fn wait_for_account_projection_barrier(
     state: &AppState,
     rx: &mut tokio::sync::broadcast::Receiver<crate::state::EventNotification>,
     event_id: &str,
-) -> bool {
+) -> soland_services::ServiceResult<bool> {
     let deadline =
         tokio::time::Instant::now() + Duration::from_millis(ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS);
     loop {
         match state.event_queries().projected_event(event_id).await {
-            Ok(Some(_)) => return true,
+            Ok(Some(_)) => return Ok(true),
             Ok(None) => {}
             Err(error) => {
                 tracing::warn!(%error, event_id, "account barrier projection lookup failed");
+                return Err(error);
             }
         }
         tokio::select! {
-            _ = tokio::time::sleep_until(deadline) => return false,
+            _ = tokio::time::sleep_until(deadline) => return Ok(false),
             notification = rx.recv() => match notification {
                 Ok(_) | Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => return false,
+                Err(RecvError::Closed) => return Err(soland_services::ServiceError::Internal(
+                    "account barrier notification source closed".into(),
+                )),
             }
         }
     }
+}
+
+fn account_barrier_refusal(
+    outcome: soland_services::ServiceResult<bool>,
+) -> Option<arkret_wire::Problem> {
+    let detail = match outcome {
+        Ok(true) => return None,
+        // A missing projection alone does not prove a recoverable accepted
+        // prefix. Never build a snapshot or mint any continuation on refusal.
+        Ok(false) => "account barrier coverage could not be proved before timeout",
+        Err(_) => "account barrier coverage is temporarily unavailable",
+    };
+    Some(
+        arkret_wire::Problem::from_code("temporarily_unavailable", detail)
+            .with_instance(arkret_identifiers::new_prefixed_uuid7("ak:request:")),
+    )
 }
 
 fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barrier: bool) {
@@ -801,6 +812,27 @@ fn account_subscribe_scope_key(
 #[cfg(test)]
 mod account_query_tests {
     use super::*;
+
+    #[test]
+    fn barrier_refusal_never_supplies_a_cut_or_ack_material() {
+        assert!(account_barrier_refusal(Ok(true)).is_none());
+        for outcome in [
+            Ok(false),
+            Err(soland_services::ServiceError::Database(
+                "storage unavailable".into(),
+            )),
+        ] {
+            let problem = account_barrier_refusal(outcome).unwrap();
+            assert_eq!(problem.status, 503);
+            assert_eq!(
+                problem.error_code(),
+                Some(arkret_wire::ErrorCode::TemporarilyUnavailable)
+            );
+            assert!(problem.extensions.is_empty());
+            assert!(problem.account_revision_stale_details().unwrap().is_none());
+            assert!(!problem.detail.contains("storage unavailable"));
+        }
+    }
 
     #[test]
     fn unavailable_details_wait_without_hiding_other_progress() {
