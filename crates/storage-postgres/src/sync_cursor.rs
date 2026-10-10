@@ -90,6 +90,8 @@ struct SyncCursorRow {
     binding_subject: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     device_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    session_id: Option<String>,
     #[diesel(sql_type = Text)]
     service_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
@@ -111,6 +113,7 @@ impl From<SyncCursorRow> for SyncCursorRecord {
             handle: row.handle,
             binding_subject: row.binding_subject,
             device_id: row.device_id,
+            session_id: row.session_id,
             service_id: row.service_id,
             filter_digest: row.filter_digest,
             purpose: row.purpose,
@@ -351,7 +354,7 @@ impl SyncCursorStore for PgSyncCursorStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS handle, binding_subject, device_id, service_id, filter_digest, purpose, \
+            "SELECT id AS handle, binding_subject, device_id, session_id, service_id, filter_digest, purpose, \
              positions, target, issued_at_ms, expires_at_ms \
              FROM sync_cursor_handles WHERE id = $1",
         )
@@ -372,17 +375,27 @@ impl SyncCursorStore for PgSyncCursorStore {
             if let Some((summary, global)) = floors {
                 retention::check(conn, Some(summary), Some(global)).await?;
             }
-        // Dedup re-mint refreshes the expiry only; `issued_at_ms` remains
-        // the original handle issuance time.
-        sql_query(
+        // The entire issuance instance is immutable, including its expiry.
+        let written = sql_query(
             "INSERT INTO sync_cursor_handles \
-             (id, binding_subject, device_id, service_id, filter_digest, purpose, positions, target, issued_at_ms, expires_at_ms) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             ON CONFLICT (id) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms",
+             (id, binding_subject, device_id, session_id, service_id, filter_digest, purpose, positions, target, issued_at_ms, expires_at_ms) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id \
+             WHERE sync_cursor_handles.binding_subject IS NOT DISTINCT FROM EXCLUDED.binding_subject \
+               AND sync_cursor_handles.device_id IS NOT DISTINCT FROM EXCLUDED.device_id \
+               AND sync_cursor_handles.session_id IS NOT DISTINCT FROM EXCLUDED.session_id \
+               AND sync_cursor_handles.service_id = EXCLUDED.service_id \
+               AND sync_cursor_handles.filter_digest IS NOT DISTINCT FROM EXCLUDED.filter_digest \
+               AND sync_cursor_handles.purpose = EXCLUDED.purpose \
+               AND sync_cursor_handles.positions IS NOT DISTINCT FROM EXCLUDED.positions \
+               AND sync_cursor_handles.target IS NOT DISTINCT FROM EXCLUDED.target \
+               AND sync_cursor_handles.issued_at_ms = EXCLUDED.issued_at_ms \
+               AND sync_cursor_handles.expires_at_ms = EXCLUDED.expires_at_ms",
         )
         .bind::<Text, _>(&record.handle)
         .bind::<Nullable<Text>, _>(&record.binding_subject)
         .bind::<Nullable<Text>, _>(&record.device_id)
+        .bind::<Nullable<Text>, _>(&record.session_id)
         .bind::<Text, _>(&record.service_id)
         .bind::<Nullable<Text>, _>(&record.filter_digest)
         .bind::<Text, _>(&record.purpose)
@@ -393,6 +406,9 @@ impl SyncCursorStore for PgSyncCursorStore {
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
+            if written != 1 {
+                return Err(PersistenceError::Conflict("cursor issuance is immutable".into()).into());
+            }
             retention::save_cursor(conn, record, floors).await?;
             Ok(())
         }).await.map_err(crate::PgTransactionError::into_persistence)
@@ -419,8 +435,7 @@ impl SyncCursorStore for PgSyncCursorStore {
             .await
             .map_err(PersistenceError::database)?;
         // Opportunistic TTL sweep on every write keeps the ledger bounded by
-        // CURSOR_MAX_TTL_SECONDS — mirrors the in-memory cache's retain-then-
-        // push behaviour.
+        // the stream TTL cap, independently of consumer-side reads.
         sql_query("DELETE FROM sync_cursor_revocations WHERE expires_at <= $1")
             .bind::<Timestamptz, _>(record.revoked_at)
             .execute(&mut *conn)
@@ -428,13 +443,14 @@ impl SyncCursorStore for PgSyncCursorStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO sync_cursor_revocations \
-             (id, cursor_digest, account_id, device_id, scope, reason_code, revoked_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             (id, cursor_digest, account_id, device_id, session_id, scope, reason_code, revoked_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (cursor_digest, account_id, scope) DO NOTHING",
         )
         .bind::<sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.cursor_digest)
         .bind::<Jsonb, _>(serde_json::to_value(&record.account_id).map_err(PersistenceError::database)?)
         .bind::<Nullable<Text>, _>(&record.device_id)
+        .bind::<Nullable<Text>, _>(&record.session_id)
         .bind::<Text, _>(&record.scope)
         .bind::<Text, _>(&record.reason_code)
         .bind::<Timestamptz, _>(record.revoked_at)
@@ -453,7 +469,7 @@ impl SyncCursorStore for PgSyncCursorStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT cursor_digest, account_id, device_id, scope, reason_code, revoked_at, expires_at \
+            "SELECT cursor_digest, account_id, device_id, session_id, scope, reason_code, revoked_at, expires_at \
              FROM sync_cursor_revocations WHERE expires_at > $1 \
              ORDER BY revoked_at ASC",
         )
@@ -472,6 +488,8 @@ struct CursorRevocationRow {
     account_id: Value,
     #[diesel(sql_type = Nullable<Text>)]
     device_id: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    session_id: Option<String>,
     #[diesel(sql_type = Text)]
     scope: String,
     #[diesel(sql_type = Text)]
@@ -488,6 +506,7 @@ impl From<CursorRevocationRow> for CursorRevocation {
             account_id: serde_json::from_value(row.account_id)
                 .expect("stored cursor revocation account_id passed the database constraint"),
             device_id: row.device_id,
+            session_id: row.session_id,
             scope: row.scope,
             reason_code: row.reason_code,
             revoked_at: row.revoked_at,
@@ -658,6 +677,7 @@ mod account_summary_query_tests {
             handle: "immutable-cursor-test".into(),
             binding_subject: None,
             device_id: None,
+            session_id: None,
             service_id: station_id,
             filter_digest: None,
             purpose: "stream".into(),
@@ -668,7 +688,7 @@ mod account_summary_query_tests {
         };
         restarted.upsert(&cursor).await.unwrap();
         cursor.positions = Some(serde_json::json!({"page": 1}));
-        restarted.upsert(&cursor).await.unwrap();
+        assert!(restarted.upsert(&cursor).await.is_err());
         assert_eq!(
             restarted
                 .get(&cursor.handle)

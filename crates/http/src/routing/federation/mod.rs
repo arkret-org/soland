@@ -16,8 +16,6 @@ mod signature;
 pub(crate) mod well_known;
 mod wire;
 
-#[cfg(test)]
-pub(crate) use outbound::peer_url_for_service_id;
 pub(crate) use outbound::{
     configured_peer_targets, resolved_peer_base_url, resolved_peer_route, resolved_peer_target,
 };

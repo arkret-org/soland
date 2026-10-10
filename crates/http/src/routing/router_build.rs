@@ -430,8 +430,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
 
 fn soland_local_router() -> Router {
     Router::new()
-        // Product-local routes still accept protocol wait tokens where they
-        // expose reducer-backed read state.
+        // Reject protocol wait carriers on unregistered local operations.
         .hoop(wait_for_sync_token)
         .push(system::local_router())
         .push(identity::local_router())

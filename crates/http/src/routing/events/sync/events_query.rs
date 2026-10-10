@@ -200,6 +200,10 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
+#[expect(
+    dead_code,
+    reason = "The test fixture retains its complete envelope while each unit case inspects only its relevant fields."
+)]
 struct EventsQueryParts {
     realms: Vec<String>,
     actors: Vec<String>,
@@ -212,6 +216,7 @@ struct EventsQueryParts {
 
 pub(super) fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
     match error {
+        SyncCursorError::Unavailable(message) => crate::app_error!(TemporarilyUnavailable, message),
         SyncCursorError::Expired => crate::app_error!(CursorExpired, "cursor has expired",),
         // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
         // `param_invalid` code with reason `invalid_cursor`.

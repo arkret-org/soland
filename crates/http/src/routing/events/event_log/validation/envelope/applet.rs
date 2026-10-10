@@ -1,5 +1,3 @@
-use super::*;
-
 fn managed_actor_installation_selects_event(
     installation_scope: &arkret_wire::ScopeRef,
     installation_realm_id: &str,

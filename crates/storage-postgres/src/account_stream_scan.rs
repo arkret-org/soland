@@ -1606,7 +1606,10 @@ pub(crate) async fn scan_stream_for_peer(
             Some(floor),
         )
         .await?;
+        // Ascending scans end at the terminal Commit. A bounded reverse scan
+        // can still have authorized older rows beyond this page's limit.
         if let Some(last) = last
+            && matches!(request.direction, arkret_wire::StreamScanDirection::After(_))
             && page
                 .committed_events
                 .iter()

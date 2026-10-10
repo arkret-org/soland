@@ -2,8 +2,8 @@ name: Multisig Drill
 
 # Production-grade backup / restore / rotate drill harness.
 #
-# Wires the three drill scripts/binaries to CI so the multisig persistence
-# and Notary signing-key rotation paths are exercised on every push to main,
+# Exercises accepted RealmCommits and ApprovalSignature audit durability,
+# plus the service signing-key export/import path, on every push to main,
 # weekly via cron, and on demand via workflow_dispatch.
 
 on:
@@ -26,7 +26,9 @@ env:
   PGHOST: 127.0.0.1
   PGPORT: 5432
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/soland_drill
-  SOLAND_PUBLIC_BASE_URL: http://127.0.0.1:8989/
+  # Service registration requires a canonical HTTPS public identity even when
+  # this persistence drill probes its private listener directly over loopback.
+  SOLAND_PUBLIC_BASE_URL: https://soland.drill.example:8989/
   SOLAND_FIRST_PROVISIONING: "true"
   SOLAND_SERVICE_IDENTITY_BUNDLE_DIR: ${{ github.workspace }}/_drill/identity-bundle
   SOLAND_BACKUP_DIR: ${{ github.workspace }}/_drill/backups
@@ -34,14 +36,17 @@ env:
   SOLAND_KEYSTORE_PATH: ${{ github.workspace }}/_drill/keystore/soland.v1
   SOLAND_KEYSTORE_MASTER_KEY_FILE: ${{ github.workspace }}/_drill/secrets/keystore-master-key
   SOLAND_DEVELOPMENT_MODE: "true"
+  # This keystore drill has no Account Authority deployment. Override the
+  # checked-in local development URL instead of discovering an absent peer.
+  SOLAND_ACCOUNT_AUTHORITY_URL: ""
   SOLAND_BIND: 127.0.0.1:8989
   SOLAND_OBJECT_STORAGE_LOCAL_ROOT: ${{ github.workspace }}/_drill/blobs
 
 jobs:
   multisig-drill:
-    name: Multisig backup/restore/rotate drill
+    name: Approval backup/restore and signing-key drill
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     services:
       postgres:
@@ -116,6 +121,11 @@ jobs:
         run: |
           set -euxo pipefail
           cargo build --locked --bin soland --bin soland-keystore-snapshot
+          TARGET_DIRECTORY="$(cargo metadata --locked --format-version 1 --no-deps | jq -er '.target_directory')"
+          test -x "$TARGET_DIRECTORY/debug/soland"
+          test -x "$TARGET_DIRECTORY/debug/soland-keystore-snapshot"
+          echo "SOLAND_DRILL_BIN=$TARGET_DIRECTORY/debug/soland" >> "$GITHUB_ENV"
+          echo "SOLAND_SNAPSHOT_BIN=$TARGET_DIRECTORY/debug/soland-keystore-snapshot" >> "$GITHUB_ENV"
 
       - name: Prepare drill workspace
         run: |
@@ -135,8 +145,7 @@ jobs:
         working-directory: soland
         run: |
           set -euxo pipefail
-          TARGET_DIR="$(cargo metadata --format-version 1 --no-deps | jq -er '.target_directory')"
-          "$TARGET_DIR/debug/soland" --config "$GITHUB_WORKSPACE/_drill/config.json" \
+          "$SOLAND_DRILL_BIN" --config "$GITHUB_WORKSPACE/_drill/config.json" \
             > "$GITHUB_WORKSPACE/_drill/logs/soland-boot.log" 2>&1 &
           SOLAND_PID=$!
           READY=false
@@ -156,7 +165,8 @@ jobs:
             wait "$SOLAND_PID" 2>/dev/null || true
             exit 1
           fi
-          psql "$DATABASE_URL" -c "\d multisig_pending"
+          psql -v ON_ERROR_STOP=1 "$DATABASE_URL" \
+            -c "\d realm_commits" -c "\d event_approval_private_audit"
           kill "$SOLAND_PID" || true
           wait "$SOLAND_PID" 2>/dev/null || true
           mapfile -d '' BUNDLES < <(find "$SOLAND_SERVICE_IDENTITY_BUNDLE_DIR" -maxdepth 1 -type f -name '*.json' -print0)
@@ -166,35 +176,54 @@ jobs:
           fi
           echo "SOLAND_SERVICE_IDENTITY_BUNDLE=${BUNDLES[0]}" >> "$GITHUB_ENV"
 
-      - name: Seed multisig_pending fixture row
+      - name: Admit actual two-of-three approval fixture
+        working-directory: soland
         run: |
           set -euxo pipefail
-          psql "$DATABASE_URL" <<'SQL'
-          INSERT INTO multisig_pending(
-              id, realm_id, threshold_k, threshold_n,
-              members, canonical_b64, partials, claim_seq
-          ) VALUES (
-              'ak.seal:0196419b-0000-7000-8000-000000000a01',
-              '0196419b-0000-7000-8000-000000000000',
-              2, 3,
-              ARRAY['did:web:alice.example','did:web:bob.example','did:web:carol.example'],
-              'Y2hlY2sgY2Fub25pY2FsX2I2NA==',
-              jsonb_build_object(
-                'did:web:alice.example', jsonb_build_object(
-                    'signature_b64', 'YWxpY2Utc2lnbmF0dXJl',
-                    'kid', 'did:web:alice.example#seal-key',
-                    'submitted_at', now()::text
-                ),
-                'did:web:bob.example', jsonb_build_object(
-                    'signature_b64', 'Ym9iLXNpZ25hdHVyZQ==',
-                    'kid', 'did:web:bob.example#seal-key',
-                    'submitted_at', now()::text
-                )
-              ),
-              0
-          );
+          # This existing real-PG case checks signed historical approval
+          # methods, the roster threshold, expiry, exact replay and nonce
+          # reuse. Its accepted rows are the backup input; no SQL fabricates
+          # an accepted signature or reintroduces the retired pending table.
+          SOLAND_TEST_DATABASE_URL="$DATABASE_URL" \
+            cargo test --locked -p soland-storage-postgres \
+              --test strand_position_authority \
+              grant_approval_cases::grant_approval_roster_does_not_use_received_votes_as_the_threshold_denominator \
+              -- --exact --nocapture --test-threads=1
+          # This isolated CI service starts empty, and the exact case leases
+          # one database. Discover the actual lease rather than duplicating
+          # Rust's migration fingerprint or assuming a Cargo output path.
+          mapfile -t FIXTURE_DATABASES < <(psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -tA -c \
+            "SELECT datname FROM pg_database WHERE datname ~ '^soland_drill_s[0-9a-f]{8}_slot[0-9]{2}$' ORDER BY datname")
+          if [ "${#FIXTURE_DATABASES[@]}" -ne 1 ]; then
+            echo "expected exactly one owned approval fixture database" >&2
+            exit 1
+          fi
+          FIXTURE_URL="postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${FIXTURE_DATABASES[0]}"
+          psql -v ON_ERROR_STOP=1 "$FIXTURE_URL" <<'SQL'
+          DO $$
+          BEGIN
+            IF (SELECT count(*) FROM event_approval_private_audit) <> 2 THEN
+              RAISE EXCEPTION 'expected two genuinely admitted approval signatures';
+            END IF;
+            IF (SELECT count(*) FROM event_approval_private_audit a
+                JOIN realm_commits c ON c.commit_id = a.accepted_commit_id
+                JOIN canonical_events e ON e.pk = c.event_pk
+                WHERE a.event_id = e.envelope->>'event_id'
+                  AND a.realm_id = c.realm_id
+                  AND a.evidence->'input'->>'nonce' = a.nonce
+                  AND a.evidence->'input'->>'approver_did' = a.approver_did
+                  AND a.evidence->'input'->>'request_canonical_digest' = a.event_digest) <> 2 THEN
+              RAISE EXCEPTION 'approval evidence must name the actual accepted Event and RealmCommit';
+            END IF;
+          END $$;
           SQL
-          psql "$DATABASE_URL" -c "SELECT id AS seal_id, threshold_k, threshold_n FROM multisig_pending;"
+          for TABLE in canonical_events realm_commits event_approval_private_audit; do
+            psql -v ON_ERROR_STOP=1 "$FIXTURE_URL" -tA -c \
+              "SELECT row_to_json(t) FROM public.${TABLE} t ORDER BY row_to_json(t)::text" \
+              > "$GITHUB_WORKSPACE/_drill/${TABLE}.before.jsonl"
+            test -s "$GITHUB_WORKSPACE/_drill/${TABLE}.before.jsonl"
+          done
+          echo "DATABASE_URL=$FIXTURE_URL" >> "$GITHUB_ENV"
 
       - name: Run backup-drill.sh
         working-directory: soland
@@ -214,57 +243,63 @@ jobs:
           TAR="${TARBALLS[0]}"
           echo "tarball=$TAR"
           tar -tzf "$TAR" | sort > _drill/tar-listing.txt
-          for expected in manifest.json soland-database.dump service-identity-bundle.json keystore.json multisig_pending.jsonl; do
+          for expected in manifest.json soland-database.dump service-identity-bundle.json keystore.json; do
             grep -Fxq "$expected" _drill/tar-listing.txt \
               || { echo "tarball missing $expected" >&2; cat _drill/tar-listing.txt; exit 1; }
           done
           echo "DRILL_TARBALL=$TAR" >> "$GITHUB_ENV"
 
-      - name: Truncate multisig_pending to prove restore re-populates
+      - name: Remove accepted fixture rows to prove restore re-populates
         run: |
           set -euxo pipefail
-          psql "$DATABASE_URL" -c "TRUNCATE TABLE multisig_pending;"
-          psql "$DATABASE_URL" -tA -c "SELECT count(*) FROM multisig_pending;" \
-            | grep -Fxq "0" \
-            || { echo "TRUNCATE did not zero out the table" >&2; exit 1; }
+          psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -c \
+            "TRUNCATE TABLE event_approval_private_audit, realm_commits, canonical_events RESTART IDENTITY CASCADE;"
+          for TABLE in canonical_events realm_commits event_approval_private_audit; do
+            psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -tA -c "SELECT count(*) FROM public.${TABLE}" \
+              | grep -Fxq "0" \
+              || { echo "TRUNCATE did not zero out $TABLE" >&2; exit 1; }
+          done
 
       - name: Run restore-drill.sh
         working-directory: soland
         run: |
           set -euxo pipefail
           bash scripts/restore-drill.sh "$DRILL_TARBALL" | tee "$GITHUB_WORKSPACE/_drill/logs/restore-drill.log"
-          grep -E "RESTORE PASS  rows_total=1 rows_ok=1 rows_bad=0" \
+          grep -Fx "[restore-drill] RESTORE PASS" \
             "$GITHUB_WORKSPACE/_drill/logs/restore-drill.log"
 
-      - name: Confirm restore re-populated multisig_pending
+      - name: Verify complete accepted Events, Commits and approvals after restore
         run: |
           set -euxo pipefail
-          ROWS="$(psql "$DATABASE_URL" -tA -c 'SELECT count(*) FROM multisig_pending;')"
-          if [ "$ROWS" != "1" ]; then
-            echo "post-restore row count=$ROWS (expected 1)" >&2
-            exit 1
-          fi
+          for TABLE in canonical_events realm_commits event_approval_private_audit; do
+            psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -tA -c \
+              "SELECT row_to_json(t) FROM public.${TABLE} t ORDER BY row_to_json(t)::text" \
+              > "$GITHUB_WORKSPACE/_drill/${TABLE}.after.jsonl"
+            cmp "$GITHUB_WORKSPACE/_drill/${TABLE}.before.jsonl" \
+              "$GITHUB_WORKSPACE/_drill/${TABLE}.after.jsonl"
+          done
+          echo "[approval-drill] complete accepted rows restored byte-for-byte"
 
       - name: KeyStore snapshot export/import roundtrip
         working-directory: soland
         run: |
           set -euxo pipefail
-          mkdir -p _drill
-          ./target/debug/soland-keystore-snapshot \
+          mkdir -p "$GITHUB_WORKSPACE/_drill"
+          "$SOLAND_SNAPSHOT_BIN" \
               --export-only \
               --identity-bundle "$SOLAND_SERVICE_IDENTITY_BUNDLE" \
-              --output _drill/seed-in.json
-          ./target/debug/soland-keystore-snapshot \
+              --output "$GITHUB_WORKSPACE/_drill/seed-in.json"
+          "$SOLAND_SNAPSHOT_BIN" \
               --import-only \
               --identity-bundle "$SOLAND_SERVICE_IDENTITY_BUNDLE" \
-              --input _drill/seed-in.json
-          ./target/debug/soland-keystore-snapshot \
+              --input "$GITHUB_WORKSPACE/_drill/seed-in.json"
+          "$SOLAND_SNAPSHOT_BIN" \
               --export-only \
               --identity-bundle "$SOLAND_SERVICE_IDENTITY_BUNDLE" \
-              --output _drill/seed-out.json
-          jq -S '{schema, service_id, key_id, seed_b64}' _drill/seed-in.json > _drill/seed-in.canonical.json
-          jq -S '{schema, service_id, key_id, seed_b64}' _drill/seed-out.json > _drill/seed-out.canonical.json
-          cmp _drill/seed-in.canonical.json _drill/seed-out.canonical.json
+              --output "$GITHUB_WORKSPACE/_drill/seed-out.json"
+          jq -S '{schema, service_id, key_id, seed_b64}' "$GITHUB_WORKSPACE/_drill/seed-in.json" > "$GITHUB_WORKSPACE/_drill/seed-in.canonical.json"
+          jq -S '{schema, service_id, key_id, seed_b64}' "$GITHUB_WORKSPACE/_drill/seed-out.json" > "$GITHUB_WORKSPACE/_drill/seed-out.canonical.json"
+          cmp "$GITHUB_WORKSPACE/_drill/seed-in.canonical.json" "$GITHUB_WORKSPACE/_drill/seed-out.canonical.json"
           echo "[rotate-drill] CI export/import roundtrip OK"
 
       - name: Capture postgres logs (always)
@@ -287,5 +322,7 @@ jobs:
             _drill/tar-listing.txt
             _drill/seed-in.json
             _drill/seed-out.json
+            _drill/*.before.jsonl
+            _drill/*.after.jsonl
           if-no-files-found: warn
           retention-days: 14

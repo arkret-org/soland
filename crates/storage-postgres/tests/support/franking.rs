@@ -1,28 +1,33 @@
-//! Accepted encrypted targets, real signatures and durable proof retries on PostgreSQL.
-#[path = "../../test-support/src/device_authorization_history.rs"]
-#[allow(dead_code)]
-mod device_authorization_history;
-#[path = "support/human_profile.rs"]
-#[expect(
-    dead_code,
-    reason = "This integration binary uses only its subset of the shared Human fixture."
-)]
-mod human_profile;
-#[path = "support/ordinary_realm.rs"]
-#[expect(
-    dead_code,
-    reason = "This integration binary uses only its subset of the shared Realm fixture."
-)]
-mod ordinary_realm;
-
+//! Actual encrypted receipt prerequisites for the PostgreSQL atomic contracts.
 use std::sync::Arc;
 
 use arkret_wire::{ActorId, EventKind, ScopeRef};
 use ed25519_dalek::{Signer as _, SigningKey};
 use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::{
-    PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPersistenceStore,
+    PgAuthorityCommitStore, PgEventCommitUnitOfWork, PgPersistenceStore, PgPool,
 };
+
+use super::ordinary_realm::human_profile;
+use super::{device_authorization_history, ordinary_realm};
+
+pub struct FrankingFixture {
+    pub accepted_target: soland_storage::EventCommitRequest,
+    pub prefix: soland_storage::EventCommitRequest,
+    pub proof: soland_storage::EventCommitRequest,
+    pub proof_payload: arkret_models_collaboration::events_payloads::moderation::FrankingProof,
+    pub service_signing_key: SigningKey,
+}
+
+/// Accept prerequisites and the target, then durably fix the exact first proof.
+/// The later Message prefix and proof are prepared but remain uncommitted.
+pub async fn prepare(pool: &PgPool, label: &str) -> FrankingFixture {
+    let pool = pool.clone();
+    let label = label.to_owned();
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move { Box::pin(prepare_inner(&pool, &label)).await });
+    tasks.join_next().await.unwrap().unwrap()
+}
 
 fn prepared(
     job: &soland_storage::PendingFrankingProof,
@@ -75,17 +80,21 @@ fn prepared(
     }
 }
 
-#[tokio::test]
-async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exact_retry() {
+async fn prepare_inner(pool: &PgPool, label: &str) -> FrankingFixture {
     use arkret_models_crypto::{
         EventContentPreEncryptionHeader, EventContentRoutingContext, MlsGovernanceBindingPayload,
     };
     use arkret_wire::EncryptedPayloadScheme;
-    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
-    let pool = database.pool();
-    let label = uuid::Uuid::now_v7().to_string();
-    let account = human_profile::admit(&pool, &ordinary_realm::station(), &label).await;
-    let fixture = human_profile::fixture(&ordinary_realm::station(), &label);
+    // Scenario labels also seed the Realm and may contain colon separators;
+    // the principal's local ID must use the closed inception grammar.
+    let human_label = format!("franking-{}", &arkret_canonical::sha256_hex(label)[..16]);
+    let account = Box::pin(human_profile::admit(
+        pool,
+        &ordinary_realm::station(),
+        &human_label,
+    ))
+    .await;
+    let fixture = human_profile::fixture(&ordinary_realm::station(), &human_label);
     assert_eq!(account, fixture.history.account);
     let actor = ActorId::account(account.clone());
     let did = human_profile::station_did(&ordinary_realm::station());
@@ -99,7 +108,7 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
     );
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let unit = ordinary_realm::bootstrap_unit_for_account(&label, &account, &did);
+    let unit = ordinary_realm::bootstrap_unit_for_account(label, &account, &did);
     let at = unit.transactions[0].commit.committed_at;
     let mut submission = unit.submission.clone();
     for submitted in &mut submission.events {
@@ -254,10 +263,10 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
         .unwrap()
         .to_envelope()
         .unwrap();
-    let received_at = at + chrono::TimeDelta::seconds(5);
+    let received_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let target = seal(ordinary_realm::event_for_actor(
         EventKind::MessageCreate,
-        scope,
+        scope.clone(),
         actor.clone(),
         serde_json::json!({
             "strand_id":arkret_wire::StrandId::from_event_id(&strand.event_id),"track_name":"discussion","encrypted_content":encrypted
@@ -277,7 +286,7 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
         .unwrap();
     request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(target.clone()));
     uow.commit_event(request.clone()).await.unwrap();
-    uow.commit_event(request.clone()).await.unwrap();
+    let accepted_target = request;
     let jobs = store
         .pending_franking_proofs(&ordinary_realm::station())
         .await
@@ -287,79 +296,62 @@ async fn accepted_encrypted_receipt_fixes_one_real_proof_across_restart_and_exac
     assert_eq!(job.received_at, received_at);
     assert!(target.created_at < job.received_at);
     let candidate = prepared(job, 1, method.clone(), &key);
-    let mut wrong_controller = prepared(job, 2, method.clone(), &key);
-    let mut wrong: arkret_models_collaboration::events_payloads::moderation::FrankingProof =
-        serde_json::from_value(serde_json::to_value(&wrong_controller.event.payload).unwrap())
-            .unwrap();
-    wrong.verification_method =
-        arkret_wire::DidUrl::new("did:web:other-controller.example#authority".to_owned()).unwrap();
-    wrong.signature = arkret_canonical::base64url_encode(
-        key.sign(&wrong.canonical_signing_bytes().unwrap())
-            .to_bytes(),
-    );
-    wrong_controller.event.payload =
-        serde_json::from_value(serde_json::to_value(&wrong).unwrap()).unwrap();
-    // Both signatures are genuine; the method belongs to another controller.
-    wrong_controller.event = device_authorization_history::sign_event(
-        wrong_controller.event,
-        wrong.verification_method,
-        key.to_bytes(),
-    );
-    assert!(store.fix_franking_proof(&wrong_controller).await.is_err());
     let fixed = store.fix_franking_proof(&candidate).await.unwrap();
-    let reopened = PgAuthorityCommitStore { pool: pool.clone() };
+    let proof_payload =
+        serde_json::from_value(serde_json::to_value(&fixed.payload).unwrap()).unwrap();
+    let prefix_at = received_at + chrono::TimeDelta::microseconds(1);
+    let header = EventContentPreEncryptionHeader::reconstruct(
+        "1.0",
+        "application/arkret-content+json",
+        EncryptedPayloadScheme::MlsRfc9420,
+        scope.clone(),
+        EventKind::MessageCreate.as_str(),
+        0,
+        genesis.event_id.clone(),
+        group.local_content_sender_domain().unwrap(),
+        EventContentRoutingContext::None,
+    )
+    .unwrap();
+    let encrypted = group
+        .encrypt_payload(
+            header,
+            b"{\"kind\":\"ak.content.text\",\"body\":\"atomic prefix\",\"format\":\"plain\"}",
+        )
+        .unwrap()
+        .to_envelope()
+        .unwrap();
+    let prefix_event = seal(ordinary_realm::event_for_actor(
+        EventKind::MessageCreate,
+        scope,
+        actor,
+        serde_json::json!({"strand_id":arkret_wire::StrandId::from_event_id(&strand.event_id),
+            "track_name":"discussion","encrypted_content":encrypted}),
+        prefix_at,
+    ));
+    let mut prefix = ordinary_realm::request_for_event(
+        &accepted_target.authority_commit,
+        prefix_event.clone(),
+        prefix_at,
+    );
+    prefix.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(prefix_event));
+    let prefix = Box::pin(ordinary_realm::source_request(pool, prefix)).await;
+    let mut proof =
+        ordinary_realm::request_for_event(&prefix.authority_commit, fixed.clone(), prefix_at);
+    proof.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(fixed.clone()));
+    let proof = Box::pin(ordinary_realm::source_request(pool, proof)).await;
     assert_eq!(
-        reopened
+        store
             .pending_franking_proofs(&ordinary_realm::station())
             .await
             .unwrap()[0]
             .prepared_event,
-        Some(fixed.clone())
+        Some(fixed)
     );
-    assert_eq!(
-        reopened
-            .fix_franking_proof(&prepared(job, 3, method.clone(), &key))
-            .await
-            .unwrap(),
-        fixed
-    );
-    let mut proof_request =
-        ordinary_realm::request_for_event(&request.authority_commit, fixed.clone(), received_at);
-    proof_request.authority_commit = app
-        .prepare_self_event_transaction(
-            &fixed,
-            &ordinary_realm::station(),
-            method,
-            &key,
-            received_at,
-        )
-        .await
-        .unwrap();
-    proof_request.realm_fanout_source =
-        Some(arkret_wire::EventAdmissionSubmission::new(fixed.clone()));
-    uow.commit_event(proof_request.clone()).await.unwrap();
-    uow.commit_event(proof_request.clone()).await.unwrap();
-    assert!(
-        reopened
-            .pending_franking_proofs(&ordinary_realm::station())
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    let accepted = reopened
-        .committed_event(&fixed.event_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(accepted.event, fixed);
-    assert_eq!(accepted.commit, proof_request.authority_commit.commit);
-    arkret_signatures::detached_object::verify_detached_object_signature(
-        &accepted.commit.signature,
-        &arkret_canonical::canonical::unsigned_value(&accepted.commit, &["signature"]).unwrap(),
-        arkret_wire::DetachedSignatureContext::RealmCommit,
-        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
-            bytes: key.verifying_key().as_bytes().to_vec(),
-        },
-    )
-    .unwrap();
+    FrankingFixture {
+        accepted_target,
+        prefix,
+        proof,
+        proof_payload,
+        service_signing_key: key,
+    }
 }

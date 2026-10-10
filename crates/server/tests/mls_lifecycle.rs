@@ -107,6 +107,11 @@ impl Member {
             .admit_into(persistence)
             .await
             .expect("durable PCR genesis");
+        ordinary_realm::human_profile::register_fixture_signer(
+            &fixture.history.account,
+            fixture.history.device_verification_method.clone(),
+            fixture.history.founding_device_signing_seed,
+        );
         let app = service(state.clone());
         let mut registration = TestClient::post("http://server/_soland/gate/account/project")
             .add_header(
@@ -144,7 +149,15 @@ impl Member {
             account: fixture.history.account.clone(),
             device: fixture.history.founding_device_id.clone(),
             method: fixture.history.device_verification_method.clone(),
-            authorize_event_id: fixture.history.events[1].event_id.clone(),
+            authorize_event_id: fixture
+                .unit
+                .transactions
+                .iter()
+                .find(|transaction| transaction.event.kind == EventKind::DeviceAuthorize)
+                .expect("the accepted founding Device authorization")
+                .event
+                .event_id
+                .clone(),
             seed: fixture.history.founding_device_signing_seed,
             key: SigningKey::from_bytes(&fixture.history.founding_device_signing_seed),
             token: body["session_credential"]
@@ -303,6 +316,23 @@ fn commit_signature(
     }
 }
 
+fn seal_fixture_commit(state: &AppState, commit: &mut arkret_wire::RealmCommit) {
+    let identity = soland_test_support::fixture_service_identity(state.config());
+    let key = SigningKey::from_bytes(&soland_test_support::fixture_signing_seed(
+        state.config(),
+        &identity,
+    ));
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &arkret_canonical::canonical::unsigned_value(commit, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_did())).unwrap(),
+        commit.committed_at,
+        &key,
+    )
+    .unwrap();
+    commit.verify_commit_id_matches_content().unwrap();
+}
+
 fn bootstrap(
     founder: &Member,
     station: &arkret_wire::DidCoreId,
@@ -424,15 +454,18 @@ fn bootstrap(
 
 /// Commit one Event after `previous` through the authority unit of work.
 async fn commit_next(
-    uow: &PgEventCommitUnitOfWork,
+    pool: &PgPool,
     previous: &AuthorityCommitTransaction,
-    station_did: &arkret_wire::Did,
+    state: &AppState,
     kind: EventKind,
     actor: &Member,
-    payload: Value,
+    mut payload: Value,
     mls_state: Option<MlsStateInstallation>,
 ) -> EventCommitRequest {
     let label = kind.as_str().to_owned();
+    if kind == EventKind::MlsGenesis {
+        payload["created_at"] = serde_json::to_value(previous.commit.committed_at).unwrap();
+    }
     let mut request = ordinary_realm::next_request_for_actor(
         previous,
         kind,
@@ -441,13 +474,18 @@ async fn commit_next(
         previous.commit.committed_at,
     );
     actor.sign_request(&mut request);
-    request.authority_commit.commit.signature =
-        commit_signature(station_did, request.authority_commit.commit.committed_at);
+    request.authority_commit.commit.signature = commit_signature(
+        &state.service_did(),
+        request.authority_commit.commit.committed_at,
+    );
     request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
         request.authority_commit.event.clone(),
     ));
     request.authority_commit.mls_state = mls_state;
-    uow.commit_event(request.clone())
+    let mut request = Box::pin(ordinary_realm::source_request(pool, request)).await;
+    seal_fixture_commit(state, &mut request.authority_commit.commit);
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(request.clone())
         .await
         .unwrap_or_else(|error| panic!("commit {label}: {error}"));
     request
@@ -522,32 +560,15 @@ async fn station_state(pool: &PgPool) -> (AppState, Arc<dyn PersistenceStore>) {
     (state, persistence)
 }
 
-/// The Station router is deep; run the body on a large stack.
-fn run_on_deep_stack<F>(name: &'static str, body: impl FnOnce() -> F + Send + 'static)
-where
-    F: std::future::Future<Output = ()>,
-{
-    std::thread::Builder::new()
-        .name(name.to_owned())
-        .stack_size(64 * 1024 * 1024)
-        .spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("test runtime")
-                .block_on(body());
-        })
-        .expect("deep-stack test thread")
-        .join()
-        .expect("test body");
+/// Finish native future construction before polling the fixture on the default test stack.
+#[inline(never)]
+fn heap_future<F: std::future::Future>(make: impl FnOnce() -> F) -> std::pin::Pin<Box<F>> {
+    Box::pin(make())
 }
 
-#[test]
-fn mls_lifecycle_runs_over_http_formal_units_and_a_restart() {
-    run_on_deep_stack(
-        "mls_lifecycle_runs_over_http_formal_units_and_a_restart",
-        mls_lifecycle_body,
-    );
+#[tokio::test]
+async fn mls_lifecycle_runs_over_http_formal_units_and_a_restart() {
+    heap_future(mls_lifecycle_body).await;
 }
 
 async fn mls_lifecycle_body() {
@@ -560,7 +581,14 @@ async fn mls_lifecycle_body() {
 
     // The public Realm Alice founds on this Station, and Bob's own join.
     let station_did = state.service_did();
-    let unit = bootstrap(&alice, &station, &station_did);
+    let mut unit = Box::pin(ordinary_realm::source_bootstrap(
+        &pool,
+        bootstrap(&alice, &station, &station_did),
+    ))
+    .await;
+    for transaction in &mut unit.transactions {
+        seal_fixture_commit(&state, &mut transaction.commit);
+    }
     unit.validate().expect("bootstrap unit shape");
     PgAuthorityCommitStore { pool: pool.clone() }
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
@@ -573,9 +601,9 @@ async fn mls_lifecycle_body() {
     let group_id = scope.canonical_mls_group_id().expect("Realm MLS group id");
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let join = commit_next(
-        &uow,
+        &pool,
         unit.transactions.last().unwrap(),
-        &station_did,
+        &state,
         EventKind::MemberState,
         &bob,
         MembershipPayload::join(realm_id.clone(), bob.actor.clone(), "MLS lifecycle member")
@@ -717,9 +745,9 @@ async fn mls_lifecycle_body() {
         .expect("Genesis public state");
     let genesis_state = tracker.export_state().unwrap();
     let genesis = commit_next(
-        &uow,
+        &pool,
         &join.authority_commit,
-        &station_did,
+        &state,
         EventKind::MlsGenesis,
         &alice,
         json!({
@@ -743,12 +771,17 @@ async fn mls_lifecycle_body() {
             base: None,
             epoch: 0,
             public_state: genesis_state.clone(),
-            member_principals: Default::default(),
+            member_principals: arkret_mls::validate_public_group_state(
+                &group_info, &tree, group_id.as_str(), 0,
+            ).unwrap().into_iter().map(|leaf| leaf.actor_id).collect(),
             consumed_proposals: Vec::new(),
             public_blobs: Vec::new(),
         }),
     )
     .await;
+    alice_group
+        .install_local_creator_binding(alice.actor.clone(), Some(alice.authorize_event_id.clone()))
+        .unwrap();
     let genesis_ref = genesis.authority_commit.event.event_id.clone();
 
     // The inline Add Commit whose Welcome names the HTTP claim's ledger row.
@@ -802,7 +835,7 @@ async fn mls_lifecycle_body() {
         commit_request.authority_commit.commit.committed_at,
     );
     let commit_event = commit_request.authority_commit.event.clone();
-    let welcome = MlsWelcomeDelivery {
+    let mut welcome = MlsWelcomeDelivery {
         welcome_id: arkret_wire::MlsWelcomeDeliveryId::new(format!(
             "ak:mls_welcome_delivery:{}",
             uuid::Uuid::now_v7()
@@ -831,6 +864,14 @@ async fn mls_lifecycle_body() {
             sig: arkret_wire::Base64UrlString::new("c2lnbmF0dXJl".to_owned()).unwrap(),
         },
     };
+    welcome.producer_proof = arkret_signatures::detached_object::sign_detached_object(
+        &arkret_canonical::canonical::unsigned_value(&welcome, &["producer_proof"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::MlsWelcomeDelivery,
+        alice.method.clone(),
+        commit_request.authority_commit.commit.committed_at,
+        &alice.key,
+    )
+    .unwrap();
     commit_request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(
         commit_event.clone(),
     ));
@@ -867,6 +908,8 @@ async fn mls_lifecycle_body() {
         roster_witness: None,
     }];
     commit_request.authority_commit.recipient_queue_capacity = 16;
+    let mut commit_request = Box::pin(ordinary_realm::source_request(&pool, commit_request)).await;
+    seal_fixture_commit(&state, &mut commit_request.authority_commit.commit);
     uow.commit_event(commit_request.clone())
         .await
         .expect("the Add Commit and its Welcome commit together");

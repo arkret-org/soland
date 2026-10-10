@@ -278,6 +278,7 @@ async fn widget_inventory_real_install_checks_scope_consent_and_three_revoke_mod
         // Strand object must use the exact Event creation time; finalize both
         // before recomputing the real Device proof and EventId below.
         event.created_at = at;
+        event.payload.get_mut("object").unwrap()["created_at"] = serde_json::to_value(at).unwrap();
         event.authorization_ref =
             Some(arkret_wire::AuthorizationRef::new(gate.authorization_ref.to_string()).unwrap());
         event = fixture.sign_admin(event);

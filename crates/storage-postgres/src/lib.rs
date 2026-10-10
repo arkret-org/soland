@@ -68,6 +68,10 @@ mod contacts;
 pub use consent_request_quarantine::PgConsentRequestQuarantineStore;
 #[cfg(test)]
 #[path = "../../test-support/src/device_authorization_history.rs"]
+#[expect(
+    dead_code,
+    reason = "The unit tests use only their subset of the shared device history fixture."
+)]
 mod device_authorization_history;
 mod device_revocations;
 mod devices;

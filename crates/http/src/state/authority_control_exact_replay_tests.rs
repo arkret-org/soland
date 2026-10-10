@@ -4,7 +4,7 @@
 //! authentication itself is outside this selector's proof scope.
 use arkret_wire::{
     ActorId, AuthorityCommitStatus, AuthoritySubmitOutcome, Did, DidUrl, Event,
-    EventAdmissionSubmission, EventKind, RealmCommit, RealmId, ScopeRef,
+    EventAdmissionSubmission, EventKind, RealmCommit, ScopeRef,
 };
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::SigningKey;

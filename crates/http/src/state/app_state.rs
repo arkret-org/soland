@@ -157,11 +157,6 @@ pub struct AppState {
     /// future admin policy cell all speak the same wire vocabulary.
     account_registration_policy: Arc<Mutex<AccountRegistrationPolicy>>,
     runtime_guards: RuntimeGuardService,
-    /// Domain-separated HMAC key for the deterministic stateful sync-cursor
-    /// handle (`routing/events/sync.rs::derive_cursor_handle`). The handle
-    /// binding rows themselves live in the durable
-    /// `persistence.sync_cursors()` table, so a restart no longer invalidates
-    /// every client's resume cursor.
     /// Domain-separated root key for service-scoped push target pseudonyms.
     /// Per-epoch keys are derived from this root inside the push routing
     /// module; only public epoch labels are exposed on describe.
@@ -1078,19 +1073,6 @@ impl AppState {
             Arc::new(ArcSwap::from_pointee(SigningKey::from_bytes(&signing_seed)));
         let notary_signing_key_origin = Arc::new(Mutex::new(notary_signing_key_origin));
 
-        // Domain-separated key for the deterministic sync-cursor handle HMAC
-        // (routing/events/sync.rs `derive_cursor_handle`). Derived from the
-        // notary seed so it inherits the seed's stability story: stable in
-        // development_mode / with a configured seed, per-boot otherwise. A
-        // changed key only changes which handle an unchanged frontier maps
-        // to — persisted rows still resolve by handle, so old cursors stay
-        // valid across restarts either way.
-        let sync_cursor_hmac_key: [u8; 32] = {
-            let mut hasher = Sha256::new();
-            hasher.update(b"soland:sync-cursor-handle:v1:");
-            hasher.update(signing_seed);
-            hasher.finalize().into()
-        };
         let push_target_hmac_key: [u8; 32] = {
             let mut hasher = Sha256::new();
             hasher.update(b"soland:push-target-id:v1:");
@@ -1136,11 +1118,7 @@ impl AppState {
             governance,
             sync,
             jobs,
-        } = persistence.operational_services(
-            settings_persistence,
-            runtime_health,
-            sync_cursor_hmac_key,
-        );
+        } = persistence.operational_services(settings_persistence, runtime_health);
         let service_route_store: Arc<dyn soland_storage::ServiceRouteStore> =
             Arc::new(persistence.clone());
         let service_route_resolver = Arc::new(ServiceRouteResolver::new(
@@ -1573,7 +1551,6 @@ impl AppState {
     /// conversion. Safe to call in memory mode — every store read returns an
     /// empty snapshot, so this is a no-op there.
     pub async fn hydrate(&self) -> soland_services::ServiceResult<()> {
-        let now = chrono::Utc::now();
         // Overlay the persisted per-key operational settings on top of the
         // boot-config seed. Only overridden keys have rows; everything else
         // keeps its env default. Per-key decode failures are logged and
@@ -1677,18 +1654,6 @@ impl AppState {
         self.identities.hydrate_account_lifecycles().await?;
 
         self.governance.hydrate_projections().await?;
-        // Hydrate the cursor-revocation cache from the durable
-        // `sync_cursor_revocations` ledger so a revoked cursor stays revoked
-        // across restarts (spec `client-sync.md` cursor-revoke semantics —
-        // a revoked cursor MUST keep returning `cursor_revoked` and MUST NOT
-        // advance to-device ack / resume / wait-for / dropped-recovery
-        // state). Built off-lock first; merge under a short critical section.
-        match self.sync().active_cursor_revocations(now).await {
-            Ok(revocations) => self.sync().replace_cursor_revocations(revocations),
-            Err(error) => {
-                tracing::warn!(%error, "failed to hydrate cursor revocations from persistence store");
-            }
-        }
         Ok(())
     }
 

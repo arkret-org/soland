@@ -70,6 +70,7 @@ async fn votes_keep_canonical_history_without_message_rows_and_commit_position_w
         definition(&discussion),
         at,
     );
+    let poll = ordinary_realm::source_request(&pool, poll).await;
     uow.commit_event(poll.clone()).await.unwrap();
     let first = ordinary_realm::next_request(
         &poll.authority_commit,
@@ -78,6 +79,7 @@ async fn votes_keep_canonical_history_without_message_rows_and_commit_position_w
         response(&discussion, &poll, json!(["a"])),
         at + chrono::Duration::seconds(2),
     );
+    let first = ordinary_realm::source_request(&pool, first).await;
     uow.commit_event(first.clone()).await.unwrap();
     let mut payload = response(&discussion, &poll, json!(["b"]));
     payload["poll_response_heads"] = json!([{"poll_event_ref":poll.authority_commit.event.event_id,
@@ -96,6 +98,9 @@ async fn votes_keep_canonical_history_without_message_rows_and_commit_position_w
         second_event,
         at + chrono::Duration::seconds(3),
     );
+    // `reseal` updates the content address using a structural proof. Restore
+    // the accepted device signature only after the final signed body is set.
+    let second = ordinary_realm::source_request(&pool, second).await;
     uow.commit_event(second.clone()).await.unwrap();
     let before = footprint(&pool).await;
     uow.commit_event(first.clone()).await.unwrap();
@@ -145,6 +150,7 @@ async fn semantic_refusals_and_poll_projection_fault_roll_back_the_whole_commit(
         definition(&discussion),
         at,
     );
+    let poll = ordinary_realm::source_request(&pool, poll).await;
     uow.commit_event(poll.clone()).await.unwrap();
     let before = footprint(&pool).await;
     let mut wrong_head = response(&discussion, &poll, json!(["a"]));
@@ -167,6 +173,7 @@ async fn semantic_refusals_and_poll_projection_fault_roll_back_the_whole_commit(
             payload,
             at + chrono::Duration::seconds(1),
         );
+        let request = ordinary_realm::source_request(&pool, request).await;
         let error = uow.commit_event(request).await.unwrap_err();
         assert!(
             matches!(error, soland_storage::PersistenceError::Conflict(_)),
@@ -188,6 +195,7 @@ async fn semantic_refusals_and_poll_projection_fault_roll_back_the_whole_commit(
         response(&discussion, &poll, json!(["a"])),
         at + chrono::Duration::seconds(2),
     );
+    let request = ordinary_realm::source_request(&pool, request).await;
     let result = uow.commit_event(request.clone()).await;
     let mut conn = pool.get().await.unwrap();
     conn.batch_execute("DROP TRIGGER poll_projection_fault ON poll_response_inputs; DROP FUNCTION poll_projection_fault();").await.unwrap();

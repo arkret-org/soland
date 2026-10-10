@@ -1,5 +1,17 @@
+#[path = "support/accepted_pcr_account.rs"]
+mod accepted_pcr_account;
+#[path = "../../test-support/src/device_authorization_history.rs"]
+#[allow(dead_code)]
+mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
+#[path = "../../test-support/src/pcr_genesis.rs"]
+#[allow(dead_code)]
+mod pcr_genesis;
 
 use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork, ModerationStore};
 use soland_storage_postgres::test_database::TestDatabase;
@@ -12,13 +24,15 @@ async fn bootstrap(
     let account = ordinary_realm::human_profile::admit_for_station_did(
         pool,
         did.clone(),
-        "moderation-review",
+        "moderation-founder",
     )
     .await;
     ordinary_realm::source_bootstrap(
         pool,
-        ordinary_realm::bootstrap_unit_for_account(
+        ordinary_realm::bootstrap_unit_with_history_for_account(
             &uuid::Uuid::now_v7().to_string(),
+            "invite",
+            "since_join",
             &account,
             &did,
         ),
@@ -154,7 +168,14 @@ async fn circle_report_decision_lift_require_exact_circle_grant_and_source_cut()
     use diesel_async::RunQueryDsl;
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let unit = bootstrap(&pool).await;
+    let governing_did = device_authorization_history::did_web_station(&ordinary_realm::station());
+    let human = accepted_pcr_account::accepted_pcr_account(&pool, governing_did.clone()).await;
+    let unit = ordinary_realm::bootstrap_unit_for_account(
+        &uuid::Uuid::now_v7().to_string(),
+        human.as_account_id().unwrap(),
+        &governing_did,
+    );
+    let unit = ordinary_realm::source_bootstrap(&pool, unit).await;
     let head = unit.transactions.last().unwrap();
     let at = head.commit.committed_at;
     let actor = head.event.actor_id.clone();

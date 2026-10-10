@@ -104,9 +104,17 @@ async fn list(
             .into_inner()
             .map(arkret_wire::Cursor::new)
             .transpose()
-            .map_err(invalid_cursor)?,
+            .map_err(|error| {
+                AppError::param_invalid(error.to_string())
+                    .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR)
+            })?,
         limit: Some(limit),
     };
+    let decoded = query
+        .cursor
+        .as_ref()
+        .map(|token| CursorAuthority::decode_stream(token.as_str()).map_err(cursor_authority_error))
+        .transpose()?;
     // Recovery authentication has already bound a verified, unexpired session
     // and policy to this exact Account, grant/JKT and candidate device. That
     // candidate must not be required to exist in the PCR before completion.
@@ -130,20 +138,29 @@ async fn list(
         filter,
     )
     .map_err(invalid_cursor)?;
-    let previous = if let Some(token) = &query.cursor {
-        let decoded = CursorAuthority::decode_stream(token.as_str()).map_err(invalid_cursor)?;
+    let previous = if let Some(decoded) = &decoded {
         let stored = state.sync().cursor(&decoded.h).await.map_err(internal)?;
         let record = stored
+            .clone()
             .map(soland_http::util::cursor_binding_record_from_state)
             .transpose()
-            .map_err(invalid_cursor)?;
-        let position = CursorAuthority::resolve_stream(&decoded, &context, record.as_ref())
-            .map_err(|error| match error {
-                arkret_server::CursorAuthorityError::Expired => {
-                    crate::app_error!(CursorExpired, "cursor has expired")
-                }
-                other => invalid_cursor(other),
-            })?;
+            .map_err(cursor_authority_error)?;
+        let position = CursorAuthority::resolve_stream(decoded, &context, record.as_ref())
+            .map_err(cursor_authority_error)?;
+        if crate::routing::events::sync::cursor_authority_revoked(
+            state,
+            decoded,
+            stored.as_ref().expect("validated cursor record"),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .map_err(crate::routing::events::sync::cursor_revoke_error)?
+        {
+            return Err(crate::app_error!(
+                CursorRevoked,
+                "cursor authority has been revoked"
+            ));
+        }
         Some(serde_json::from_value::<PagePosition>(position).map_err(invalid_cursor)?)
     } else {
         None
@@ -218,6 +235,7 @@ async fn list(
                 handle: record.handle,
                 binding_subject: Some(record.context.binding_subject),
                 device_id: record.context.device_id,
+                session_id: Some(session.token_hash.clone()),
                 service_id: record.context.service_id,
                 filter_digest: Some(record.context.filter_digest),
                 purpose: "stream".to_owned(),
@@ -274,7 +292,24 @@ async fn active_pointers_for_device(
 }
 
 fn invalid_cursor(error: impl std::fmt::Display) -> AppError {
-    crate::app_error!(CursorInvalid, format!("invalid backup cursor: {error}"))
+    crate::app_error!(
+        CursorIntegrityInvalid,
+        format!("invalid backup cursor: {error}")
+    )
+}
+fn cursor_authority_error(error: arkret_server::CursorAuthorityError) -> AppError {
+    match error {
+        arkret_server::CursorAuthorityError::ParamInvalid(message) => {
+            AppError::param_invalid(message)
+                .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR)
+        }
+        arkret_server::CursorAuthorityError::Expired => {
+            crate::app_error!(CursorExpired, "cursor has expired")
+        }
+        arkret_server::CursorAuthorityError::IntegrityInvalid => {
+            invalid_cursor("issuance or request binding mismatch")
+        }
+    }
 }
 fn unavailable(error: impl std::fmt::Display) -> AppError {
     crate::app_error!(
@@ -284,4 +319,33 @@ fn unavailable(error: impl std::fmt::Display) -> AppError {
 }
 fn internal(error: impl std::fmt::Display) -> AppError {
     AppError::internal(format!("backup listing: {error}"))
+}
+
+#[cfg(test)]
+mod cursor_error_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_failure_stages_use_registered_codes() {
+        use arkret_server::CursorAuthorityError;
+        let syntax =
+            cursor_authority_error(CursorAuthorityError::ParamInvalid("invalid wire".into()));
+        assert_eq!(syntax.code, arkret_wire::ErrorCode::ParamInvalid);
+        assert_eq!(
+            syntax.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::INVALID_CURSOR)
+        );
+        assert_eq!(
+            cursor_authority_error(CursorAuthorityError::Expired).code,
+            arkret_wire::ErrorCode::CursorExpired
+        );
+        assert_eq!(
+            cursor_authority_error(CursorAuthorityError::IntegrityInvalid).code,
+            arkret_wire::ErrorCode::CursorIntegrityInvalid
+        );
+        assert_eq!(
+            invalid_cursor("changed revision").code,
+            arkret_wire::ErrorCode::CursorIntegrityInvalid
+        );
+    }
 }

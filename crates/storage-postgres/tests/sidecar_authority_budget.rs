@@ -3,11 +3,19 @@
 #[allow(dead_code)]
 mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
 #[path = "support/sidecar_agent.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Agent fixture."
+)]
 mod sidecar_agent;
 
 use diesel::sql_types::BigInt;
@@ -71,8 +79,14 @@ async fn provision_ref_65_is_refused_without_accepted_source_or_current_writes()
         .await
         .unwrap();
     let controller = &principal.history.account;
+    ordinary_realm::human_profile::register_fixture_signer(
+        controller,
+        principal.history.device_verification_method.clone(),
+        principal.history.founding_device_signing_seed,
+    );
     let unit =
         ordinary_realm::bootstrap_unit_for_account("sidecar-ref-budget", controller, &station_did);
+    let unit = ordinary_realm::source_bootstrap(&pool, unit).await;
     let store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
@@ -86,6 +100,7 @@ async fn provision_ref_65_is_refused_without_accepted_source_or_current_writes()
         serde_json::json!({}),
         parent.commit.committed_at,
     );
+    let create = ordinary_realm::source_request(&pool, create).await;
     soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(create.clone())
         .await

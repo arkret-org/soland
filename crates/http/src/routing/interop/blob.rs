@@ -344,6 +344,58 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             }
         }
     };
+    if let Ok(wait) = depot.get_typed::<crate::openapi_routes::WaitForSyncToken>() {
+        let Some(session) = session.as_ref() else {
+            render_error(
+                res,
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "wait-for requires the bound authenticated subject",
+            );
+            return;
+        };
+        let mut notifications = state.subscribe_event_notifications();
+        let event_id = match crate::routing::events::sync::parse_and_validate_barrier_cursor(
+            &wait.0,
+            state,
+            session,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        {
+            Ok(event_id) => event_id,
+            Err(error) => {
+                crate::routing::events::sync::render_account_cursor_error(res, error, true);
+                return;
+            }
+        };
+        let barrier_result = crate::routing::events::sync::wait_for_account_projection_barrier(
+            state,
+            &mut notifications,
+            &event_id,
+        )
+        .await;
+        if let Err(error) = crate::routing::events::sync::parse_and_validate_barrier_cursor(
+            &wait.0,
+            state,
+            session,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        {
+            crate::routing::events::sync::render_account_cursor_error(res, error, true);
+            return;
+        }
+        if !matches!(barrier_result, Ok(true)) {
+            render_error(
+                res,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "blob authorization projection coverage unavailable",
+            );
+            return;
+        }
+    }
     let mut blob = state.deliveries().blob(&blob_ref).await.ok().flatten();
     if blob.is_none()
         && purpose == "profile_avatar"

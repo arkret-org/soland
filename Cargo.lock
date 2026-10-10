@@ -6081,6 +6081,7 @@ dependencies = [
  "parking_lot",
  "rand_chacha 0.10.0",
  "rand_core 0.10.1",
+ "salvo",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6093,6 +6094,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "url",
  "uuid",
 ]
 

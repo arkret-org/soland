@@ -1801,7 +1801,9 @@ diesel::table! {
 diesel::table! {
     sync_cursor_handles (id) {
         id -> Text,
+        binding_subject -> Nullable<Text>,
         device_id -> Nullable<Text>,
+        session_id -> Nullable<Text>,
         service_id -> Text,
         filter_digest -> Nullable<Text>,
         purpose -> Text,
@@ -1818,6 +1820,7 @@ diesel::table! {
         cursor_digest -> Text,
         account_id -> Jsonb,
         device_id -> Nullable<Text>,
+        session_id -> Nullable<Text>,
         scope -> Text,
         reason_code -> Text,
         revoked_at -> Timestamptz,

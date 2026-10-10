@@ -6,7 +6,7 @@ mod ordinary_realm;
 
 use diesel::sql_types::{BigInt, Jsonb, Text};
 use diesel_async::RunQueryDsl;
-use ordinary_realm::{founder, next_request, open_discussion};
+use ordinary_realm::{next_request, open_discussion};
 use serde_json::{Value, json};
 use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork};
 use soland_storage_postgres::test_database::TestDatabase;
@@ -67,6 +67,7 @@ async fn profile_replacement_unset_replay_and_denial_share_the_pg_cut() {
     let discussion = open_discussion(&pool, "realm-profile-current").await;
     let realm = discussion.realm_id();
     let mut head = discussion.head.authority_commit;
+    let founder = head.event.actor_id.signing_principal_id().clone();
     for payload in [
         json!({"schema":"ak.schema.realm_profile.v1","title":"Updated","summary":"Summary"}),
         json!({"schema":"ak.schema.realm_profile.v1","title":"Cleared"}),
@@ -74,10 +75,11 @@ async fn profile_replacement_unset_replay_and_denial_share_the_pg_cut() {
         let request = next_request(
             &head,
             arkret_wire::EventKind::RealmProfile,
-            &founder(),
+            &founder,
             payload.clone(),
             head.commit.committed_at,
         );
+        let request = Box::pin(ordinary_realm::source_request(&pool, request)).await;
         assert!(
             uow.commit_event(request.clone())
                 .await
@@ -107,14 +109,20 @@ async fn profile_replacement_unset_replay_and_denial_share_the_pg_cut() {
     }
     let before = current(&pool, &realm).await;
     let count = commits(&pool, &realm).await;
-    let outsider = arkret_wire::DidCoreId::new("ak:did_core:web:profile-outsider.example").unwrap();
+    let outsider = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "profile-outsider",
+    ))
+    .await;
     let denied = next_request(
         &head,
         arkret_wire::EventKind::RealmProfile,
-        &outsider,
+        &outsider.principal_id,
         json!({"schema":"ak.schema.realm_profile.v1","title":"Denied"}),
         head.commit.committed_at,
     );
+    let denied = Box::pin(ordinary_realm::source_request(&pool, denied)).await;
     assert!(uow.commit_event(denied).await.is_err());
     assert_eq!(current(&pool, &realm).await, before);
     assert_eq!(commits(&pool, &realm).await, count);
@@ -128,6 +136,7 @@ async fn read_receipt_policy_replacement_snapshot_replay_and_denial_share_the_pg
     let discussion = open_discussion(&pool, "read-receipt-policy-current").await;
     let realm = discussion.realm_id();
     let mut head = discussion.head.authority_commit;
+    let founder = head.event.actor_id.signing_principal_id().clone();
     for payload in [
         json!({"disclosure":"required","visibility":"private","scope_overrides_allowed":false}),
         json!({"disclosure":"disabled"}),
@@ -135,10 +144,11 @@ async fn read_receipt_policy_replacement_snapshot_replay_and_denial_share_the_pg
         let request = next_request(
             &head,
             arkret_wire::EventKind::RealmReadReceiptPolicy,
-            &founder(),
+            &founder,
             payload.clone(),
             head.commit.committed_at,
         );
+        let request = Box::pin(ordinary_realm::source_request(&pool, request)).await;
         assert!(
             uow.commit_event(request.clone())
                 .await
@@ -202,23 +212,27 @@ async fn read_receipt_policy_replacement_snapshot_replay_and_denial_share_the_pg
     }
     let before = family_current(&pool, &realm, "realm_read_receipt_policy").await;
     let count = commits(&pool, &realm).await;
-    let outsider =
-        arkret_wire::DidCoreId::new("ak:did_core:web:receipt-policy-outsider.example").unwrap();
+    let outsider = Box::pin(ordinary_realm::human_profile::admit(
+        &pool,
+        &ordinary_realm::station(),
+        "receipt-policy-outsider",
+    ))
+    .await;
     for (actor, payload) in [
-        (outsider, json!({"disclosure":"optional"})),
-        (founder(), json!({})),
-        (founder(), json!({"disclosure":"sometimes"})),
-        (founder(), json!({"visibility":"anonymous"})),
+        (outsider.principal_id, json!({"disclosure":"optional"})),
+        (founder.clone(), json!({})),
+        (founder.clone(), json!({"disclosure":"sometimes"})),
+        (founder.clone(), json!({"visibility":"anonymous"})),
         (
-            founder(),
+            founder.clone(),
             json!({"disclosure":"optional","visibility":null}),
         ),
         (
-            founder(),
+            founder.clone(),
             json!({"visibility":"members","scope_overrides_allowed":null}),
         ),
         (
-            founder(),
+            founder,
             json!({"disclosure":"optional","child_privacy_tightening_against_required":true}),
         ),
     ] {
@@ -229,6 +243,7 @@ async fn read_receipt_policy_replacement_snapshot_replay_and_denial_share_the_pg
             payload,
             head.commit.committed_at,
         );
+        let request = Box::pin(ordinary_realm::source_request(&pool, request)).await;
         let event_id = request.authority_commit.event.event_id.clone();
         assert!(uow.commit_event(request).await.is_err());
         assert!(

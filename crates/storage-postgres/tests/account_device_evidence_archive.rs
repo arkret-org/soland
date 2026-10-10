@@ -1,6 +1,9 @@
 #[path = "../../test-support/src/device_authorization_history.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared device history fixture."
+)]
 mod device_history_fixture;
-mod support;
 
 use arkret_identity::build_authenticated_webvh_service_resolution;
 use arkret_models_collaboration::events_payloads::{

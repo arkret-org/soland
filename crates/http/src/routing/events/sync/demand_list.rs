@@ -70,6 +70,7 @@ pub(crate) async fn read(
                 global_watermark,
                 expires_at_ms: chrono::Utc::now().timestamp_millis() + 3_600_000,
                 after: None,
+                snapshot_cursor: None,
             }
         };
         if initial {
@@ -84,6 +85,7 @@ pub(crate) async fn read(
                 global_watermark: frozen.global_watermark,
                 expires_at_ms: frozen.expires_at_ms,
                 after: None,
+                snapshot_cursor: frozen.snapshot_cursor.clone(),
             },
         )
         .await
@@ -132,6 +134,7 @@ pub(crate) async fn read(
                         global_watermark: frozen.global_watermark,
                         expires_at_ms: frozen.expires_at_ms,
                         after: scanned,
+                        snapshot_cursor: Some(snapshot_cursor.clone()),
                     },
                 )
                 .await

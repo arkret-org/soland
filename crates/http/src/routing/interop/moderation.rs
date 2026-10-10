@@ -23,8 +23,6 @@ use soland_services::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_B
 
 #[cfg(test)]
 use super::now;
-#[cfg(test)]
-use super::sha256_hex;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{ModerationReportOutcome, ModerationReportRequestBody};

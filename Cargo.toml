@@ -105,6 +105,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["form"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std"] }
 salvo = { version = "=0.96.0", default-features = false, features = ["rfc9457"] }
 salvo-oapi = { version = "=0.96.0", default-features = false, features = ["rfc9457"] }
+url = "2.5"
 serde = "1.0.229"
 serde-saphyr = "1.2.0"
 serde_json = "1.0.151"

@@ -63,7 +63,12 @@ fn watch(
     ordinary_realm::next_request(
         previous,
         arkret_wire::EventKind::StrandWatchSet,
-        &ordinary_realm::founder(),
+        discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id(),
         payload,
         discussion.committed_at() + chrono::Duration::seconds(offset),
     )
@@ -110,6 +115,7 @@ async fn fanout_basis_reads_committed_membership_strand_and_watch_currents() {
         None,
         30,
     );
+    let all = Box::pin(ordinary_realm::source_request(&pool, all)).await;
     uow.commit_event(all.clone()).await.unwrap();
     let basis = store
         .fanout_basis(&realm_id, Some(&discussion.strand_id))
@@ -133,6 +139,7 @@ async fn fanout_basis_reads_committed_membership_strand_and_watch_currents() {
         Some(json!({ "level": "all" })),
         31,
     );
+    let cleared = Box::pin(ordinary_realm::source_request(&pool, cleared)).await;
     uow.commit_event(cleared).await.unwrap();
     let basis = store
         .fanout_basis(&realm_id, Some(&discussion.strand_id))

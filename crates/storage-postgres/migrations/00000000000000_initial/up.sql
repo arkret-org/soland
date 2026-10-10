@@ -947,6 +947,8 @@ CREATE TABLE public.authority_forward_attempts (
     -- Local frozen intent and verified acknowledgement; neither is installed state.
     original_submission_json jsonb,
     accepted_commit_json jsonb,
+    -- Local first-attempt cut for an own Circle leave result, never a wire field.
+    circle_leave_parent_revision jsonb,
     event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     status text NOT NULL CHECK (status IN ('forwarding', 'rejected', 'temporarily_unavailable')),
     reason_code text,
@@ -3556,6 +3558,7 @@ CREATE TABLE public.sync_cursor_handles (
     id text PRIMARY KEY,
     binding_subject text,
     device_id text,
+    session_id text,
     service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     filter_digest text,
     purpose text NOT NULL,
@@ -3581,12 +3584,15 @@ CREATE TABLE public.sync_cursor_revocations (
         AND jsonb_typeof(account_id->'station_id') = 'string'
     ),
     device_id text,
+    session_id text,
     scope text NOT NULL,
     reason_code text NOT NULL,
     revoked_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT sync_cursor_revocations_scope_check CHECK ((scope = ANY (ARRAY['this_cursor'::text, 'same_device'::text, 'same_session'::text])))
 );
+
+CREATE UNIQUE INDEX sync_cursor_revocations_instance_scope_idx ON public.sync_cursor_revocations (cursor_digest, account_id, scope);
 
 CREATE INDEX sync_cursor_revocations_expiry_idx ON public.sync_cursor_revocations USING btree (expires_at);
 

@@ -2579,7 +2579,7 @@ impl Fixture {
             chrono::Utc::now(),
         )
         .unwrap();
-        if kind == EventKind::CircleCreate {
+        if matches!(kind, EventKind::CircleCreate | EventKind::StrandCreate) {
             event.payload.get_mut("object").unwrap()["created_at"] =
                 serde_json::to_value(event.created_at).unwrap();
         }

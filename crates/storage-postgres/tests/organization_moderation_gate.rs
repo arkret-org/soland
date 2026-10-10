@@ -1,4 +1,8 @@
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "Each integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 
 use arkret_models_collaboration::{RealmOrganizationPayload, SignatureMaterial};
@@ -102,8 +106,8 @@ async fn snapshot(pool: &PgPool) -> serde_json::Value {
         'event_outbox',(SELECT jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text) FROM event_federation_outbox r)) AS value")
         .get_result::<Snapshot>(&mut *conn).await.unwrap().value
 }
-// Producer and Station proofs are structural at this storage boundary; the
-// independent organization consent is a real immutable-DID Ed25519 signature.
+// Human source and final Station proofs use the actual accepted PCR cut;
+// the independent organization consent is an immutable-DID Ed25519 signature.
 #[tokio::test]
 async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_zero_writes() {
     let database = TestDatabase::lease().await;
@@ -119,6 +123,7 @@ async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_ze
         &founder_account,
         &ordinary_realm::human_profile::station_did(&ordinary_realm::station()),
     );
+    let bootstrap = ordinary_realm::source_bootstrap(&pool, bootstrap).await;
     let authority = PgAuthorityCommitStore { pool: pool.clone() };
     let at = bootstrap.transactions[0].commit.committed_at;
     authority
@@ -144,6 +149,7 @@ async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_ze
             "expires_at":arkret_canonical::format_timestamp_canonical(at+chrono::TimeDelta::days(1))}),
         at,
     );
+    let invite = ordinary_realm::source_request(&pool, invite).await;
     uow.commit_event(invite.clone()).await.unwrap();
     let (relationship, proof) = organization_request(
         &invite.authority_commit,
@@ -151,6 +157,11 @@ async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_ze
         serde_json::json!(["moderation_policy"]),
         None,
     );
+    let relationship = ordinary_realm::source_request(&pool, relationship).await;
+    let proof = soland_storage::RealmOrganizationProofCommit {
+        event_id: relationship.authority_commit.event.event_id.clone(),
+        ..proof
+    };
     uow.commit_event_batch(batch(relationship.clone(), proof))
         .await
         .unwrap();
@@ -185,6 +196,7 @@ async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_ze
         serde_json::json!({"member_id":joiner,"membership":"join"}),
         at,
     );
+    let member = ordinary_realm::source_request(&pool, member).await;
     let acceptance = ordinary_realm::next_request_for_actor(
         &relationship.authority_commit,
         arkret_wire::EventKind::InviteAccept,
@@ -193,6 +205,7 @@ async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_ze
             "previous_state":"pending","invitee_account_id":invitee}),
         at,
     );
+    let acceptance = ordinary_realm::source_request(&pool, acceptance).await;
     let before = snapshot(&pool).await;
     for request in [member, acceptance.clone()] {
         let error = uow.commit_event(request.clone()).await.unwrap_err();
@@ -221,6 +234,11 @@ async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_ze
         serde_json::json!(["moderation_policy"]),
         Some(statement),
     );
+    let revocation = ordinary_realm::source_request(&pool, revocation).await;
+    let proof = soland_storage::RealmOrganizationProofCommit {
+        event_id: revocation.authority_commit.event.event_id.clone(),
+        ..proof
+    };
     uow.commit_event_batch(batch(revocation.clone(), proof))
         .await
         .unwrap();
@@ -244,6 +262,7 @@ async fn accepted_organization_scope_refuses_real_member_and_invite_join_with_ze
         serde_json::to_value(&acceptance.authority_commit.event.payload).unwrap(),
         at,
     );
+    let resumed = ordinary_realm::source_request(&pool, resumed).await;
     uow.commit_event(resumed.clone()).await.unwrap();
     assert!(
         events
@@ -269,6 +288,7 @@ async fn organization_writer_refuses_missing_or_false_proof_and_wrong_statement_
         &founder_account,
         &ordinary_realm::human_profile::station_did(&ordinary_realm::station()),
     );
+    let bootstrap = ordinary_realm::source_bootstrap(&pool, bootstrap).await;
     let authority = PgAuthorityCommitStore { pool: pool.clone() };
     let at = bootstrap.transactions[0].commit.committed_at;
     authority
@@ -279,6 +299,11 @@ async fn organization_writer_refuses_missing_or_false_proof_and_wrong_statement_
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let (relationship, proof) =
         organization_request(head, "active", serde_json::json!(["official_badge"]), None);
+    let relationship = ordinary_realm::source_request(&pool, relationship).await;
+    let proof = soland_storage::RealmOrganizationProofCommit {
+        event_id: relationship.authority_commit.event.event_id.clone(),
+        ..proof
+    };
     let before = snapshot(&pool).await;
     assert!(uow.commit_event(relationship.clone()).await.is_err());
     assert_eq!(snapshot(&pool).await, before);
@@ -301,6 +326,11 @@ async fn organization_writer_refuses_missing_or_false_proof_and_wrong_statement_
         serde_json::json!(["official_badge"]),
         Some("not-the-accepted-statement"),
     );
+    let wrong_ref = ordinary_realm::source_request(&pool, wrong_ref).await;
+    let proof = soland_storage::RealmOrganizationProofCommit {
+        event_id: wrong_ref.authority_commit.event.event_id.clone(),
+        ..proof
+    };
     let before = snapshot(&pool).await;
     assert!(
         uow.commit_event_batch(batch(wrong_ref, proof))
@@ -323,5 +353,6 @@ async fn organization_writer_refuses_missing_or_false_proof_and_wrong_statement_
         serde_json::json!({"member_id":joiner,"membership":"join"}),
         at,
     );
+    let member = ordinary_realm::source_request(&pool, member).await;
     uow.commit_event(member).await.unwrap();
 }

@@ -1242,6 +1242,13 @@ pub enum AcceptedDeviceAuthorizationOutcome {
 /// stream it does not govern (`federation.md` §4.1.1).
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommittedReplicaRole {
+    /// The exact governor-accepted result of this hosted Account's own
+    /// Circle leave. The store must prove its frozen original submission,
+    /// parent Realm revision and canonical opening join in the same cut.
+    /// This does not authorize ordinary replication or any read surface.
+    AcceptedOwnCircleLeave {
+        member_account_id: arkret_wire::AccountId,
+    },
     /// A hosted member's own verified join (its `ak.member.state{join}` or
     /// its directed `ak.invite.accept`). While no hosted member is joined it
     /// opens the held stream -- or re-opens the stream this Station still

@@ -451,11 +451,6 @@ async fn space_terminal_cases(
     let root_id = basis.root_id.clone();
     let space_query = "SELECT value FROM space_current_results WHERE space_id=$1";
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let transition = |previous: &soland_storage::AuthorityCommitTransaction,
-                      kind: arkret_wire::EventKind,
-                      actor: &arkret_wire::DidCoreId| {
-        next_request(previous, kind, actor, json!({"space_id": root_id}), at)
-    };
     let terminal = |previous: &soland_storage::AuthorityCommitTransaction,
                     space: &arkret_wire::SpaceId| {
         next_request(

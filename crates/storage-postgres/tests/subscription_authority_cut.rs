@@ -1,5 +1,9 @@
 //! Accepted history policy provenance binds durable subscription progress.
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "Each integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 
 use arkret_wire::{EventKind, RealmCommitId};
@@ -32,11 +36,12 @@ async fn accepted_append_preserves_digest_policy_change_rebinds_and_missing_sour
     let message = ordinary_realm::next_request(
         head,
         EventKind::MessageCreate,
-        &ordinary_realm::founder(),
+        head.event.actor_id.signing_principal_id(),
         ordinary_realm::message_payload(&discussion.strand_id, "only new accepted tail"),
         head.commit.committed_at,
     );
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
+    let message = Box::pin(ordinary_realm::source_request(&pool, message)).await;
     uow.commit_event(message.clone()).await.unwrap();
     let after = store
         .realm_stream_subscription_cut(realm, account, &ordinary_realm::station())
@@ -47,10 +52,11 @@ async fn accepted_append_preserves_digest_policy_change_rebinds_and_missing_sour
     let policy = ordinary_realm::next_request(
         &message.authority_commit,
         EventKind::RealmHistoryAccess,
-        &ordinary_realm::founder(),
+        head.event.actor_id.signing_principal_id(),
         serde_json::json!({"from":"all_history_for_current_members","to":"since_join"}),
         head.commit.committed_at,
     );
+    let policy = Box::pin(ordinary_realm::source_request(&pool, policy)).await;
     uow.commit_event(policy.clone()).await.unwrap();
     let rebound = store
         .realm_stream_subscription_cut(realm, account, &ordinary_realm::station())
@@ -61,10 +67,11 @@ async fn accepted_append_preserves_digest_policy_change_rebinds_and_missing_sour
     let reversal = ordinary_realm::next_request(
         &policy.authority_commit,
         EventKind::RealmHistoryAccess,
-        &ordinary_realm::founder(),
+        head.event.actor_id.signing_principal_id(),
         serde_json::json!({"from":"since_join","to":"all_history_for_current_members"}),
         head.commit.committed_at,
     );
+    let reversal = Box::pin(ordinary_realm::source_request(&pool, reversal)).await;
     assert!(uow.commit_event(reversal.clone()).await.is_err());
     use soland_storage::EventStore as _;
     assert!(

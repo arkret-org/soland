@@ -104,23 +104,18 @@ pub trait WebsocketAuthPort: Send + Sync {
 pub struct SyncService {
     cursors: Arc<dyn CursorStorePort>,
     websocket_auth: Arc<dyn WebsocketAuthPort>,
-    cursor_hmac_key: [u8; 32],
     reconnect_deadlines: Arc<Mutex<BTreeMap<String, DateTime<Utc>>>>,
-    cursor_revocations: Arc<Mutex<Vec<CursorRevocationState>>>,
 }
 
 impl SyncService {
     pub fn new(
         cursors: Arc<dyn CursorStorePort>,
         websocket_auth: Arc<dyn WebsocketAuthPort>,
-        cursor_hmac_key: [u8; 32],
     ) -> Self {
         Self {
             cursors,
             websocket_auth,
-            cursor_hmac_key,
             reconnect_deadlines: Arc::new(Mutex::new(BTreeMap::new())),
-            cursor_revocations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -192,10 +187,6 @@ impl SyncService {
         self.websocket_auth.as_ref()
     }
 
-    pub fn cursor_hmac_key(&self) -> &[u8; 32] {
-        &self.cursor_hmac_key
-    }
-
     pub fn subscribe_retry_after_ms(&self, key: &str, now: DateTime<Utc>) -> Option<u64> {
         let mut deadlines = self.reconnect_deadlines.lock();
         deadlines.retain(|_, deadline| *deadline > now);
@@ -214,40 +205,33 @@ impl SyncService {
         deadlines.retain(|_, deadline| *deadline > now);
     }
 
-    pub fn replace_cursor_revocations(&self, revocations: Vec<CursorRevocationState>) {
-        *self.cursor_revocations.lock() = revocations;
-    }
-
-    pub fn cache_cursor_revocation(&self, record: CursorRevocationState) {
-        let mut revocations = self.cursor_revocations.lock();
-        revocations.retain(|entry| entry.expires_at > record.revoked_at);
-        revocations.push(record);
-    }
-
-    pub fn cursor_authority_revoked(
-        &self,
+    pub fn revoked_in(
+        revocations: &[CursorRevocationState],
         cursor_digest: &str,
         account_id: Option<&arkret_wire::AccountId>,
         device_id: Option<&str>,
+        session_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> bool {
-        let mut revocations = self.cursor_revocations.lock();
-        revocations.retain(|entry| entry.expires_at > now);
-        revocations.iter().any(|entry| match entry.scope.as_str() {
-            "this_cursor" => entry.cursor_digest == cursor_digest,
-            "same_device" | "same_session" => account_id.is_some_and(|account_id| {
-                &entry.account_id == account_id && entry.device_id.as_deref() == device_id
-            }),
-            _ => false,
-        })
-    }
-
-    /// Fixture-only: observe the in-memory revocation cache size. Nothing on a
-    /// production path reads it, so it stays out of release builds.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn cached_cursor_revocation_count(&self) -> usize {
-        self.cursor_revocations.lock().len()
+        revocations
+            .iter()
+            .filter(|entry| entry.expires_at > now)
+            .any(|entry| match entry.scope.as_str() {
+                "this_cursor" => {
+                    entry.cursor_digest == cursor_digest
+                        && account_id.is_some_and(|account| &entry.account_id == account)
+                }
+                "same_device" => account_id.is_some_and(|account| {
+                    &entry.account_id == account && entry.device_id.as_deref() == device_id
+                }),
+                "same_session" => account_id.is_some_and(|account| {
+                    &entry.account_id == account
+                        && entry.device_id.as_deref() == device_id
+                        && session_id.is_some()
+                        && entry.session_id.as_deref() == session_id
+                }),
+                _ => false,
+            })
     }
 
     pub async fn cursor(&self, handle: &str) -> ServiceResult<Option<CursorState>> {
@@ -442,11 +426,12 @@ mod tests {
     #[tokio::test]
     async fn cursor_lifecycle_uses_only_the_cursor_port() {
         let port = Arc::new(RecordingCursors::default());
-        let service = SyncService::new(port, Arc::new(UnusedWebsocketAuth), [0; 32]);
+        let service = SyncService::new(port, Arc::new(UnusedWebsocketAuth));
         let record = CursorState {
             handle: "cursor-handle".to_owned(),
             binding_subject: None,
             device_id: None,
+            session_id: None,
             service_id: arkret_identifiers::DidCoreId::new(
                 "ak:did_core:web:service.example".to_owned(),
             )
@@ -467,7 +452,6 @@ mod tests {
         let service = SyncService::new(
             Arc::new(RecordingCursors::default()),
             Arc::new(UnusedWebsocketAuth),
-            [0; 32],
         );
         let now = Utc::now();
         let key = "ak.self.committed_event.stream.subscribe.v1|alice|realm-a";

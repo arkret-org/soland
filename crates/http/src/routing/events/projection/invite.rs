@@ -4,8 +4,6 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_wire::PlaintextDataClassKind;
 
-use crate::state::AppState;
-
 pub(super) fn plaintext_services_from_operation(operation: &Operation) -> Vec<String> {
     plaintext_visible_services_payload(operation)
         .map(|payload| {

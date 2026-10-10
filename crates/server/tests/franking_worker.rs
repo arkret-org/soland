@@ -98,67 +98,6 @@ async fn fixture() -> Fixture {
             fixture.history.founding_device_signing_seed,
         )
     };
-    let mut group = arkret_mls::ArkretMlsIdentity::new_human_device(
-        actor.clone(),
-        fixture.history.founding_device_id.clone(),
-        arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
-            ed25519_dalek::SigningKey::from_bytes(&fixture.history.founding_device_signing_seed),
-        ),
-    )
-    .unwrap()
-    .create_group_with_governance_binding(
-        &scope,
-        &MlsGovernanceBindingPayload::realm(realm.clone(), None, 0, 0, 0).unwrap(),
-    )
-    .unwrap();
-    let (group_info, tree) = group.public_group_state_bytes().unwrap();
-    let tracker = arkret_mls::MlsPublicGroupTracker::from_external(
-        &group_info,
-        &tree,
-        group.group_id().as_str(),
-        0,
-    )
-    .unwrap();
-    let genesis = seal(ordinary_realm::event_for_actor(
-        EventKind::MlsGenesis,
-        scope.clone(),
-        actor.clone(),
-        serde_json::json!({
-            "cipher_suite":group.group_ciphersuite_canonical_id().unwrap(),
-            "group_info_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&group_info)),
-            "ratchet_tree_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&tree)),
-            "governance_binding":MlsGovernanceBindingPayload::realm(realm.clone(),None,0,0,0).unwrap(),
-            "created_at":arkret_canonical::format_timestamp_canonical(at)
-        }),
-        at,
-    ));
-    let mut request = ordinary_realm::request_for_event(&previous, genesis.clone(), at);
-    request.authority_commit = app
-        .prepare_self_mls_transaction(
-            &genesis,
-            soland_storage::MlsStateInstallation {
-                effective_scope: scope.clone(),
-                base: None,
-                epoch: 0,
-                public_state: tracker.export_state().unwrap(),
-                member_principals: group.member_actor_ids().unwrap().into_iter().collect(),
-                consumed_proposals: Vec::new(),
-                public_blobs: Vec::new(),
-            },
-            Vec::new(),
-            &state.service_core_id(),
-            method.clone(),
-            &key,
-            at,
-        )
-        .await
-        .unwrap();
-    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(genesis.clone()));
-    request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::HumanDevice(
-        device.clone(),
-    ));
-    uow.commit_event(request.clone()).await.unwrap();
-    previous = request.authority_commit;
     let strand = seal(ordinary_realm::event_for_actor(
         EventKind::StrandCreate,
         scope.clone(),
@@ -180,6 +119,101 @@ async fn fixture() -> Fixture {
     ));
     uow.commit_event(request.clone()).await.unwrap();
     previous = request.authority_commit;
+    let mut group = arkret_mls::ArkretMlsIdentity::new_human_device(
+        actor.clone(),
+        fixture.history.founding_device_id.clone(),
+        arkret_mls::ArkretMlsSigner::from_ed25519_signing_key(
+            ed25519_dalek::SigningKey::from_bytes(&fixture.history.founding_device_signing_seed),
+        ),
+    )
+    .unwrap()
+    .create_group_with_governance_binding(
+        &scope,
+        &MlsGovernanceBindingPayload::realm(realm.clone(), None, 0, 0, 0).unwrap(),
+    )
+    .unwrap();
+    let (group_info, tree) = group.public_group_state_bytes().unwrap();
+    let leaves =
+        arkret_mls::validate_public_group_state(&group_info, &tree, group.group_id().as_str(), 0)
+            .unwrap();
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0].actor_id, actor);
+    let creator_authorization = fixture
+        .unit
+        .transactions
+        .iter()
+        .find(|transaction| transaction.event.kind == EventKind::DeviceAuthorize)
+        .expect("the founding Device authorization was accepted with the PCR");
+    assert_eq!(
+        store
+            .committed_event(&creator_authorization.event.event_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .event,
+        creator_authorization.event
+    );
+    let tracker = arkret_mls::MlsPublicGroupTracker::from_external(
+        &group_info,
+        &tree,
+        group.group_id().as_str(),
+        0,
+    )
+    .unwrap();
+    let genesis = seal(ordinary_realm::event_for_actor(
+        EventKind::MlsGenesis,
+        scope.clone(),
+        actor.clone(),
+        serde_json::json!({
+            "cipher_suite":group.group_ciphersuite_canonical_id().unwrap(),
+            "group_info_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&group_info)),
+            "ratchet_tree_ref":format!("ak:blob:{}",arkret_canonical::sha256_digest(&tree)),
+            "creator_leaf_authority": arkret_models_collaboration::events_payloads::MlsGenesisCreatorLeafAuthority {
+                leaf_signature_key_b64u: leaves[0].signature_key.clone(),
+                endpoint: arkret_wire::MlsWelcomeRecipientEndpoint::Device {
+                    device_id: fixture.history.founding_device_id.clone(),
+                },
+                authorization_event_ref: creator_authorization.event.event_id.clone(),
+            },
+            "governance_binding":MlsGovernanceBindingPayload::realm(realm.clone(),None,0,0,0).unwrap(),
+            "created_at":arkret_canonical::format_timestamp_canonical(at)
+        }),
+        at,
+    ));
+    let mut request = ordinary_realm::request_for_event(&previous, genesis.clone(), at);
+    request.authority_commit = app
+        .prepare_self_mls_transaction(
+            &genesis,
+            soland_storage::MlsStateInstallation {
+                effective_scope: scope.clone(),
+                base: None,
+                epoch: 0,
+                public_state: tracker.export_state().unwrap(),
+                member_principals: leaves.iter().map(|leaf| leaf.actor_id.clone()).collect(),
+                consumed_proposals: Vec::new(),
+                public_blobs: Vec::new(),
+            },
+            Vec::new(),
+            &state.service_core_id(),
+            method.clone(),
+            &key,
+            at,
+        )
+        .await
+        .unwrap();
+    request.realm_fanout_source = Some(arkret_wire::EventAdmissionSubmission::new(genesis.clone()));
+    request.self_producer_guard = Some(soland_storage::SelfProducerCommitGuard::HumanDevice(
+        device.clone(),
+    ));
+    uow.commit_event(request.clone()).await.unwrap();
+    previous = request.authority_commit;
+    group
+        .install_local_creator_binding(
+            actor.clone(),
+            Some(creator_authorization.event.event_id.clone()),
+        )
+        .unwrap();
+    assert_eq!(group.member_actor_ids().unwrap(), vec![actor.clone()]);
     let header = EventContentPreEncryptionHeader::reconstruct(
         "1.0",
         "application/arkret-content+json",

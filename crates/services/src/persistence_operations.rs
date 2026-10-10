@@ -760,7 +760,6 @@ pub fn build_persistence_operational_services(
     persistence: Arc<dyn PersistenceStore>,
     runtime_settings: Arc<dyn RuntimeSettingsPort>,
     runtime_health: Arc<dyn RuntimeHealthPort>,
-    sync_cursor_hmac_key: [u8; 32],
 ) -> PersistenceOperationalServices {
     PersistenceOperationalServices {
         federation: FederationService::new(
@@ -776,7 +775,6 @@ pub fn build_persistence_operational_services(
         sync: SyncService::new(
             Arc::new(PersistenceCursorStore(persistence.clone())),
             Arc::new(PersistenceWebsocketAuth(persistence.clone())),
-            sync_cursor_hmac_key,
         ),
         jobs: JobsService::new(
             Arc::new(PersistenceMaintenance(persistence)),

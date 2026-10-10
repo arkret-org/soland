@@ -63,8 +63,6 @@ pub(super) fn operation_realm_history_access(operation: &Operation) -> Option<&s
 // Converged to the single crate-root canonical-digest helper (delegates
 // to SDK `canonical_sha256`); re-exported so projection call sites keep
 // referencing `canonical_value_digest`.
-#[cfg(test)]
-pub(super) use crate::canonical_value_digest;
 
 #[cfg(test)]
 pub(super) fn operation_realm_encryption_profile(operation: &Operation) -> Option<&str> {

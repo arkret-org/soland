@@ -267,30 +267,57 @@ pub async fn wait_for_sync_token(
     ctrl: &mut FlowCtrl,
 ) {
     let header_name = salvo::http::header::HeaderName::from_static("x-arkret-wait-for");
-    let Some(header_value) = req.headers().get(&header_name) else {
+    let values: Vec<_> = req.headers().get_all(&header_name).iter().collect();
+    let query_alias = req.uri().query().is_some_and(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .any(|(name, _)| name == "wait_for" || name.starts_with("consistency"))
+    });
+    if values.is_empty() && !query_alias {
         ctrl.call_next(req, depot, res).await;
         return;
-    };
-    let Ok(header_value) = header_value.to_str() else {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "param_invalid",
-            "X-Arkret-Wait-For must be ASCII",
-        );
-        return;
-    };
-    let token = header_value.trim();
-    if token.is_empty()
-        || token.contains(',')
-        || !arkret_hlc::Cursor::decode(token)
-            .is_ok_and(|cursor| cursor.purpose == arkret_hlc::CursorPurpose::Barrier)
+    }
+    let operation = req
+        .headers()
+        .get("arkret-operation")
+        .and_then(|value| value.to_str().ok())
+        .and_then(arkret_wire::ServiceOperationId::from_wire);
+    if query_alias
+        || values.len() != 1
+        || operation
+            .filter(|op| op.matches_http_request(req.method().as_str(), req.uri().path()))
+            .and_then(|op| op.wait_for_carrier("http_json"))
+            != Some(("header", "X-Arkret-Wait-For"))
     {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "param_invalid",
-            "X-Arkret-Wait-For must contain exactly one barrier cursor",
+            "unregistered or duplicate wait-for carrier",
+        );
+        return;
+    }
+    let Ok(header_value) = values[0].to_str() else {
+        crate::error::render_error_with_reason_code(
+            res,
+            StatusCode::BAD_REQUEST,
+            "param_invalid",
+            "X-Arkret-Wait-For must be ASCII",
+            arkret_wire::ReasonCode::INVALID_CURSOR,
+            None,
+        );
+        return;
+    };
+    let token = header_value.trim();
+    // The authenticated consumer performs typed purpose/expiry/binding
+    // validation. Do not collapse an expired token to param_invalid here.
+    if arkret_wire::Cursor::new(token.to_owned()).is_err() {
+        crate::error::render_error_with_reason_code(
+            res,
+            StatusCode::BAD_REQUEST,
+            "param_invalid",
+            "exactly one cursor is required",
+            arkret_wire::ReasonCode::INVALID_CURSOR,
+            None,
         );
         return;
     }

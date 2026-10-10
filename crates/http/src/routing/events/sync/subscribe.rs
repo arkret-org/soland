@@ -149,6 +149,14 @@ pub(super) async fn account_response(
         .await
         {
             Ok(cursor) => cursor,
+            Err(SyncCursorError::Unavailable(message)) => {
+                soland_http::error::render_error_code(
+                    soland_http::error::ErrorCode::TemporarilyUnavailable,
+                    res,
+                    message,
+                );
+                return;
+            }
             Err(SyncCursorError::Expired) => {
                 soland_http::error::render_error_code(
                     soland_http::error::ErrorCode::CursorExpired,
@@ -272,9 +280,20 @@ pub(super) async fn account_response(
     // missed.
     let mut rx = state.subscribe_event_notifications();
     if let Some(event_id) = wait_for_event_id.as_deref() {
-        if let Some(envelope) = account_barrier_refusal(
-            wait_for_account_projection_barrier(&state, &mut rx, event_id).await,
-        ) {
+        let barrier_result = wait_for_account_projection_barrier(&state, &mut rx, event_id).await;
+        if let Ok(wait) = depot.get_typed::<soland_http::openapi_routes::WaitForSyncToken>()
+            && let Err(error) = parse_and_validate_barrier_cursor(
+                &wait.0,
+                &state,
+                &session,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+        {
+            render_account_cursor_error(res, error, true);
+            return;
+        }
+        if let Some(envelope) = account_barrier_refusal(barrier_result) {
             crate::error::render_problem_envelope(res, StatusCode::SERVICE_UNAVAILABLE, envelope);
             return;
         }
@@ -282,6 +301,16 @@ pub(super) async fn account_response(
             salvo::http::header::HeaderName::from_static("x-arkret-wait-for-satisfied"),
             salvo::http::HeaderValue::from_static("true"),
         );
+    }
+    let wait_for_token = depot
+        .get_typed::<soland_http::openapi_routes::WaitForSyncToken>()
+        .ok()
+        .map(|wait| wait.0.clone());
+    if let Err(error) =
+        account_read_inputs_current(&state, &session, &body, wait_for_token.as_deref()).await
+    {
+        render_account_cursor_error(res, error, false);
+        return;
     }
     let response = match build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await {
         Ok(response) => response,
@@ -299,6 +328,10 @@ pub(super) async fn account_response(
     let initial_has_delta = body.after.is_none()
         || (!delta_is_empty(&response) && !only_unavailable_details(&response));
     let body_stream = async_stream::stream! {
+        if account_read_inputs_current(&state, &session, &body, wait_for_token.as_deref()).await.is_err() {
+            yield Err(std::io::Error::other("account cursor authority changed before publication"));
+            return;
+        }
         if !stream_session_current(&state, &session, grant.as_deref()).await {
             yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
             return;
@@ -329,6 +362,10 @@ pub(super) async fn account_response(
                         yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
                         break;
                     }
+                    if account_read_inputs_current(&state, &session, &body, wait_for_token.as_deref()).await.is_err() {
+                        yield Err(std::io::Error::other("account cursor authority changed while waiting"));
+                        break;
+                    }
                     // Re-read durable projections at timeout. Broadcast is only
                     // a latency hint, so a lost wake-up must not hide data.
                     let final_snapshot = match build_sync_snapshot(
@@ -341,6 +378,10 @@ pub(super) async fn account_response(
                         Err(_) => break,
                     };
                     let final_cursor = final_snapshot.cursor.clone();
+                    if account_read_inputs_current(&state, &session, &body, wait_for_token.as_deref()).await.is_err() {
+                        yield Err(std::io::Error::other("account cursor authority changed before publication"));
+                        break;
+                    }
                     if delta_is_empty(&final_snapshot) {
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(
                             &account_checkpoint_frame(final_cursor.clone()),
@@ -399,6 +440,10 @@ pub(super) async fn account_response(
                             yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
                             break;
                         }
+                        if account_read_inputs_current(&state, &session, &body, wait_for_token.as_deref()).await.is_err() {
+                            yield Err(std::io::Error::other("account cursor authority changed while waiting"));
+                            break;
+                        }
                         let delta = match build_sync_snapshot(
                             &state,
                             Some(&session),
@@ -412,6 +457,10 @@ pub(super) async fn account_response(
                             continue;
                         }
                         let delta_cursor = delta.cursor.clone();
+                        if account_read_inputs_current(&state, &session, &body, wait_for_token.as_deref()).await.is_err() {
+                            yield Err(std::io::Error::other("account cursor authority changed before publication"));
+                            break;
+                        }
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(&delta));
                         if body.catchup.unwrap_or(false) && delta_cursor.is_some() {
                             yield Ok::<Bytes, std::io::Error>(ndjson_line(
@@ -449,6 +498,37 @@ pub(super) fn account_unauthorized_frame()
     let mut frame = account_checkpoint_frame(None);
     frame.kind = arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Unauthorized;
     frame
+}
+
+async fn account_read_inputs_current(
+    state: &AppState,
+    session: &SessionIdentityState,
+    body: &SyncRequestBody,
+    wait_for: Option<&str>,
+) -> Result<(), SyncCursorError> {
+    if let Some(after) = body.after.as_deref() {
+        cursor::parse_account_cursor(
+            after,
+            state,
+            Some(session),
+            sync_filter_value(body.filter.as_ref()).as_ref(),
+            Utc::now().timestamp_millis(),
+            body.replace_filter == Some(true),
+        )
+        .await?;
+    }
+    if let Some(after) = body
+        .realm_list
+        .as_ref()
+        .and_then(|page| page.after.as_ref())
+    {
+        cursor::parse_realm_list_cursor(state, session, after.as_str()).await?;
+    }
+    if let Some(wait) = wait_for {
+        parse_and_validate_barrier_cursor(wait, state, session, Utc::now().timestamp_millis())
+            .await?;
+    }
+    Ok(())
 }
 
 pub(crate) fn account_checkpoint_frame(
@@ -734,13 +814,22 @@ fn account_barrier_refusal(
     )
 }
 
-fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barrier: bool) {
+pub(crate) fn render_account_cursor_error(
+    res: &mut Response,
+    error: SyncCursorError,
+    barrier: bool,
+) {
     let context = if barrier {
         "X-Arkret-Wait-For"
     } else {
         "after"
     };
     match error {
+        SyncCursorError::Unavailable(message) => soland_http::error::render_error_code(
+            soland_http::error::ErrorCode::TemporarilyUnavailable,
+            res,
+            message,
+        ),
         SyncCursorError::Expired => soland_http::error::render_error_code(
             soland_http::error::ErrorCode::CursorExpired,
             res,
