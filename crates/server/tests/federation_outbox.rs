@@ -739,10 +739,15 @@ async fn peer_retry_after_is_a_floor_the_dispatcher_never_undercuts() {
 
 #[tokio::test]
 async fn dependency_missing_supersedes_the_attempt_with_a_fresh_key() {
-    let (peer_url, request_rx) = spawn_mock_peer_with_status(
-        "409 Conflict",
-        br#"{"ok":false,"error":{"code":"dependency_missing"}}"#,
-    );
+    static PROBLEM: LazyLock<Vec<u8>> = LazyLock::new(|| {
+        serde_json::to_vec(&arkret_wire::problem_details::Problem::new(
+            "dependency_missing",
+            409,
+            "The prior committed dependency is unavailable.",
+        ))
+        .unwrap()
+    });
+    let (peer_url, request_rx) = spawn_mock_peer_with_status("409 Conflict", &PROBLEM);
     let state = soland_test_support::app_state(outbox_test_config());
     install_verified_routes(&state, &[standard_peer_route(&peer_url)]);
     let row = enqueue_outbound(
