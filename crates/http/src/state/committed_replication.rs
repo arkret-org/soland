@@ -279,11 +279,16 @@ async fn replicate_one(
                     "duplicate_conflict: original replicated Human source differs".into(),
                 ));
             }
-            if welcomes.is_empty() && event.kind != arkret_wire::EventKind::MlsCommit {
+            if welcomes.is_empty()
+                && !matches!(
+                    event.kind,
+                    arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
+                )
+            {
                 return Ok(CommittedReplicaOutcome::Duplicate);
             }
-            // A replay may queue outstanding Welcomes only after the current
-            // origin binding has been re-proved for this authenticated peer.
+            // A replay may retain exact Genesis provenance or queue outstanding
+            // Welcomes only after re-proving this authenticated peer's origin.
             let welcomes = prepare_replica_roster_witnesses(state, item, welcomes).await?;
             return state
                 .authority_commits()

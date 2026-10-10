@@ -81,8 +81,8 @@ struct MlsGenesisProvenanceRow {
 }
 
 /// Freeze the governance-signed Genesis selector at the exact held Commit
-/// cut. A scan has no such signed carrier and may only hold the Event/Commit;
-/// a later committed-replication item establishes the immutable selector.
+/// cut. A held Full Genesis binds its own Event ID. A later MLS Commit needs
+/// the separately signed replica carrier; its target never implies Genesis.
 pub(super) async fn bind_mls_replica_genesis_in_connection(
     conn: &mut AsyncPgConnection,
     event: &arkret_wire::Event,
@@ -91,28 +91,76 @@ pub(super) async fn bind_mls_replica_genesis_in_connection(
     has_welcomes: bool,
     at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), PgTransactionError> {
-    if event.kind != arkret_wire::EventKind::MlsCommit {
+    if !matches!(
+        event.kind,
+        arkret_wire::EventKind::MlsGenesis | arkret_wire::EventKind::MlsCommit
+    ) {
         if genesis_event_ref.is_some() {
             return Err(invalid("non-MLS replica carries a Genesis selector").into());
         }
         return Ok(());
     }
-    let Some(genesis_event_ref) = genesis_event_ref else {
-        if has_welcomes {
-            return Err(invalid("MLS Welcome has no signed Genesis selector").into());
-        }
-        return Ok(());
-    };
-    let payload: MlsCommitPayload = serde_json::from_value(
-        serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
-    )
-    .map_err(invalid)?;
     let mls_group_id = event.scope_ref.canonical_mls_group_id().map_err(invalid)?;
-    if payload.mls_group_id().map_err(invalid)? != mls_group_id
-        || commit.event_ref != event.event_id
-        || genesis_event_ref == &event.event_id
+    let genesis_event_ref = match event.kind {
+        arkret_wire::EventKind::MlsGenesis => {
+            if genesis_event_ref.is_some() || has_welcomes {
+                return Err(invalid("Genesis replica carries an extra selector or Welcome").into());
+            }
+            let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+                serde_json::from_value(
+                    serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+                )
+                .map_err(invalid)?;
+            payload.validate().map_err(invalid)?;
+            if payload.effective_scope() != &event.scope_ref
+                || payload.mls_group_id().map_err(invalid)? != mls_group_id
+                || payload.created_at != event.created_at
+            {
+                return Err(
+                    invalid("Genesis replica differs from its exact accepted scope").into(),
+                );
+            }
+            &event.event_id
+        }
+        arkret_wire::EventKind::MlsCommit => {
+            let Some(reference) = genesis_event_ref else {
+                if has_welcomes {
+                    return Err(invalid("MLS Welcome has no signed Genesis selector").into());
+                }
+                return Ok(());
+            };
+            let payload: MlsCommitPayload = serde_json::from_value(
+                serde_json::to_value(&event.payload).map_err(PersistenceError::database)?,
+            )
+            .map_err(invalid)?;
+            if payload.mls_group_id().map_err(invalid)? != mls_group_id
+                || reference == &event.event_id
+            {
+                return Err(
+                    invalid("MLS replica Genesis selector differs from its Commit group").into(),
+                );
+            }
+            reference
+        }
+        _ => {
+            if genesis_event_ref.is_some() {
+                return Err(invalid("non-MLS replica carries a Genesis selector").into());
+            }
+            return Ok(());
+        }
+    };
+    if commit.event_ref != event.event_id
+        || commit.realm_id != event.realm_id
+        || commit.stream_ref
+            != arkret_wire::CommitStreamRef::from_scope(
+                &event.scope_ref,
+                Some(event.realm_id.clone()),
+            )
+            .map_err(invalid)?
+        || held_duplicate(conn, commit, Some(event)).await?
+            != Some(CommittedReplicaOutcome::Duplicate)
     {
-        return Err(invalid("MLS replica Genesis selector differs from its Commit group").into());
+        return Err(invalid("MLS Genesis provenance has no exact held source Full").into());
     }
     let scope_key = String::from_utf8(
         arkret_canonical::canonical_json_bytes(&event.scope_ref)

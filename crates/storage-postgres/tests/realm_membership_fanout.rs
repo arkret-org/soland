@@ -1054,6 +1054,203 @@ fn joined_row(
     }
 }
 
+/// An epoch-zero member roster derives its immutable Genesis only from an
+/// exact held source Full, before any later MLS Commit carrier exists.
+#[tokio::test]
+async fn held_genesis_replica_freezes_only_its_exact_scope_provenance() {
+    #[derive(diesel::QueryableByName)]
+    struct GenesisProvenanceRow {
+        #[diesel(sql_type = Text)]
+        realm_id: String,
+        #[diesel(sql_type = Text)]
+        mls_group_id: String,
+        #[diesel(sql_type = Text)]
+        genesis_event_ref: String,
+        #[diesel(sql_type = Text)]
+        first_carried_commit_event_ref: String,
+    }
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let store = PgAuthorityCommitStore { pool: pool.clone() };
+    let unit = bootstrap_unit_with_join_rule("replica-genesis-provenance", "public");
+    let last = unit.transactions.last().unwrap();
+    let member = remote_member("genesis-reader");
+    let join = membership_request(last, member.clone(), &member, "join");
+    let realm = join.authority_commit.event.realm_id.clone();
+    let at = join.authority_commit.event.created_at;
+    let payload = serde_json::json!({
+        "cipher_suite":"MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+        "group_info_ref":format!("ak:blob:sha256:{}", "3".repeat(64)),
+        "ratchet_tree_ref":format!("ak:blob:sha256:{}", "4".repeat(64)),
+        "creator_leaf_authority":{
+            "leaf_signature_key_b64u":arkret_canonical::base64url_encode([7_u8;32]),
+            "endpoint":{"kind":"device","device_id":format!("ak:device:{}",uuid::Uuid::now_v7())},
+            "authorization_event_ref":last.event.event_id,
+        },
+        "governance_binding":arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+            realm.clone(),None,0,0,0).unwrap(),
+        "created_at":arkret_canonical::format_timestamp_canonical(at),
+    });
+    let genesis = sourced(next_request(
+        &join.authority_commit,
+        arkret_wire::EventKind::MlsGenesis,
+        &founder(),
+        payload.clone(),
+        at,
+    ));
+    // No hosted opening/held prefix means no durable selector or Event.
+    assert!(
+        store
+            .install_committed_replica(&replica(&unit, &genesis, false))
+            .await
+            .is_err()
+    );
+    store
+        .install_committed_replica(&replica(&unit, &join, true))
+        .await
+        .unwrap();
+    anchor_at_join(&store, &join, vec![joined_row(&join, &member)]).await;
+    let source = replica(&unit, &genesis, false);
+    let scope_key =
+        String::from_utf8(arkret_canonical::canonical_json_bytes(&source.event.scope_ref).unwrap())
+            .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    for wrong in [
+        {
+            let mut extra = source.clone();
+            extra.genesis_event_ref = Some(last.event.event_id.clone());
+            extra
+        },
+        {
+            let mut wrong_payload = payload.clone();
+            wrong_payload["governance_binding"] = serde_json::to_value(
+                arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+                    arkret_wire::RealmId::from_event_id(&last.event.event_id),
+                    None,
+                    0,
+                    0,
+                    0,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            replica(
+                &unit,
+                &sourced(next_request(
+                    &join.authority_commit,
+                    arkret_wire::EventKind::MlsGenesis,
+                    &founder(),
+                    wrong_payload,
+                    at,
+                )),
+                false,
+            )
+        },
+    ] {
+        assert!(store.install_committed_replica(&wrong).await.is_err());
+        assert!(
+            store
+                .committed_event(&wrong.event.event_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let frozen: Vec<GenesisProvenanceRow> = diesel::sql_query(
+            "SELECT realm_id,mls_group_id,genesis_event_ref,first_carried_commit_event_ref \
+             FROM mls_replica_genesis_provenance WHERE scope_key=$1",
+        )
+        .bind::<Text, _>(&scope_key)
+        .load(&mut conn)
+        .await
+        .unwrap();
+        assert!(frozen.is_empty(), "a refused Full wrote Genesis provenance");
+    }
+    assert_eq!(
+        store.install_committed_replica(&source).await.unwrap(),
+        CommittedReplicaOutcome::Stored
+    );
+    assert_eq!(
+        store.install_committed_replica(&source).await.unwrap(),
+        CommittedReplicaOutcome::Duplicate
+    );
+    // The held exact replay may restore its own provenance, without another
+    // Event, a caller-selected locator, or an MLS Commit/Welcome.
+    diesel::sql_query("DELETE FROM mls_replica_genesis_provenance WHERE scope_key=$1")
+        .bind::<Text, _>(&scope_key)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .queue_replicated_welcomes(&source.event, &source.commit, None, &[], at)
+            .await
+            .unwrap(),
+        CommittedReplicaOutcome::Duplicate
+    );
+    let conflicting_at = at + chrono::Duration::milliseconds(1);
+    let mut conflicting_payload = payload;
+    conflicting_payload["created_at"] =
+        serde_json::json!(arkret_canonical::format_timestamp_canonical(conflicting_at));
+    let conflicting = sourced(next_request(
+        &genesis.authority_commit,
+        arkret_wire::EventKind::MlsGenesis,
+        &founder(),
+        conflicting_payload,
+        conflicting_at,
+    ));
+    assert_ne!(
+        conflicting.authority_commit.event.event_id,
+        source.event.event_id
+    );
+    assert_code(
+        &store
+            .install_committed_replica(&replica(&unit, &conflicting, false))
+            .await
+            .unwrap_err(),
+        ConflictCode::DuplicateConflict,
+    );
+    assert!(
+        store
+            .committed_event(&conflicting.authority_commit.event.event_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let frozen: Vec<GenesisProvenanceRow> = diesel::sql_query(
+        "SELECT realm_id,mls_group_id,genesis_event_ref,first_carried_commit_event_ref \
+         FROM mls_replica_genesis_provenance WHERE scope_key=$1",
+    )
+    .bind::<Text, _>(&scope_key)
+    .load(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(frozen.len(), 1);
+    assert_eq!(frozen[0].realm_id, source.event.realm_id.as_str());
+    assert_eq!(
+        frozen[0].mls_group_id,
+        source
+            .event
+            .scope_ref
+            .canonical_mls_group_id()
+            .unwrap()
+            .as_str()
+    );
+    assert_eq!(
+        frozen[0].first_carried_commit_event_ref,
+        source.event.event_id.as_str()
+    );
+    assert_eq!(frozen[0].genesis_event_ref, source.event.event_id.as_str());
+    assert_eq!(
+        store
+            .stream_head(&source.commit.stream_ref)
+            .await
+            .unwrap()
+            .unwrap()
+            .commit_id,
+        source.commit.commit_id
+    );
+}
+
 /// The member Station opens its held Realm stream with its member's own join
 /// and then stores only direct successors while that member is joined.
 #[tokio::test]

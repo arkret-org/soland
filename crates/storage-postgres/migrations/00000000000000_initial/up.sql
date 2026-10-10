@@ -4980,7 +4980,8 @@ CREATE INDEX mls_add_authority_attestation_outbox_pending
  WHERE acknowledged_at IS NULL;
 
 -- A verified scan can hold a postjoin MLS Commit without the prejoin Genesis.
--- Only a signed committed-replication item establishes this immutable selector.
+-- A held Full Genesis binds itself; a later Commit needs its separately signed
+-- committed-replication selector. Neither a target nor a Snapshot infers Genesis.
 CREATE TABLE mls_replica_genesis_provenance (
  realm_id TEXT NOT NULL,
  scope_key TEXT COLLATE "C" PRIMARY KEY,
