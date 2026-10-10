@@ -2715,20 +2715,22 @@ async fn grant_status(pool: &PgPool, grant: &EventCommitRequest) -> String {
 /// zero-write.
 #[tokio::test]
 async fn capability_revoke_and_relinquish_follow_their_target_guards() {
+    // Retain the exact requests for CAS/replay assertions without embedding
+    // each nested source/admission future in this matrix's stack frame.
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let unit = admit(&pool, "grant-guards", "public").await;
+    let unit = Box::pin(admit(&pool, "grant-guards", "public")).await;
     let realm_id = unit.transactions[0].event.realm_id.clone();
-    let alice = accepted_pcr_account::accepted_pcr_account(
+    let alice = Box::pin(accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&member_station()),
-    )
+    ))
     .await;
-    let bob = accepted_pcr_account::accepted_pcr_account(
+    let bob = Box::pin(accepted_pcr_account::accepted_pcr_account(
         &pool,
         device_authorization_history::did_web_station(&member_station()),
-    )
+    ))
     .await;
     let alice_join = membership_request(
         unit.transactions.last().unwrap(),
@@ -2736,11 +2738,13 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &alice,
         "join",
     );
-    let alice_join = ordinary_realm::source_request(&pool, alice_join).await;
-    uow.commit_event(alice_join.clone()).await.unwrap();
+    let alice_join = Box::pin(ordinary_realm::source_request(&pool, alice_join)).await;
+    Box::pin(uow.commit_event(alice_join.clone()))
+        .await
+        .unwrap();
     let bob_join = membership_request(&alice_join.authority_commit, bob.clone(), &bob, "join");
-    let bob_join = ordinary_realm::source_request(&pool, bob_join).await;
-    uow.commit_event(bob_join.clone()).await.unwrap();
+    let bob_join = Box::pin(ordinary_realm::source_request(&pool, bob_join)).await;
+    Box::pin(uow.commit_event(bob_join.clone())).await.unwrap();
     let root_event_ref = realm_root_event_ref(&pool, &realm_id).await;
 
     // A joined member without any grant cannot issue one.
@@ -2769,12 +2773,12 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         }),
         bob_join.authority_commit.commit.committed_at,
     ));
-    assert_refused(
+    Box::pin(assert_refused(
         &pool,
         &uow,
         unauthorized_issue,
         ConflictCode::CapabilityDenied,
-    )
+    ))
     .await;
 
     let bob_grant = grant_request(
@@ -2783,8 +2787,8 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &["ak.message.create"],
         &root_event_ref,
     );
-    let bob_grant = ordinary_realm::source_request(&pool, bob_grant).await;
-    uow.commit_event(bob_grant.clone()).await.unwrap();
+    let bob_grant = Box::pin(ordinary_realm::source_request(&pool, bob_grant)).await;
+    Box::pin(uow.commit_event(bob_grant.clone())).await.unwrap();
     let revision = bob_grant.authority_commit.commit.clone();
     let head = &bob_grant.authority_commit;
     for (kind, actor, code) in [
@@ -2801,20 +2805,22 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
             ConflictCode::GrantRelinquishNotSubject,
         ),
     ] {
-        assert_refused(
+        Box::pin(assert_refused(
             &pool,
             &uow,
             close_grant_request(head, kind, actor, &bob_grant, &revision),
             code,
-        )
+        ))
         .await;
     }
     // Holding ak.capability.revoke is not enough to revoke another issuer's
     // grant.
     let alice_revoker = grant_request(head, &alice, &["ak.capability.revoke"], &root_event_ref);
-    let alice_revoker = ordinary_realm::source_request(&pool, alice_revoker).await;
-    uow.commit_event(alice_revoker.clone()).await.unwrap();
-    assert_refused(
+    let alice_revoker = Box::pin(ordinary_realm::source_request(&pool, alice_revoker)).await;
+    Box::pin(uow.commit_event(alice_revoker.clone()))
+        .await
+        .unwrap();
+    Box::pin(assert_refused(
         &pool,
         &uow,
         close_grant_request(
@@ -2825,12 +2831,12 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
             &revision,
         ),
         ConflictCode::CapabilityDenied,
-    )
+    ))
     .await;
     // The subject releases by exact revision only, once.
     let mut stale = revision.clone();
     stale.stream_position += 100;
-    assert_refused(
+    Box::pin(assert_refused(
         &pool,
         &uow,
         close_grant_request(
@@ -2841,7 +2847,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
             &stale,
         ),
         ConflictCode::CasConflict,
-    )
+    ))
     .await;
     let relinquish = close_grant_request(
         &alice_revoker.authority_commit,
@@ -2850,10 +2856,12 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &bob_grant,
         &revision,
     );
-    let relinquish = ordinary_realm::source_request(&pool, relinquish).await;
-    uow.commit_event(relinquish.clone()).await.unwrap();
+    let relinquish = Box::pin(ordinary_realm::source_request(&pool, relinquish)).await;
+    Box::pin(uow.commit_event(relinquish.clone()))
+        .await
+        .unwrap();
     assert_eq!(grant_status(&pool, &bob_grant).await, "relinquished");
-    assert_refused(
+    Box::pin(assert_refused(
         &pool,
         &uow,
         close_grant_request(
@@ -2864,7 +2872,7 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
             &revision,
         ),
         ConflictCode::CasConflict,
-    )
+    ))
     .await;
     // The root controller revokes the grant it issued.
     let revoke = close_grant_request(
@@ -2874,8 +2882,8 @@ async fn capability_revoke_and_relinquish_follow_their_target_guards() {
         &alice_revoker,
         &alice_revoker.authority_commit.commit,
     );
-    let revoke = ordinary_realm::source_request(&pool, revoke).await;
-    uow.commit_event(revoke).await.unwrap();
+    let revoke = Box::pin(ordinary_realm::source_request(&pool, revoke)).await;
+    Box::pin(uow.commit_event(revoke)).await.unwrap();
     assert_eq!(grant_status(&pool, &alice_revoker).await, "revoked");
 }
 

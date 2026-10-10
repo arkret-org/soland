@@ -3185,8 +3185,8 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
 
     // Live delta: two more messages after the delivered head 30 arrive as a
     // window of exactly those two Commits, on the snapshot the earlier
-    // freeze issued at its own head; a delivered head that is not an
-    // accepted ancestor falls back to the last `window_limit` Commits.
+    // freeze issued at its own head. The continuation's minimum head is a
+    // server-held accepted binding, not an unverified caller declaration.
     let delivered = arkret_wire::CommitStreamHead {
         stream_ref: backed.window.stream_ref.clone(),
         stream_position: backed.window.next_position - 1,
@@ -3228,6 +3228,10 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
         .unwrap()
         .unwrap();
     assert_eq!(delta_anchor.visible_stream_heads, vec![delivered.clone()]);
+    // client-sync.md section 12.3.2: an unknown or conflicting minimum head
+    // cannot be treated as a recoverable continuation or reset to an older cut.
+    let issuances_before = issuance_count(&pool, &realm_id).await;
+    let reservations_before = reservation_count(&pool).await;
     let forged = store
         .freeze_account_realm_window(
             &AccountRealmWindowRequest {
@@ -3241,10 +3245,22 @@ async fn message_tail_window_beyond_twenty_commits_names_the_issued_anchor() {
             &sign,
         )
         .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(forged.committed_events.len(), 21);
-    assert_eq!(forged.committed_events[0].commit().stream_position, 12);
+        .unwrap_err();
+    assert!(matches!(
+        forged,
+        soland_storage::PersistenceError::Internal(message)
+            if message == "Account continuation minimum head is not covered at the frozen cut"
+    ));
+    assert_eq!(issuance_count(&pool, &realm_id).await, issuances_before);
+    assert_eq!(reservation_count(&pool).await, reservations_before);
+    assert_eq!(
+        store
+            .issued_realm_state_snapshot(&realm_id, &creator, &delta_basis.snapshot_ref, &issuer)
+            .await
+            .unwrap(),
+        Some(delta_anchor),
+        "refusing the forged continuation preserves the issued lawful anchor"
+    );
 }
 
 async fn account_issuance_count(

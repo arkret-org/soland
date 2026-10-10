@@ -10,7 +10,6 @@ mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
-mod support;
 
 use soland_storage::contract_tests::{
     AppletFormalCommitContractStores, EventCommitContractMessages, EventCommitContractStores,
@@ -29,7 +28,7 @@ use soland_storage::{
     RelationCurrentResultStore, SyncCursorStore,
 };
 use soland_storage_postgres::{
-    Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
+    PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
     PgAuthorityCommitStore, PgContactStore, PgDeviceInventoryStore, PgDeviceMessageStore,
     PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
     PgInviteNewSourceLedgerStore, PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore,
@@ -41,7 +40,8 @@ use soland_storage_postgres::{
 async fn postgres_agent_participation_cas_mismatch_has_zero_effect_and_serializes_replacement() {
     use soland_storage::AgentParticipationStore;
     use soland_storage_postgres::PgAgentParticipationStore;
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _guard = DB_GUARD.lock().await;
     let store = PgAgentParticipationStore { pool: pool.clone() };
     let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
@@ -121,7 +121,8 @@ async fn postgres_agent_participation_ceiling_reads_accepted_governance_and_refu
  {
     use soland_storage::AgentParticipationStore;
     use soland_storage_postgres::PgAgentParticipationStore;
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _guard = DB_GUARD.lock().await;
     let store = PgAgentParticipationStore { pool: pool.clone() };
     let discussion = ordinary_realm::open_discussion(
@@ -155,7 +156,8 @@ async fn postgres_agent_participation_ceiling_reads_accepted_governance_and_refu
 
 #[tokio::test]
 async fn postgres_audit_regression_satisfies_account_localpart_remove_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let accounts = PgAccountStore { pool: pool.clone() };
     let localparts = PgAccountLocalpartStore { pool };
@@ -169,7 +171,8 @@ async fn postgres_audit_regression_satisfies_account_localpart_remove_contract()
 
 #[tokio::test]
 async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     // This contract bypasses runtime bootstrap, so install its trusted local
     // inventory owner explicitly before exercising device writes.
@@ -259,8 +262,6 @@ async fn confirmed_contract_device(pool: &PgPool) -> soland_storage::DeviceRevoc
     .expect("accepted PCR genesis")
 }
 
-static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
-
 #[tokio::test]
 async fn postgres_realm_directory_hydration_preserves_unrelated_live_metadata() {
     use soland_storage::IdentityStoreRegistry as _;
@@ -328,12 +329,12 @@ async fn postgres_notification_relay_delivers_large_payload_by_committed_referen
     use soland_storage_postgres::{load_event_notification, publish_event_notification};
     use tokio_postgres::{AsyncMessage, NoTls};
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
-    let (client, mut connection) =
-        tokio_postgres::connect(&support::contract_database_url(), NoTls)
-            .await
-            .unwrap();
+    let (client, mut connection) = tokio_postgres::connect(database.url(), NoTls)
+        .await
+        .unwrap();
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let listener = tokio::spawn(async move {
         while let Some(message) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
@@ -391,7 +392,8 @@ async fn postgres_notification_relay_delivers_large_payload_by_committed_referen
 async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     use soland_storage::FederationFrontierExchangeStore;
     use soland_storage_postgres::PgFederationFrontierExchangeStore;
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
         arkret_canonical::DigestSuite::Sha256,
@@ -654,7 +656,8 @@ async fn postgres_structured_projection_identities_round_trip() {
         CircleProjectionStore, MorphProjectionStore, SpaceContainerProjectionStore,
         StrandProjectionStore,
     };
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let principal = DidCoreId::new("ak:did_core:web:projection-alice.example").unwrap();
     let account = AccountId::new(
@@ -804,7 +807,8 @@ async fn postgres_key_backup_identity_and_series_round_trip() {
     use arkret_wire::{AccountId, ActorId, DidCoreId};
     use soland_storage::{KeyBackupStore, PersistenceError};
     use soland_storage_postgres::PgKeyBackupStore;
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let principal = DidCoreId::new(format!(
         "ak:did_core:web:backup-{}.example",
@@ -904,7 +908,8 @@ fn backup_page_envelope(
 async fn postgres_key_backup_pages_are_ordered_bounded_and_revisioned() {
     use soland_storage::{KeyBackupListPosition, KeyBackupListQuery, KeyBackupStore};
     use soland_storage_postgres::PgKeyBackupStore;
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _guard = DB_GUARD.lock().await;
     let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(format!(
@@ -1003,21 +1008,6 @@ struct RelationCurrentResultContractRow {
     current_stream_position: i64,
     #[diesel(sql_type = diesel::sql_types::Jsonb)]
     value: serde_json::Value,
-}
-
-async fn test_pool() -> PgPool {
-    TEST_POOL
-        .get_or_init(|| async {
-            let url = support::contract_database_url();
-            support::ensure_contract_database(&url).await;
-            Db::connect(Some(&url), Default::default())
-                .await
-                .expect("initialize test database")
-                .pool
-                .expect("a configured URL always yields a pool")
-        })
-        .await
-        .clone()
 }
 
 /// Whether the fixture expects the adapter to keep this commit.
@@ -1283,7 +1273,8 @@ async fn assert_event_and_commit_absent(
 async fn postgres_self_producer_guard_rejects_before_event_and_commit_writes() {
     use soland_storage::EventCommitUnitOfWork;
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("self-producer-guard:{}", uuid::Uuid::now_v7());
     let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
@@ -1339,7 +1330,8 @@ async fn postgres_oversized_realm_snapshot_rejects_the_commit_without_writes() {
     use diesel_async::RunQueryDsl;
     use soland_storage::{EventCommitUnitOfWork, PersistenceError};
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let discussion = ordinary_realm::open_discussion(
         &pool,
@@ -1395,7 +1387,8 @@ async fn postgres_relation_current_result_is_exact_commit_cas_and_atomic() {
     use diesel_async::RunQueryDsl;
     use soland_storage::{EventCommitUnitOfWork, PersistenceError};
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("relation-current:{}", uuid::Uuid::now_v7());
     let discussion = ordinary_realm::open_discussion(&pool, &namespace).await;
@@ -1789,7 +1782,8 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
         FrankingReplayNonceCommit, PersistenceError,
     };
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     // Every report in this ledger belongs to one ordinary Realm, so they share
     // one authority and one chained Realm stream; the nonce binding requires
@@ -2034,7 +2028,8 @@ async fn postgres_franking_target_proof_fault_and_restart_contract() {
         EventBatchCommitRequest, EventCommitUnitOfWork, EventStore, PersistenceError,
     };
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let discussion = ordinary_realm::open_discussion(
         &pool,
@@ -2150,7 +2145,8 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
         EventBatchCommitRequest, EventCommitUnitOfWork, EventStore, PersistenceError,
     };
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let discussion = ordinary_realm::open_discussion(
         &pool,
@@ -2227,7 +2223,8 @@ async fn postgres_queue_refuses_a_second_envelope_under_one_event_id() {
 
 #[tokio::test]
 async fn postgres_agent_store_accepts_spec_agent_binding() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgAgentStore { pool: pool.clone() };
     let suffix = uuid::Uuid::now_v7().simple().to_string();
@@ -2263,7 +2260,8 @@ async fn postgres_agent_store_accepts_spec_agent_binding() {
 
 #[tokio::test]
 async fn postgres_agent_table_rejects_mismatched_did_and_core_agent_ids() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let agent_id = format!("ak:did_core:webvh:zLeft{suffix}");
@@ -2307,7 +2305,8 @@ fn event_derived_realm_id(seed: &[u8]) -> String {
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_shared_idempotency_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgIdempotencyStore { pool };
     let namespace = format!("postgres-contract-{}", uuid::Uuid::now_v7());
@@ -2329,7 +2328,8 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas(
         projection_data: Option<serde_json::Value>,
     }
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgNotificationStore { pool: pool.clone() };
     let run_id = uuid::Uuid::now_v7();
@@ -2503,7 +2503,8 @@ async fn postgres_agent_approval_trigger_emits_a_readable_account_notification()
         actor_key: String,
     }
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let station_id = format!("ak:did_core:webvh:Qs{suffix}");
@@ -2712,7 +2713,8 @@ async fn postgres_agent_approval_trigger_emits_a_readable_account_notification()
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_mimi_consent_correlation_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgMimiConsentCorrelationStore { pool };
     let namespace = format!("postgres-mimi-consent-{}", uuid::Uuid::now_v7());
@@ -2721,7 +2723,8 @@ async fn postgres_adapter_satisfies_mimi_consent_correlation_contract() {
 
 #[tokio::test]
 async fn postgres_adapter_atomically_admits_authority_events() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let authority = PgAuthorityCommitStore { pool };
     let namespace = format!("postgres-atomic-admission-{}", uuid::Uuid::now_v7());
@@ -2733,7 +2736,8 @@ async fn postgres_local_current_member_read_requires_matching_authority_and_comm
     use diesel::sql_types::{BigInt, Binary, Jsonb, SmallInt, Text, Timestamptz};
     use diesel_async::RunQueryDsl;
 
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("local-current-member:{}", uuid::Uuid::now_v7());
     let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(namespace.as_bytes()))
@@ -2878,7 +2882,8 @@ async fn postgres_local_current_member_read_requires_matching_authority_and_comm
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_shared_event_commit_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
     let authority = PgAuthorityCommitStore { pool: pool.clone() };
@@ -2912,7 +2917,8 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract() {
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
     let authority = PgAuthorityCommitStore { pool: pool.clone() };
@@ -2933,7 +2939,8 @@ async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract() 
 
 #[tokio::test]
 async fn postgres_applet_authoring_preview_has_one_durable_exact_winner() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgAppletStore { pool };
     let subject_key = format!("applet-preview:{}", uuid::Uuid::now_v7());
@@ -3006,7 +3013,8 @@ async fn postgres_applet_authoring_preview_has_one_durable_exact_winner() {
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_shared_federation_outbox_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgFederationOutboxStore { pool };
     let namespace = format!("postgres-federation-outbox-{}", uuid::Uuid::now_v7());
@@ -3015,7 +3023,8 @@ async fn postgres_adapter_satisfies_shared_federation_outbox_contract() {
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-retirement-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
@@ -3035,7 +3044,8 @@ async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract() {
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-last-resort-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
@@ -3164,7 +3174,8 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract() {
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_organization_registration_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgOrganizationRegistrationStore::new(pool);
     let namespace = format!(
@@ -3176,7 +3187,8 @@ async fn postgres_adapter_satisfies_organization_registration_contract() {
 
 #[tokio::test]
 async fn postgres_account_data_cas_treats_an_absent_key_as_revision_zero() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let store = PgAccountDataStore { pool };
     let key = format!("client.postgres-cas.{}", uuid::Uuid::now_v7());
@@ -3218,7 +3230,8 @@ async fn postgres_retention_policy_preserves_full_actor_after_reopen() {
     use arkret_wire::{AccountId, ActorId, DidCoreId};
     use soland_storage::{RetentionPolicyRecord, RetentionPolicyStore};
     use soland_storage_postgres::PgRetentionPolicyStore;
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _guard = DB_GUARD.lock().await;
     let store = PgRetentionPolicyStore { pool: pool.clone() };
     let principal = DidCoreId::new("ak:did_core:web:retention-author.example").unwrap();
@@ -3256,7 +3269,8 @@ async fn postgres_retention_policy_preserves_full_actor_after_reopen() {
 
 #[tokio::test]
 async fn postgres_adapter_satisfies_invite_new_source_ledger_contract() {
-    let pool = test_pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let _db_guard = DB_GUARD.lock().await;
     let ledger = PgInviteNewSourceLedgerStore { pool: pool.clone() };
     let accounts = PgAccountStore { pool };

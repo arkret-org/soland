@@ -24,7 +24,8 @@ async fn footprint(pool: &PgPool) -> Value {
     diesel::sql_query("SELECT jsonb_build_object('events',(SELECT count(*) FROM canonical_events),'commits',(SELECT count(*) FROM realm_commits),'watches',(SELECT count(*) FROM strand_watch_current_results),'outbox',(SELECT count(*) FROM federation_outbox)) AS value")
         .get_result::<Footprint>(&mut *conn).await.unwrap().value
 }
-fn write(
+async fn write(
+    pool: &PgPool,
     discussion: &ordinary_realm::Discussion,
     previous: &soland_storage::AuthorityCommitTransaction,
     level: Value,
@@ -39,13 +40,19 @@ fn write(
     if let Some(expected) = expected {
         payload["expected_value"] = expected;
     }
-    ordinary_realm::next_request(
+    let request = ordinary_realm::next_request(
         previous,
         arkret_wire::EventKind::StrandWatchSet,
-        &ordinary_realm::founder(),
+        discussion
+            .head
+            .authority_commit
+            .event
+            .actor_id
+            .signing_principal_id(),
         payload,
         discussion.committed_at() + chrono::Duration::seconds(offset),
-    )
+    );
+    ordinary_realm::source_request(pool, request).await
 }
 fn read_request(discussion: &ordinary_realm::Discussion) -> StrandWatchCurrentRequestBody {
     StrandWatchCurrentRequestBody {
@@ -90,6 +97,7 @@ async fn realm_watch_current_remains_provable_after_private_sidecar_history() {
         json!({}),
         discussion.committed_at(),
     );
+    let create = ordinary_realm::source_request(&pool, create).await;
     uow.commit_event(create.clone()).await.unwrap();
     let sidecar = arkret_wire::SidecarId::from_event_id(&create.authority_commit.event.event_id);
     let scope = arkret_wire::ScopeRef::Sidecar {
@@ -119,6 +127,7 @@ async fn realm_watch_current_remains_provable_after_private_sidecar_history() {
     };
     attach.authority_commit.commit.stream_position = 0;
     attach.authority_commit.commit.previous_commit_ref = None;
+    let attach = ordinary_realm::source_request(&pool, attach).await;
     uow.commit_event(attach).await.unwrap();
     assert!(matches!(
         read(&pool, &discussion).await,
@@ -131,6 +140,7 @@ async fn realm_watch_current_remains_provable_after_private_sidecar_history() {
         json!({"strand_id":discussion.strand_id,"watcher_actor_id":previous.event.actor_id,"level":"all"}),
         discussion.committed_at() + chrono::Duration::seconds(30),
     );
+    let watch = ordinary_realm::source_request(&pool, watch).await;
     uow.commit_event(watch).await.unwrap();
     assert!(matches!(
         read(&pool, &discussion).await,
@@ -149,13 +159,15 @@ async fn current_read_distinguishes_never_written_cleared_and_complete_cas() {
         SelfExactCurrentRead::Answer(StrandWatchCurrentOutcome::NeverWritten { .. })
     ));
     let first = write(
+        &pool,
         &discussion,
         &discussion.head.authority_commit,
         json!("all"),
         Some(true),
         None,
         30,
-    );
+    )
+    .await;
     uow.commit_event(first.clone()).await.unwrap();
     let baseline = footprint(&pool).await;
     uow.commit_event(first.clone()).await.unwrap();
@@ -170,13 +182,15 @@ async fn current_read_distinguishes_never_written_cleared_and_complete_cas() {
         Some(json!({"level":"all","level_public":false})),
     ] {
         let refused = write(
+            &pool,
             &discussion,
             &first.authority_commit,
             json!("muted"),
             None,
             expected,
             31,
-        );
+        )
+        .await;
         let error = uow.commit_event(refused).await.unwrap_err();
         assert_eq!(
             error.conflict_code(),
@@ -185,13 +199,15 @@ async fn current_read_distinguishes_never_written_cleared_and_complete_cas() {
         assert_eq!(footprint(&pool).await, baseline);
     }
     let clear = write(
+        &pool,
         &discussion,
         &first.authority_commit,
         Value::Null,
         None,
         Some(json!({"level":"all","level_public":true})),
         32,
-    );
+    )
+    .await;
     uow.commit_event(clear.clone()).await.unwrap();
     let SelfExactCurrentRead::Answer(StrandWatchCurrentOutcome::Current { result, .. }) =
         read(&pool, &discussion).await
@@ -205,26 +221,32 @@ async fn current_read_distinguishes_never_written_cleared_and_complete_cas() {
     );
     let baseline = footprint(&pool).await;
     assert!(
-        uow.commit_event(write(
-            &discussion,
-            &clear.authority_commit,
-            json!("all"),
-            None,
-            None,
-            33
-        ))
+        uow.commit_event(
+            write(
+                &pool,
+                &discussion,
+                &clear.authority_commit,
+                json!("all"),
+                None,
+                None,
+                33
+            )
+            .await
+        )
         .await
         .is_err()
     );
     assert_eq!(footprint(&pool).await, baseline);
     let restore = write(
+        &pool,
         &discussion,
         &clear.authority_commit,
         json!("participating"),
         None,
         Some(Value::Null),
         34,
-    );
+    )
+    .await;
     uow.commit_event(restore.clone()).await.unwrap();
     let SelfExactCurrentRead::Answer(StrandWatchCurrentOutcome::Current { result, .. }) =
         read(&pool, &discussion).await
@@ -255,14 +277,18 @@ async fn current_read_distinguishes_never_written_cleared_and_complete_cas() {
     );
     let baseline = footprint(&pool).await;
     let result = uow
-        .commit_event(write(
-            &discussion,
-            &restore.authority_commit,
-            json!("all"),
-            None,
-            None,
-            35,
-        ))
+        .commit_event(
+            write(
+                &pool,
+                &discussion,
+                &restore.authority_commit,
+                json!("all"),
+                None,
+                None,
+                35,
+            )
+            .await,
+        )
         .await
         .unwrap_err();
     assert!(result.to_string().contains("revision_unavailable"));
@@ -295,7 +321,7 @@ async fn unproved_tenure_import_cannot_treat_missing_watch_as_never_written() {
     drop(conn);
     previous.expected_authority.generation = 1;
     previous.expected_authority.last_handoff_ref = Some(handoff_id);
-    let request = write(&discussion, &previous, json!("all"), None, None, 30);
+    let request = write(&pool, &discussion, &previous, json!("all"), None, None, 30).await;
     assert_eq!(request.authority_commit.commit.governance_generation, 1);
     assert!(matches!(
         read(&pool, &discussion).await,
@@ -325,13 +351,15 @@ async fn watch_projection_fault_rolls_back_event_commit_and_outbox() {
     conn.batch_execute("CREATE FUNCTION watch_projection_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'watch projection fault'; END $$; CREATE TRIGGER watch_projection_fault BEFORE INSERT ON strand_watch_current_results FOR EACH ROW EXECUTE FUNCTION watch_projection_fault();").await.unwrap();
     drop(conn);
     let request = write(
+        &pool,
         &discussion,
         &discussion.head.authority_commit,
         json!("all"),
         None,
         None,
         30,
-    );
+    )
+    .await;
     let result = uow.commit_event(request.clone()).await;
     let mut conn = pool.get().await.unwrap();
     conn.batch_execute("DROP TRIGGER watch_projection_fault ON strand_watch_current_results; DROP FUNCTION watch_projection_fault();").await.unwrap();

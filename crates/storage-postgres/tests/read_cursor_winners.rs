@@ -9,7 +9,7 @@
 )]
 mod ordinary_realm;
 
-use ordinary_realm::{Discussion, event_for_actor, founder, open_human_discussion, station};
+use ordinary_realm::{Discussion, event_for_actor, open_human_discussion, station};
 use soland_storage::{
     EventCommitUnitOfWork, ReadCursorAdvance, ReadCursorAdvanceOutcome, ReadCursorAdvanceRefusal,
     ReadCursorStore,
@@ -135,14 +135,20 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let discussion = open_human_discussion(&pool, "read-cursor-causal").await;
+    let principal = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id();
     let (first, second) = two_messages(&pool, &discussion).await;
     let store = PgReadCursorStore::new(pool.clone());
-    let owner_id = owner(&founder());
+    let owner_id = owner(principal);
 
     // The first candidate for a key always wins.
     let low_hlc_later = advance(
         &discussion,
-        &founder(),
+        principal,
         DEVICE_A,
         &second,
         "019641370000-0000-00000001",
@@ -158,7 +164,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
     // is an accepted no-op that reports the kept winner.
     let high_hlc_earlier = advance(
         &discussion,
-        &founder(),
+        principal,
         DEVICE_B,
         &first,
         "0196413700ff-0000-00000001",
@@ -196,7 +202,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
     // wins, and an equal HLC falls to the greater device id.
     let concurrent = advance(
         &discussion,
-        &founder(),
+        principal,
         DEVICE_B,
         &second,
         "019641370001-0000-00000001",
@@ -206,7 +212,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
     assert_eq!((device.as_str(), won), (DEVICE_B, true));
     let tie = advance(
         &discussion,
-        &founder(),
+        principal,
         DEVICE_C,
         &second,
         "019641370001-0000-00000001",
@@ -216,7 +222,7 @@ async fn causal_position_wins_over_hlc_and_exact_retry_returns_the_first_outcome
     assert_eq!((device.as_str(), won), (DEVICE_C, true));
     let lower_device_tie = advance(
         &discussion,
-        &founder(),
+        principal,
         DEVICE_A,
         &second,
         "019641370001-0000-00000001",
@@ -250,6 +256,12 @@ async fn unprovable_or_foreign_positions_are_refused_with_zero_writes() {
     let database = TestDatabase::lease().await;
     let pool = database.pool();
     let discussion = open_human_discussion(&pool, "read-cursor-refusals").await;
+    let principal = discussion
+        .head
+        .authority_commit
+        .event
+        .actor_id
+        .signing_principal_id();
     let (_, second) = two_messages(&pool, &discussion).await;
     let store = PgReadCursorStore::new(pool.clone());
     let hlc = "019641370000-0000-00000001";
@@ -259,7 +271,7 @@ async fn unprovable_or_foreign_positions_are_refused_with_zero_writes() {
         arkret_canonical::DigestSuite::Sha256,
         arkret_canonical::sha256_bytes(b"not an Event of this Realm"),
     );
-    let missing = advance(&discussion, &founder(), DEVICE_A, &unknown, hlc, 1);
+    let missing = advance(&discussion, principal, DEVICE_A, &unknown, hlc, 1);
     assert_eq!(
         refused(store.advance(&missing).await.unwrap()),
         ReadCursorAdvanceRefusal::PositionNotInRealm
@@ -276,17 +288,17 @@ async fn unprovable_or_foreign_positions_are_refused_with_zero_writes() {
     // A position before the owner's current join is outside its readable
     // interval.
     let genesis = discussion.unit.transactions[0].event.event_id.clone();
-    let before_join = advance(&discussion, &founder(), DEVICE_A, &genesis, hlc, 3);
+    let before_join = advance(&discussion, principal, DEVICE_A, &genesis, hlc, 3);
     assert_eq!(
         refused(store.advance(&before_join).await.unwrap()),
         ReadCursorAdvanceRefusal::PositionNotReadable
     );
 
     // A Station that does not govern the Realm cannot classify the position.
-    let elsewhere = advance(&discussion, &founder(), DEVICE_A, &second, hlc, 4);
+    let elsewhere = advance(&discussion, principal, DEVICE_A, &second, hlc, 4);
     let elsewhere = with_event(
         elsewhere.event,
-        owner(&founder()),
+        owner(principal),
         arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
     );
     assert!(matches!(
@@ -298,7 +310,7 @@ async fn unprovable_or_foreign_positions_are_refused_with_zero_writes() {
     assert_eq!(count(&pool, "read_cursor_winners").await, 0);
 
     // An owner that is not the payload actor never reaches the transaction.
-    let mut unbound = advance(&discussion, &founder(), DEVICE_A, &second, hlc, 5);
+    let mut unbound = advance(&discussion, principal, DEVICE_A, &second, hlc, 5);
     unbound.owner = owner(&stranger);
     assert!(store.advance(&unbound).await.is_err());
     assert_eq!(count(&pool, "actor_private_events").await, 0);
