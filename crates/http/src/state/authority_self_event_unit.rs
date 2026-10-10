@@ -179,8 +179,9 @@ fn decided_at_commit_cut(kind: &arkret_wire::EventKind) -> bool {
     )
 }
 
-/// Content identity is checked before any Event-ID lookup, without refreshing
-/// the historical producer's current authority or device state.
+/// Content identity and the immutable Genesis timestamp contract are checked
+/// before any Event-ID lookup, without refreshing the historical producer's
+/// current authority or device state.
 pub(super) fn validate_replay_event_identity(event: &Event) -> ServiceResult<()> {
     let derived = event
         .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
@@ -189,6 +190,23 @@ pub(super) fn validate_replay_event_identity(event: &Event) -> ServiceResult<()>
         return Err(ServiceError::Conflict(
             soland_storage::ConflictCode::EventIdDigestMismatch.to_string(),
         ));
+    }
+    if event.kind == arkret_wire::EventKind::MlsGenesis {
+        let payload: arkret_models_collaboration::events_payloads::MlsGenesisPayload =
+            serde_json::from_value(
+                serde_json::to_value(&event.payload)
+                    .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?,
+            )
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        payload
+            .validate()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        if event.created_at != payload.created_at {
+            return Err(ServiceError::protocol(
+                arkret_wire::ErrorCode::FailedPrecondition,
+                "Genesis Event and payload must preserve one creation timestamp",
+            ));
+        }
     }
     Ok(())
 }
