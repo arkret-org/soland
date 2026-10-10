@@ -1,15 +1,8 @@
-#[path = "support/accepted_pcr_account.rs"]
-mod accepted_pcr_account;
-#[path = "../../test-support/src/device_authorization_history.rs"]
-#[allow(dead_code)]
-mod device_authorization_history;
-#[path = "support/ordinary_realm.rs"]
-mod ordinary_realm;
-#[path = "../../test-support/src/pcr_genesis.rs"]
-#[allow(dead_code)]
-mod pcr_genesis;
+#[path = "support/historical_human.rs"]
+mod historical_human;
 
 use arkret_wire::{ActorId, CommitStreamRef, EventKind};
+use historical_human::ordinary_realm;
 use soland_storage::{AuthorityCommitStore, AuthorityCommitTransaction, EventCommitUnitOfWork};
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{PgAuthorityCommitStore, PgEventCommitUnitOfWork};
@@ -58,29 +51,28 @@ fn membership(
 
 #[tokio::test]
 async fn durable_circle_directory_and_member_details_follow_accepted_current() {
-    check_circle_convenience("realm_members").await;
-    check_circle_convenience("members").await;
+    Box::pin(check_circle_convenience("realm_members")).await;
+    Box::pin(check_circle_convenience("members")).await;
 }
 
 async fn check_circle_convenience(visibility: &str) {
     use arkret_models_collaboration::governance::circle::{CircleMembership, CircleReadView};
     let database = TestDatabase::lease().await;
     let pool = database.pool();
-    let did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let actor = accepted_pcr_account::accepted_pcr_account(&pool, did.clone()).await;
-    let unit = ordinary_realm::bootstrap_unit_for_account(
-        &uuid::Uuid::now_v7().to_string(),
-        actor.as_account_id().unwrap(),
-        &did,
+    let did = ordinary_realm::human_profile::station_did(&ordinary_realm::station());
+    let fixture = historical_human::HumanFixture::new(&pool, did).await;
+    ordinary_realm::human_profile::register_fixture_signer(
+        &fixture.pcr.history.account,
+        fixture.pcr.history.device_verification_method.clone(),
+        fixture.pcr.history.founding_device_signing_seed,
     );
+    let actor = ActorId::account(fixture.pcr.history.account.clone());
+    fixture.admit(&pool).await;
+    let unit = fixture.unit;
     let head = unit.transactions.last().unwrap();
     let realm = head.event.realm_id.clone();
     let at = head.commit.committed_at;
     let store = PgAuthorityCommitStore { pool: pool.clone() };
-    store
-        .admit_ordinary_realm_bootstrap_unit(&unit, at)
-        .await
-        .unwrap();
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let short = "Durable";
     let create = ordinary_realm::next_request_for_actor(
@@ -93,6 +85,7 @@ async fn check_circle_convenience(visibility: &str) {
             "created_by":actor,"created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
     );
+    let create = Box::pin(ordinary_realm::source_request(&pool, create)).await;
     uow.commit_event(create.clone()).await.unwrap();
     let id = arkret_wire::CircleId::from_event_id(&create.authority_commit.event.event_id);
     let before = store.circle_view_for_actor(&id, &actor).await.unwrap();
@@ -152,6 +145,7 @@ async fn check_circle_convenience(visibility: &str) {
         None,
         Some(parent),
     );
+    let join = Box::pin(ordinary_realm::source_request(&pool, join)).await;
     uow.commit_event(join.clone()).await.unwrap();
     let joined = store
         .circle_view_for_actor(&id, &actor)
@@ -182,6 +176,7 @@ async fn check_circle_convenience(visibility: &str) {
         Some("join"),
         None,
     );
+    let leave = Box::pin(ordinary_realm::source_request(&pool, leave)).await;
     uow.commit_event(leave).await.unwrap();
     let ended = store.circle_view_for_actor(&id, &actor).await.unwrap();
     assert!(
