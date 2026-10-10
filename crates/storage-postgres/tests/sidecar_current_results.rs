@@ -2,6 +2,10 @@
 //! the same singleton reservation. The public ensure route remains closed.
 
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 
 use diesel::sql_types::{BigInt, Jsonb, Text};

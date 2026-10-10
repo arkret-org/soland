@@ -43,14 +43,14 @@ use events::strand::{
 };
 use events::sync::SyncCursorError;
 use identity::auth::{auth_or_render, authenticated_session};
+#[cfg(test)]
+use soland_http::util::validate_space_id;
 use soland_http::util::{
     bearer_token, dpop_token, is_valid_sha256_hex, query_param, render_error, sha256_hex,
     validate_device_id, validate_did,
 };
 #[cfg(any(test, feature = "conformance-harness"))]
 use soland_http::util::{handle_for_did, normalize_localpart};
-#[cfg(test)]
-use soland_http::util::{is_valid_discoverability, validate_space_id};
 #[cfg(test)]
 use spaces::space::realm_allows_plaintext_service_for_data_class;
 use spaces::space::{

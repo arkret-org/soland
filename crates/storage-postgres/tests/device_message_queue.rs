@@ -30,6 +30,10 @@ use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{Db, PgDeviceMessageStore, PgPool};
 
 #[path = "support/historical_control_source.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared control source fixture."
+)]
 mod historical_control_source;
 
 const STATION: &str = "ak:did_core:web:device-message-queue.example";

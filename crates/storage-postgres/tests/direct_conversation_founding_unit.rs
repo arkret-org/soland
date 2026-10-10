@@ -12,6 +12,10 @@
 #[allow(dead_code)]
 mod device_authorization_history;
 #[path = "support/historical_control_source.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared control source fixture."
+)]
 mod historical_control_source;
 #[path = "support/ordinary_realm.rs"]
 #[allow(dead_code)]

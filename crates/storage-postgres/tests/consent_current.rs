@@ -1,8 +1,16 @@
 //! Real PCR signatures, exact revisions and rollback for Consent admission.
 
 #[path = "../../test-support/src/device_authorization_history.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared device history fixture."
+)]
 mod device_authorization_history;
 #[path = "../../test-support/src/pcr_genesis.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared PCR fixture."
+)]
 mod pcr_genesis;
 
 use arkret_models_collaboration::consent_operations::ConsentState;

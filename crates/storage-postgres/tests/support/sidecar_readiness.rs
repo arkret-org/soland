@@ -8,8 +8,6 @@ pub(super) fn attestor_resolution() -> arkret_models_identity::AuthenticatedServ
         ResolutionMethodHistoryEvidence,
     };
     let signer = ed25519_dalek::SigningKey::from_bytes(&[83; 32]);
-    let multibase =
-        arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
     let did = arkret_wire::Did::new(format!("did:key:{multibase}")).unwrap();
     let station = arkret_wire::project_did_to_core_id(&did).unwrap();
     let document: DidDocument = DidKeyResolver::new().resolve_did(&did).unwrap().document;

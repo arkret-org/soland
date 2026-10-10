@@ -3,8 +3,16 @@
 #[allow(dead_code)]
 mod device_authorization_history;
 #[path = "support/human_profile.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Human fixture."
+)]
 mod human_profile;
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 
 use std::sync::Arc;

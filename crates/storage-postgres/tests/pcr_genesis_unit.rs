@@ -1,6 +1,14 @@
 #[path = "../../test-support/src/device_authorization_history.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared device history fixture."
+)]
 mod device_history_fixture;
 #[path = "support/historical_control_source.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared control source fixture."
+)]
 mod historical_control_source;
 mod support;
 

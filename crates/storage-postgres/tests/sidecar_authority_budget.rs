@@ -3,11 +3,19 @@
 #[allow(dead_code)]
 mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
 #[path = "support/sidecar_agent.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Agent fixture."
+)]
 mod sidecar_agent;
 
 use diesel::sql_types::BigInt;
