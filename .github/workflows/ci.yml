@@ -278,8 +278,9 @@ jobs:
         run: diesel migration --migration-dir crates/storage-postgres/migrations run
 
       - name: Snapshot baseline schema
-        run: pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
-              "$DATABASE_URL" > /tmp/schema.baseline.sql
+        run: |
+          pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
+            "$DATABASE_URL" > /tmp/schema.baseline.sql
         env:
           PGPASSWORD: soland
 
@@ -290,8 +291,9 @@ jobs:
         run: diesel migration --migration-dir crates/storage-postgres/migrations run
 
       - name: Snapshot cycled schema
-        run: pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
-              "$DATABASE_URL" > /tmp/schema.cycled.sql
+        run: |
+          pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
+            "$DATABASE_URL" > /tmp/schema.cycled.sql
         env:
           PGPASSWORD: soland
 
