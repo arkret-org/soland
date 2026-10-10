@@ -62,7 +62,6 @@ async fn peer_forwarded_destroy_reaches_the_shared_cut_and_leaves_zero_writes() 
     use arkret_models_collaboration::authority_commit::{
         AuthorityForwardBranch, PeerAuthorityForwardEventRequest, PeerAuthoritySubmitRequest,
     };
-    use diesel_async::RunQueryDsl as _;
 
     let (governor_state, governor_pool, _governor_lease) =
         station("https://terminal-governor.internal/".into());

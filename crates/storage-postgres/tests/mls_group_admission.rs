@@ -8,10 +8,18 @@
 #[allow(dead_code)]
 mod device_authorization_history;
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "Each integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
+#[expect(
+    dead_code,
+    reason = "This integration uses the shared database support without its contract-schema helpers."
+)]
 mod support;
 
 use arkret_models_crypto::{MlsCommitEnvelope, MlsCommitPayload, MlsGovernanceBindingPayload};

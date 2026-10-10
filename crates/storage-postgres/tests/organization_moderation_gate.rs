@@ -1,4 +1,8 @@
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "Each integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 
 use arkret_models_collaboration::{RealmOrganizationPayload, SignatureMaterial};

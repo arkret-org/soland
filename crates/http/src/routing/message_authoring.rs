@@ -383,7 +383,7 @@ mod tests {
     use arkret_models_crypto::{
         EncryptedEnvelope, EncryptedEnvelopeEncryptionContext, EncryptedEnvelopeRoutingContext,
     };
-    use arkret_wire::{AccountId, DidCoreId, EventId, RealmId};
+    use arkret_wire::{DidCoreId, EventId, RealmId};
 
     use super::*;
 

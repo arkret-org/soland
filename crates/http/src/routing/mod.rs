@@ -43,12 +43,6 @@ use events::strand::{
 };
 use events::sync::SyncCursorError;
 use identity::auth::{auth_or_render, authenticated_session};
-#[cfg(test)]
-use identity::device_messages::device_message_envelopes_after;
-#[cfg(test)]
-use soland_http::util::is_valid_hash_digest;
-#[cfg(test)]
-use soland_http::util::query_param_all;
 use soland_http::util::{
     bearer_token, dpop_token, is_valid_sha256_hex, query_param, render_error, sha256_hex,
     validate_device_id, validate_did,

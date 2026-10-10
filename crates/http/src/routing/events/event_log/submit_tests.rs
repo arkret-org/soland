@@ -392,7 +392,3 @@ mod received_at_stamp_tests {
         );
     }
 }
-
-mod internal_event_admission_tests {
-    use super::*;
-}

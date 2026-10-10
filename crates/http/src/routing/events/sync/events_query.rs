@@ -200,6 +200,10 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
+#[expect(
+    dead_code,
+    reason = "The test fixture retains its complete envelope while each unit case inspects only its relevant fields."
+)]
 struct EventsQueryParts {
     realms: Vec<String>,
     actors: Vec<String>,

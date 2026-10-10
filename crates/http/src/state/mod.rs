@@ -61,10 +61,6 @@ pub(crate) use authority_self_event_unit::{
 pub(crate) use member_identity::HandleClaimEvidenceRecord;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use member_identity::MemberIdentityEventRecord;
-#[cfg(test)]
-pub(crate) use member_identity::MemberIdentityReplacementEdge;
-#[cfg(test)]
-pub(crate) use member_identity::MemberIdentitySubjectKey;
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };

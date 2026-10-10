@@ -3,6 +3,10 @@
 //! positions, exact retry, and zero-write refusals.
 
 #[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "Each integration binary uses only its subset of the shared Realm fixture."
+)]
 mod ordinary_realm;
 
 use ordinary_realm::{Discussion, event_for_actor, founder, open_human_discussion, station};

@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
 
 use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::account_lifecycle::{
@@ -1029,6 +1027,10 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
+#[expect(
+    dead_code,
+    reason = "The test fixture retains its complete envelope while each unit case inspects only its relevant fields."
+)]
 struct PeerReadAuthz {
     source_id: String,
     realm_meta: BTreeMap<String, RealmMetaRecord>,
@@ -1054,6 +1056,10 @@ struct PendingPeerInvite {
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
+#[expect(
+    dead_code,
+    reason = "The test fixture retains its complete envelope while each unit case inspects only its relevant fields."
+)]
 struct PeerCircleState {
     realm_id: String,
     history_access: String,
@@ -1456,14 +1462,6 @@ mod internal_channel_tests {
                 AUTHORITY_TRUST_DOMAIN.to_owned(),
             ),
         ])
-    }
-
-    fn configured_app() -> crate::config::AppConfig {
-        crate::config::AppConfig::from_values(
-            &configured_values(),
-            crate::config::StartupOverrides::default(),
-        )
-        .unwrap()
     }
 
     fn channel() -> RegisteredInternalChannel {

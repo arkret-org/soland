@@ -38,7 +38,7 @@ async fn development_network_config_does_not_relax_formal_verification() {
         );
         // This syntactically invalid fixture credential must reach validation
         // only in the explicit harness; the normal artifact has no issuer route.
-        let mut login = TestClient::post("http://server/_soland/gate/auth/dev-login")
+        let login = TestClient::post("http://server/_soland/gate/auth/dev-login")
             .json(&serde_json::json!({"actor": "invalid", "device_id": "invalid"}))
             .send(&service)
             .await;
