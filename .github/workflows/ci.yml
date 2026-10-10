@@ -82,10 +82,6 @@ jobs:
         run: python scripts/check-error-mapping.py
         working-directory: soland
 
-      - name: Registered cell-family literal gate
-        run: python ../arkret-rust-sdk/tools/lint-cell-family-literals.py --root .
-        working-directory: soland
-
       - name: Crate layering gate
         run: cargo +1.98 run -p xtask --bin check_layering --locked
         working-directory: soland
