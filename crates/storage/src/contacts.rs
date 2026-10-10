@@ -49,10 +49,6 @@ pub struct ContactCompletionDraft {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Preserve the public serialized completion action and its exact typed acceptance receipt."
-)]
 pub enum ContactCompletionAction {
     Request {
         slot_version: u64,
@@ -104,10 +100,6 @@ pub struct ContactDeliveryTarget {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Preserve the public serialized completion result and its complete accepted outcome."
-)]
 pub enum ContactCompletionResult {
     Accepted {
         outcome: Box<arkret_models_collaboration::contact_operations::ContactAcceptedOutcome>,
