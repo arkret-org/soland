@@ -8,6 +8,8 @@ pub(super) fn attestor_resolution() -> arkret_models_identity::AuthenticatedServ
         ResolutionMethodHistoryEvidence,
     };
     let signer = ed25519_dalek::SigningKey::from_bytes(&[83; 32]);
+    let multibase =
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
     let did = arkret_wire::Did::new(format!("did:key:{multibase}")).unwrap();
     let station = arkret_wire::project_did_to_core_id(&did).unwrap();
     let document: DidDocument = DidKeyResolver::new().resolve_did(&did).unwrap().document;
@@ -80,9 +82,6 @@ pub(super) fn claim_outcome(
         "required_capabilities":package.capabilities,"expires_at":arkret_canonical::format_timestamp_canonical(expires_at),
         "target_agent_id":agent.principal_id,"target_agent_verification_method":method,"target_agent_key_authorize_event_id":authorization,
     })).unwrap();
-    let signer = ed25519_dalek::SigningKey::from_bytes(&[83; 32]);
-    let multibase =
-        arkret_canonical::ed25519_pubkey_to_did_key_multibase(signer.verifying_key().as_bytes());
     let kid = format!("{station_did}#authority");
     let mut receipt = PeerKeyPackageClaimReceipt {
         claim_request_id: request_id.clone(),

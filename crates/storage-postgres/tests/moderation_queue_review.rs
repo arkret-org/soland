@@ -3,11 +3,15 @@ mod accepted_pcr_account;
 #[path = "../../test-support/src/device_authorization_history.rs"]
 #[allow(dead_code)]
 mod device_authorization_history;
+#[path = "support/ordinary_realm.rs"]
+#[expect(
+    dead_code,
+    reason = "This integration binary uses only its subset of the shared Realm fixture."
+)]
+mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
-#[path = "support/ordinary_realm.rs"]
-mod ordinary_realm;
 
 use soland_storage::{AuthorityCommitStore, EventCommitUnitOfWork, ModerationStore};
 use soland_storage_postgres::test_database::TestDatabase;
