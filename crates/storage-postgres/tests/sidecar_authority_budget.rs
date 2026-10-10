@@ -71,8 +71,14 @@ async fn provision_ref_65_is_refused_without_accepted_source_or_current_writes()
         .await
         .unwrap();
     let controller = &principal.history.account;
+    ordinary_realm::human_profile::register_fixture_signer(
+        controller,
+        principal.history.device_verification_method.clone(),
+        principal.history.founding_device_signing_seed,
+    );
     let unit =
         ordinary_realm::bootstrap_unit_for_account("sidecar-ref-budget", controller, &station_did);
+    let unit = ordinary_realm::source_bootstrap(&pool, unit).await;
     let store = soland_storage_postgres::PgAuthorityCommitStore { pool: pool.clone() };
     store
         .admit_ordinary_realm_bootstrap_unit(&unit, unit.transactions[0].commit.committed_at)
@@ -86,6 +92,7 @@ async fn provision_ref_65_is_refused_without_accepted_source_or_current_writes()
         serde_json::json!({}),
         parent.commit.committed_at,
     );
+    let create = ordinary_realm::source_request(&pool, create).await;
     soland_storage_postgres::PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(create.clone())
         .await
