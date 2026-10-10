@@ -23,7 +23,6 @@ mod ordinary_realm;
 #[path = "../../test-support/src/pcr_genesis.rs"]
 #[allow(dead_code)]
 mod pcr_genesis;
-mod support;
 
 use arkret_models_collaboration::authority_commit::{
     DirectConversationFoundingUnitKind, DirectConversationFoundingUnitSubmission,
@@ -44,8 +43,8 @@ use soland_storage::{
 };
 use soland_storage_postgres::test_database::TestDatabase;
 use soland_storage_postgres::{
-    Db, FoundingProfileAdmissionSpy, PgAuthorityCommitStore, PgContactStore,
-    PgEventCommitUnitOfWork, PgEventStore, PgPersistenceStore, PgPool,
+    FoundingProfileAdmissionSpy, PgAuthorityCommitStore, PgContactStore, PgEventCommitUnitOfWork,
+    PgEventStore, PgPersistenceStore, PgPool,
 };
 
 #[derive(diesel::QueryableByName)]
@@ -535,14 +534,10 @@ async fn pair(pool: &PgPool) -> Pair {
     }
 }
 
-async fn contract_pool() -> PgPool {
-    let url = support::contract_database_url();
-    support::ensure_contract_database(&url).await;
-    Db::connect(Some(&url), Default::default())
-        .await
-        .unwrap()
-        .pool
-        .unwrap()
+async fn contract_pool() -> (TestDatabase, PgPool) {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    (database, pool)
 }
 
 /// One Event genuinely signed by the accepted founding device.
@@ -847,7 +842,7 @@ async fn exact_genesis_scan(
 
 #[tokio::test]
 async fn direct_founding_members_read_exact_genesis_and_unmatched_slot_keeps_join_floor() {
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let pair = pair(&pool).await;
     let store = pair.store();
     let at = now();
@@ -1007,7 +1002,7 @@ async fn direct_participation_inherits_accepted_fixed_baseline_without_a_policy_
     use soland_storage::AgentParticipationStore;
     use soland_storage_postgres::PgAgentParticipationStore;
 
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let pair = pair(&pool).await;
     let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), now()).await;
     let realm = realm_of(&unit);
@@ -1054,7 +1049,7 @@ async fn direct_participation_inherits_accepted_fixed_baseline_without_a_policy_
 
 #[tokio::test]
 async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_them() {
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let pair = pair(&pool).await;
     let store = pair.store();
     let idempotency_key = key();
@@ -1304,7 +1299,7 @@ async fn founding_unit_commits_four_consecutive_commits_and_exact_retry_replays_
 
 #[tokio::test]
 async fn committed_direct_conversation_founding_rebuilds_resolver_projection_after_restart() {
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let pair = pair(&pool).await;
     let at = now();
     let unit = founding_unit(&pair, &UnitShape::exact(&pair), key(), at).await;
@@ -1367,7 +1362,7 @@ async fn committed_direct_conversation_founding_rebuilds_resolver_projection_aft
 
 #[tokio::test]
 async fn cross_station_founding_commits_one_exact_peer_delivery_atomically() {
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let mut pair = pair(&pool).await;
     let remote_station = DidCoreId::new(format!(
         "ak:did_core:web:dc-remote-{}.example",
@@ -1423,7 +1418,7 @@ async fn cross_station_founding_commits_one_exact_peer_delivery_atomically() {
 
 #[tokio::test]
 async fn peer_founding_missing_contact_dependency_writes_nothing() {
-    let source_pool = contract_pool().await;
+    let (_source_database, source_pool) = contract_pool().await;
     let mut pair = pair(&source_pool).await;
     let peer_station = DidCoreId::new(format!(
         "ak:did_core:web:dc-missing-peer-{}.example",
@@ -1805,7 +1800,7 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
 
 #[tokio::test]
 async fn founding_refusals_decide_authority_at_the_slot_cut_with_zero_writes() {
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let pair = pair(&pool).await;
     let store = pair.store();
     let at = now();
@@ -3126,7 +3121,7 @@ fn boxed_participant_authority_scenario()
 }
 
 async fn participant_authority_scenario() {
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let pair = pair(&pool).await;
     let store = pair.store();
     let at = now();
@@ -4084,7 +4079,7 @@ async fn participant_authority_scenario() {
 #[tokio::test]
 async fn terminal_founding_claim_repairs_the_same_group_and_keeps_the_first_binding_ref() {
     use arkret_models_collaboration::direct_conversation::DirectConversationPeerMlsAdmission as Admission;
-    let pool = contract_pool().await;
+    let (_database, pool) = contract_pool().await;
     let pair = pair(&pool).await;
     let store = pair.store();
     let at = now();
