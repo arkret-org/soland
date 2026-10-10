@@ -304,6 +304,7 @@ fn ordinary_realm_bootstrap_and_event_admission_fit_default_worker_stack() {
 struct RegisteredTlsPeer {
     listener: std::net::TcpListener,
     tls: Arc<rustls::ServerConfig>,
+    history: std::sync::RwLock<std::collections::BTreeMap<String, Vec<u8>>>,
 }
 
 fn registered_tls_peer() -> Arc<RegisteredTlsPeer> {
@@ -338,7 +339,152 @@ fn registered_tls_peer() -> Arc<RegisteredTlsPeer> {
     Arc::new(RegisteredTlsPeer {
         listener: std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
         tls,
+        history: std::sync::RwLock::default(),
     })
+}
+
+async fn register_original_peer_history(
+    listener: &RegisteredTlsPeer,
+    governor: &AppState,
+    pool: &PgPool,
+) {
+    use soland_storage::DeliveryPolicyStoreRegistry as _;
+    let records = PgPersistenceStore::new(pool.clone())
+        .webvh()
+        .list_log_events(governor.service_did().as_str())
+        .await
+        .unwrap();
+    assert!(!records.is_empty());
+    let mut log = Vec::new();
+    for record in records {
+        log.extend(arkret_canonical::canonical_json_bytes(&record.operation).unwrap());
+        log.push(b'\n');
+    }
+    let verified = arkret_identity::verify_did_webvh_v1_chain_and_witness_bytes(
+        &governor.service_did(),
+        &log,
+        None,
+    )
+    .unwrap();
+    let document = arkret_canonical::canonical_json_bytes(&verified.log.head_state).unwrap();
+    let log_url = reqwest::Url::parse(
+        &arkret_identity::DidWebvhResolver::log_url(&governor.service_did()).unwrap(),
+    )
+    .unwrap();
+    let doc_url = reqwest::Url::parse(
+        &arkret_identity::DidWebvhResolver::document_url(&governor.service_did()).unwrap(),
+    )
+    .unwrap();
+    let base = reqwest::Url::parse(&governor.config().public_base_url).unwrap();
+    assert_eq!(log_url.origin(), base.origin());
+    assert_eq!(doc_url.origin(), base.origin());
+    let mut history = listener.history.write().unwrap();
+    history.insert(log_url.path().to_owned(), log);
+    history.insert(doc_url.path().to_owned(), document);
+}
+
+/// Fresh pinned-history resolution can occur between any two registered POSTs.
+/// Return only the real Station's verified original log/document on this TLS
+/// endpoint; the production resolver still validates its chain and pin.
+fn registered_post(
+    listener: &RegisteredTlsPeer,
+) -> (
+    rustls::StreamOwned<rustls::ServerConnection, std::net::TcpStream>,
+    Vec<u8>,
+    usize,
+) {
+    loop {
+        let (socket, _) = listener.listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        socket
+            .set_write_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut stream = rustls::StreamOwned::new(
+            rustls::ServerConnection::new(listener.tls.clone()).unwrap(),
+            socket,
+        );
+        let mut bytes = Vec::new();
+        let mut buf = [0u8; 2048];
+        let end = loop {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&buf[..n]);
+            assert!(bytes.len() < 1024 * 1024);
+            if let Some(p) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                break p + 4;
+            }
+        };
+        let header = std::str::from_utf8(&bytes[..end]).unwrap();
+        if !header.starts_with("GET ") {
+            return (stream, bytes, end);
+        }
+        let target = header
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .split('?')
+            .next()
+            .unwrap();
+        let history = listener.history.read().unwrap();
+        let body = history
+            .get(target)
+            .expect("only the real source's registered method history may be served");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.write_all(body).unwrap();
+        stream.flush().unwrap();
+        assert!(!stream.conn.is_handshaking());
+    }
+}
+
+async fn registered_history_until_stop(
+    listener: Arc<RegisteredTlsPeer>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> usize {
+    tokio::task::spawn_blocking(move || {
+        listener.listener.set_nonblocking(true).unwrap();
+        let mut count = 0;
+        while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+            let socket = match listener.listener.accept() {
+                Ok((socket, _)) => socket,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
+                Err(error) => panic!("registered history: {error}"),
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            socket.set_write_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            let mut stream = rustls::StreamOwned::new(rustls::ServerConnection::new(listener.tls.clone()).unwrap(), socket);
+            let mut bytes = Vec::new();
+            let mut buf = [0u8; 2048];
+            loop {
+                let n = stream.read(&mut buf).unwrap(); assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]); assert!(bytes.len() < 1024 * 1024);
+                if bytes.windows(4).any(|value| value == b"\r\n\r\n") { break; }
+            }
+            let request = std::str::from_utf8(&bytes).unwrap();
+            let line = request.lines().next().unwrap();
+            assert!(line.starts_with("GET "));
+            let target = line.split_whitespace().nth(1).unwrap().split('?').next().unwrap();
+            let history = listener.history.read().unwrap();
+            let body = history.get(target).expect("only registered original history may be fetched");
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            stream.write_all(response.as_bytes()).unwrap(); stream.write_all(body).unwrap(); stream.flush().unwrap();
+            assert!(!stream.conn.is_handshaking()); count += 1;
+        }
+        listener.listener.set_nonblocking(false).unwrap();
+        count
+    }).await.unwrap()
 }
 
 async fn tcp_scan(
@@ -349,23 +495,8 @@ async fn tcp_scan(
     to: DidCoreId,
 ) -> usize {
     tokio::task::spawn_blocking(move || {
-    let (stream, _) = listener.listener.accept().unwrap();
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
-    let mut stream = rustls::StreamOwned::new(
-        rustls::ServerConnection::new(listener.tls.clone()).unwrap(), stream,
-    );
-    let mut bytes = Vec::new();
+    let (mut stream, mut bytes, end) = registered_post(&listener);
     let mut buf = [0u8; 2048];
-    let end = loop {
-        let n = stream.read(&mut buf).unwrap();
-        assert!(n > 0);
-        bytes.extend_from_slice(&buf[..n]);
-        assert!(bytes.len() < 1024 * 1024);
-        if let Some(p) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
-            break p + 4;
-        }
-    };
     let header = std::str::from_utf8(&bytes[..end]).unwrap();
     assert!(header.starts_with("POST /_arkret/peer/streams/scan HTTP/1.1"));
     let fields = header
@@ -1537,6 +1668,7 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
     // Alice remains joined while Bob joins at the same Station after an
     // unheld Realm successor. OpeningJoin must not skip that gap: recovery
     // reads the authorized continuous prefix and keeps Alice's old anchor.
+    register_original_peer_history(&listener, &governor_state, &governor_pool).await;
     let bob = historical_human::HumanFixture::new(&origin_pool, origin.service_did()).await;
     let bob_actor = ActorId::account(bob.pcr.history.account.clone());
     let gap_at = commit.committed_at + Duration::seconds(1);
@@ -1625,6 +1757,8 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
     let reply_listener = listener.clone();
     let reply_account = bob.pcr.history.account.clone();
     let reply_governor = governor_state.service_core_id();
+    let continuous_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reply_stop = continuous_stop.clone();
     let reply = tokio::spawn(async move {
         assert_eq!(
             tcp_scan(
@@ -1639,7 +1773,7 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
         );
         assert_eq!(
             tcp_scan(
-                reply_listener,
+                reply_listener.clone(),
                 continuous_page,
                 continuous_scan,
                 reply_account,
@@ -1648,21 +1782,20 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
             .await,
             1
         );
+        assert!(registered_history_until_stop(reply_listener, reply_stop).await > 0);
         2
     });
-    assert_eq!(
-        Box::pin(super::super::replica_anchor::ensure_forwarded_target(
-            &origin,
-            &governor_state.service_core_id(),
-            bob_event,
-            Some(bob_commit),
-            &mut located,
-            &bob_session,
-        ))
-        .await
-        .unwrap(),
-        Some(bob_commit.clone())
-    );
+    let outcome = Box::pin(super::super::replica_anchor::ensure_forwarded_target(
+        &origin,
+        &governor_state.service_core_id(),
+        bob_event,
+        Some(bob_commit),
+        &mut located,
+        &bob_session,
+    ))
+    .await;
+    continuous_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(outcome.unwrap(), Some(bob_commit.clone()));
     assert_eq!(
         reply.await.unwrap(),
         2,
@@ -2549,7 +2682,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     // Corrupt durable coordinates only as a negative, then restore the original.
     {
         let mut conn = origin_pool.get().await.unwrap();
-        diesel::sql_query("UPDATE replica_stream_anchors SET join_commit_id=$2 WHERE realm_id=$1")
+        diesel::sql_query("UPDATE replica_stream_anchors SET join_commit_id=$2 WHERE realm_id=$1 AND stream_key=(SELECT stream_key FROM realm_commits WHERE commit_id=$2)")
             .bind::<diesel::sql_types::Text, _>(realm.as_str())
             .bind::<diesel::sql_types::Text, _>(lc.commit_id.as_str())
             .execute(&mut *conn)
@@ -2581,7 +2714,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     );
     {
         let mut conn = origin_pool.get().await.unwrap();
-        diesel::sql_query("UPDATE replica_stream_anchors SET join_commit_id=$2 WHERE realm_id=$1")
+        diesel::sql_query("UPDATE replica_stream_anchors SET join_commit_id=$2 WHERE realm_id=$1 AND stream_key=(SELECT stream_key FROM realm_commits WHERE commit_id=$2)")
             .bind::<diesel::sql_types::Text, _>(realm.as_str())
             .bind::<diesel::sql_types::Text, _>(commit.commit_id.as_str())
             .execute(&mut *conn)
@@ -2634,6 +2767,7 @@ async fn circle_own_leave_bound_result_cases(
     session: &SessionIdentityState,
 ) {
     use diesel_async::RunQueryDsl as _;
+    register_original_peer_history(&listener, governor_state, governor_pool).await;
     let source = PgAuthorityCommitStore {
         pool: governor_pool.clone(),
     };
@@ -2751,7 +2885,7 @@ async fn circle_own_leave_bound_result_cases(
                 direction: StreamScanDirection::Before(Some(commit.stream_position + 1)),
                 limit: 1,
             };
-            assert!(matches!(
+            assert_eq!(
                 store
                     .scan_stream_for_account(
                         &read,
@@ -2760,8 +2894,8 @@ async fn circle_own_leave_bound_result_cases(
                     )
                     .await
                     .unwrap(),
-                soland_storage::AccountStreamScan::NotAuthorized
-            ));
+                soland_storage::AccountStreamScan::Unproved("the caller has no held Circle join")
+            );
             assert!(
                 !store
                     .accepted_own_leave_bound_result(
@@ -2916,23 +3050,8 @@ async fn tcp_opening_bootstrap(
     assert_eq!(log_url.origin(), base.origin());
     assert_eq!(doc_url.origin(), base.origin());
     tokio::task::spawn_blocking(move || {
-    let (stream, _) = listener.listener.accept().unwrap();
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
-    let mut stream = rustls::StreamOwned::new(
-        rustls::ServerConnection::new(listener.tls.clone()).unwrap(), stream,
-    );
-    let mut bytes = Vec::new();
+    let (mut stream, mut bytes, end) = registered_post(&listener);
     let mut buf = [0u8; 2048];
-    let end = loop {
-        let n = stream.read(&mut buf).unwrap();
-        assert!(n > 0);
-        bytes.extend_from_slice(&buf[..n]);
-        assert!(bytes.len() < 1024 * 1024);
-        if let Some(p) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
-            break p + 4;
-        }
-    };
     let header = std::str::from_utf8(&bytes[..end]).unwrap();
     assert!(header.starts_with("POST /_arkret/peer/realm-joins/bootstrap HTTP/1.1"));
     let fields = header
