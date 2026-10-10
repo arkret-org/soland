@@ -4705,12 +4705,27 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
     };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
     let did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let creator = accepted_pcr_account::accepted_pcr_account(&pool, did.clone()).await;
-    let unit = ordinary_realm::bootstrap_unit_for_account(
-        &uuid::Uuid::now_v7().to_string(),
-        creator.as_account_id().unwrap(),
-        &did,
+    let mut connection = pool.get().await.unwrap();
+    diesel::sql_query("INSERT INTO device_inventory_station(singleton,station_id) VALUES(TRUE,$1) ON CONFLICT(singleton) DO NOTHING")
+        .bind::<Text,_>(ordinary_realm::station().as_str()).execute(&mut *connection).await.unwrap();
+    drop(connection);
+    let creator = arkret_wire::ActorId::account(
+        ordinary_realm::human_profile::admit_without_profile(
+            &pool,
+            &ordinary_realm::station(),
+            "circle-bootstrap-creator",
+        )
+        .await,
     );
+    let unit = ordinary_realm::source_bootstrap(
+        &pool,
+        ordinary_realm::bootstrap_unit_for_account(
+            &uuid::Uuid::now_v7().to_string(),
+            creator.as_account_id().unwrap(),
+            &did,
+        ),
+    )
+    .await;
     let at = unit.transactions.last().unwrap().commit.committed_at;
     governor
         .admit_ordinary_realm_bootstrap_unit(&unit, at)
@@ -4769,7 +4784,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         })
         .await
         .unwrap();
-    let create = sourced(next_request_for_actor(
+    let create = ordinary_realm::source_request(&pool, sourced(next_request_for_actor(
         &join.authority_commit,
         arkret_wire::EventKind::CircleCreate,
         creator.clone(),
@@ -4778,7 +4793,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
             "directory_visibility":"members","join_rule":"public","history_access":"since_join","state":"active","created_by":creator,"created_at":at
         }}),
         at,
-    ));
+    ))).await;
     uow.commit_event(create.clone()).await.unwrap();
     assert!(
         fanout_rows(&pool, &create).await.is_empty(),
@@ -4792,20 +4807,24 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
     // Public entry still requires its explicit capability; Realm membership
     // alone is only the enclosing scope floor (circle.md section 9).
     let root_event_ref = realm_root_event_ref(&pool, &realm).await;
-    let grant = sourced(next_request_for_actor(
-        &create.authority_commit,
-        arkret_wire::EventKind::CapabilityGrant,
-        creator.clone(),
-        serde_json::json!({"grant":{
-            "schema":"ak.schema.capability.v1","realm_id":realm,
-            "issuer_id":creator,"subject":remote,"actions":["ak.circle.member.add"],
-            "resources":[{"kind":"circle","realm_id":realm,"circle_id":circle}],
-            "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,
-                "authority_event_ref":root_event_ref,"authority_generation":0}],
-            "issued_at":arkret_canonical::format_timestamp_canonical(at)
-        }}),
-        at,
-    ));
+    let grant = ordinary_realm::source_request(
+        &pool,
+        sourced(next_request_for_actor(
+            &create.authority_commit,
+            arkret_wire::EventKind::CapabilityGrant,
+            creator.clone(),
+            serde_json::json!({"grant":{
+                "schema":"ak.schema.capability.v1","realm_id":realm,
+                "issuer_id":creator,"subject":remote,"actions":["ak.circle.member.add"],
+                "resources":[{"kind":"circle","realm_id":realm,"circle_id":circle}],
+                "issuer_authority_refs":[{"kind":"realm_root","realm_id":realm,
+                    "authority_event_ref":root_event_ref,"authority_generation":0}],
+                "issued_at":arkret_canonical::format_timestamp_canonical(at)
+            }}),
+            at,
+        )),
+    )
+    .await;
     uow.commit_event(grant).await.unwrap();
     let stream = arkret_wire::CommitStreamRef::Circle {
         realm_id: realm.clone(),
@@ -5056,6 +5075,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         serde_json::json!({"circle_id":circle,"member_id":creator,"membership":"join",
             "parent_membership_revision":creator_parent,"expected_membership":null}),
     );
+    let creator_join = ordinary_realm::source_request(&pool, creator_join).await;
     uow.commit_event(creator_join.clone()).await.unwrap();
     assert_eq!(
         member
@@ -5073,6 +5093,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
             "metadata":{"title":"Withheld gap discussion"},"state":"active",
             "created_by":creator,"created_at":at}}),
     );
+    let strand = ordinary_realm::source_request(&pool, strand).await;
     uow.commit_event(strand.clone()).await.unwrap();
     assert_eq!(
         member
@@ -5087,6 +5108,7 @@ async fn circle_own_opening_join_anchors_remote_stream_and_membership_basis_expi
         arkret_wire::EventKind::MessageCreate,
         message_payload(&strand_id, "Circle plaintext stays at the governor"),
     );
+    let message = ordinary_realm::source_request(&pool, message).await;
     uow.commit_event(message.clone()).await.unwrap();
     assert!(fanout_rows(&pool, &message).await.is_empty());
     let leave = circle_transition(&message.authority_commit, "leave", Some("join"));
