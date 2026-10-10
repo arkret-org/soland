@@ -118,7 +118,26 @@ async fn scan(
     )
 }
 
-fn next(
+fn seal_commit(state: &soland_http::state::AppState, commit: &mut arkret_wire::RealmCommit) {
+    let identity = soland_test_support::fixture_service_identity(state.config());
+    let key = ed25519_dalek::SigningKey::from_bytes(&soland_test_support::fixture_signing_seed(
+        state.config(),
+        &identity,
+    ));
+    commit.signature = arkret_signatures::detached_object::sign_detached_object(
+        &arkret_canonical::canonical::unsigned_value(commit, &["signature"]).unwrap(),
+        arkret_wire::DetachedSignatureContext::RealmCommit,
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_did())).unwrap(),
+        commit.committed_at,
+        &key,
+    )
+    .unwrap();
+    commit.verify_commit_id_matches_content().unwrap();
+}
+
+async fn next(
+    state: &soland_http::state::AppState,
+    pool: &soland_storage_postgres::PgPool,
     previous: &soland_storage::AuthorityCommitTransaction,
     kind: EventKind,
     payload: Value,
@@ -134,6 +153,8 @@ fn next(
     );
     request.authority_commit.commit.signature =
         ordinary_realm::signature_for_did(station_did, previous.commit.committed_at);
+    let mut request = ordinary_realm::source_request(pool, request).await;
+    seal_commit(state, &mut request.authority_commit.commit);
     request
 }
 
@@ -156,6 +177,10 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
         &human,
         &state.service_did(),
     );
+    let mut unit = ordinary_realm::source_bootstrap(&pool, unit).await;
+    for transaction in &mut unit.transactions {
+        seal_commit(&state, &mut transaction.commit);
+    }
     unit.validate()
         .expect("formal ordinary Realm bootstrap unit");
     persistence
@@ -183,6 +208,8 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
     };
 
     let strand = next(
+        &state,
+        &pool,
         initial,
         EventKind::StrandCreate,
         json!({"object": {
@@ -196,13 +223,16 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
         }}),
         &human,
         &state.service_did(),
-    );
+    )
+    .await;
     persistence
         .commit_event(strand.clone())
         .await
         .expect("accepted Strand Event and Commit");
     let strand_id = StrandId::from_event_id(&strand.authority_commit.event.event_id);
     let default = next(
+        &state,
+        &pool,
         &strand.authority_commit,
         EventKind::RealmSetDefaultStrand,
         json!({
@@ -212,18 +242,22 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
         }),
         &human,
         &state.service_did(),
-    );
+    )
+    .await;
     persistence
         .commit_event(default.clone())
         .await
         .expect("accepted default Strand Event and Commit");
     let message = next(
+        &state,
+        &pool,
         &default.authority_commit,
         EventKind::MessageCreate,
         ordinary_realm::message_payload(&strand_id, "redacted content"),
         &human,
         &state.service_did(),
-    );
+    )
+    .await;
     persistence
         .commit_event(message.clone())
         .await
@@ -245,12 +279,15 @@ async fn canonical_scan_withholds_redacted_message_without_skipping_commit() {
 
     let message_id = MessageId::from_event_id(&message.authority_commit.event.event_id);
     let redaction = next(
+        &state,
+        &pool,
         &message.authority_commit,
         EventKind::MessageRedact,
         json!({"message_id": message_id, "reason": "retracted by author"}),
         &human,
         &state.service_did(),
-    );
+    )
+    .await;
     persistence
         .commit_event(redaction.clone())
         .await
