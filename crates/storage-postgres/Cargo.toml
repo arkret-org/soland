@@ -47,7 +47,6 @@ parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2.workspace = true
-soland-domain = { workspace = true }
 soland-storage = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 tokio-postgres = { workspace = true }

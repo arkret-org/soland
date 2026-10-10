@@ -1090,14 +1090,14 @@ pub(crate) async fn commit_parent_membership_current_results(
                 .bind::<Text,_>(event.realm_id.as_str()).get_result::<ParentMembershipPolicyRow>(&mut *conn)
                 .await.optional().map_err(PersistenceError::database)?;
             if let Some(policy) = payload_value.get("join_policy") {
-                soland_domain::reducer::validate_join_policy_payload(policy)
+                soland_storage::validate_join_policy_payload(policy)
                     .map_err(|error| PersistenceError::SchemaViolation(error.to_owned()))?;
             }
             if join_rule
                 .as_ref()
                 .and_then(|row| row.value.as_str())
-                .is_some_and(soland_domain::reducer::join_rule_requires_an_automatic_gate)
-                && !soland_domain::reducer::join_policy_declares_an_automatic_gate(
+                .is_some_and(soland_storage::join_rule_requires_an_automatic_gate)
+                && !soland_storage::join_policy_declares_an_automatic_gate(
                     payload_value.get("join_policy"),
                 )
             {
