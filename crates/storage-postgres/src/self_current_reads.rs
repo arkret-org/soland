@@ -426,6 +426,9 @@ pub(crate) async fn exact_current_result_for_account(
             } => (generation, head),
         };
         let selector = match &request.selector {
+            ExactCurrentResultSelector::Policy(selector) => {
+                return policy_exact_read(conn, request, selector, &caller, generation, head).await;
+            }
             ExactCurrentResultSelector::CalendarScheduleSource(selector) => {
                 use arkret_models_collaboration::exact_current_results::CalendarScheduleSourceExactRow;
                 #[derive(QueryableByName)]
@@ -465,7 +468,6 @@ pub(crate) async fn exact_current_result_for_account(
                 }));
             }
             ExactCurrentResultSelector::CapabilityGrant(_) => unreachable!("handled before membership gate"),
-            ExactCurrentResultSelector::Policy(_) => return Ok(SelfExactCurrentRead::Unresolved("management Policy exact-current authorization is not established")),
             ExactCurrentResultSelector::AgentInteraction(selector) => {
                 use arkret_models_collaboration::agent_interaction::AgentInteractionExactCurrentRow;
                 use arkret_models_collaboration::exact_current_results::NeverWrittenExactCurrentSelector;
@@ -558,6 +560,166 @@ pub(crate) async fn exact_current_result_for_account(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+async fn policy_exact_read(
+    conn: &mut AsyncPgConnection,
+    request: &ExactCurrentResultsReadRequestBody,
+    selector: &arkret_models_collaboration::exact_current_results::PolicyExactCurrentSelector,
+    caller: &ActorId,
+    generation: u64,
+    realm_head: CommitStreamHead,
+) -> Result<SelfExactCurrentRead<ExactCurrentResultsReadOutcome>, PgTransactionError> {
+    use arkret_models_collaboration::exact_current_results::{
+        NeverWrittenExactCurrentSelector, PolicyExactCurrentRow,
+    };
+    use arkret_models_collaboration::governance::operation_wire::{
+        PolicySetStatePayload, PolicySetValue,
+    };
+    #[derive(QueryableByName)]
+    struct PolicyRow {
+        #[diesel(sql_type = Text)]
+        realm_id: String,
+        #[diesel(sql_type = Text)]
+        current_commit_id: String,
+        #[diesel(sql_type = BigInt)]
+        current_stream_position: i64,
+        #[diesel(sql_type = Jsonb)]
+        value: serde_json::Value,
+        #[diesel(sql_type = Jsonb)]
+        payload: serde_json::Value,
+        #[diesel(sql_type = Jsonb)]
+        stream_ref: serde_json::Value,
+    }
+    let row = sql_query("SELECT p.realm_id,p.current_commit_id,p.current_stream_position,p.value,e.envelope->'payload' AS payload,c.stream_ref FROM policy_current_results p JOIN realm_commits c ON c.realm_id=p.realm_id AND c.commit_id=p.current_commit_id AND c.stream_position=p.current_stream_position JOIN canonical_events e ON e.pk=c.event_pk AND e.state='committed' AND e.kind='ak.policy.set' AND e.envelope->>'event_id'=p.current_event_id WHERE p.policy_id=$1")
+        .bind::<Text,_>(selector.policy_id.as_str()).get_result::<PolicyRow>(&mut *conn).await.optional()?;
+    let stream = match &row {
+        Some(row) if row.realm_id == request.realm_id.as_str() => {
+            serde_json::from_value::<CommitStreamRef>(row.stream_ref.clone())
+                .map_err(PersistenceError::database)?
+        }
+        Some(_) => return Ok(SelfExactCurrentRead::NotFound),
+        None => realm_head.stream_ref.clone(),
+    };
+    let target = match &stream {
+        CommitStreamRef::Realm { realm_id } if realm_id == &request.realm_id => {
+            arkret_wire::WireResourceSelector::realm(realm_id.clone())
+        }
+        CommitStreamRef::Circle {
+            realm_id,
+            circle_id,
+        } if realm_id == &request.realm_id => {
+            let mut target =
+                arkret_wire::WireResourceSelector::circle(realm_id.clone(), circle_id.clone());
+            target.match_scope = Some(arkret_wire::ResourceMatchScope::Exact);
+            target
+        }
+        _ => return Ok(SelfExactCurrentRead::NotFound),
+    };
+    let cut = crate::realm_authorization_cut::RealmAuthorizationCut::read(
+        conn,
+        &request.realm_id,
+        caller,
+    )
+    .await?;
+    if !cut.actor_is_root_controller()
+        && cut
+            .evaluate(
+                &[arkret_wire::CapabilityActionId::POLICY_SET],
+                &target,
+                &soland_storage::OperationFacts::default(),
+                chrono::Utc::now(),
+            )
+            .unreserved()
+            .is_empty()
+    {
+        return Ok(SelfExactCurrentRead::NotFound);
+    }
+    let complete = sql_query("WITH nodes AS (SELECT c.*,e.state,e.kind,e.envelope,ROW_NUMBER() OVER(PARTITION BY c.stream_key ORDER BY c.stream_position)-1 AS expected,LAG(c.commit_id) OVER(PARTITION BY c.stream_key ORDER BY c.stream_position) AS predecessor FROM realm_commits c LEFT JOIN canonical_events e ON e.pk=c.event_pk WHERE c.realm_id=$1) SELECT COALESCE(COUNT(*)>0 AND BOOL_AND(COALESCE(stream_position=expected AND previous_commit_ref IS NOT DISTINCT FROM predecessor AND state='committed' AND commit_json->>'event_ref'=envelope->>'event_id' AND envelope->>'kind'=kind,false)),false) AS present FROM nodes")
+        .bind::<Text,_>(request.realm_id.as_str()).get_result::<ExistsRow>(&mut *conn).await?.present;
+    if !complete {
+        return Ok(SelfExactCurrentRead::Unresolved(
+            "Policy governance prefix is incomplete",
+        ));
+    }
+    let stream_key = crate::authority_commit::stream_key(&stream)?;
+    if sql_query("SELECT EXISTS(SELECT 1 FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.state='committed' AND e.kind='ak.policy.set' AND e.envelope->'payload'->>'policy_id'=$1 AND (c.realm_id<>$2 OR c.stream_key<>$3)) AS present")
+        .bind::<Text,_>(selector.policy_id.as_str()).bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(&stream_key)
+        .get_result::<ExistsRow>(&mut *conn).await?.present {
+        return Ok(SelfExactCurrentRead::NotFound);
+    }
+    let latest = sql_query("SELECT c.commit_id,c.stream_position FROM realm_commits c JOIN canonical_events e ON e.pk=c.event_pk WHERE e.state='committed' AND e.kind='ak.policy.set' AND e.envelope->'payload'->>'policy_id'=$1 AND c.realm_id=$2 AND c.stream_key=$3 ORDER BY c.stream_position DESC LIMIT 1")
+        .bind::<Text,_>(selector.policy_id.as_str()).bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(&stream_key)
+        .get_result::<HeadRow>(&mut *conn).await.optional()?;
+    let outcome = match row {
+        None if latest.is_none() => ExactCurrentResultsReadOutcome::NeverWritten {
+            realm_id: request.realm_id.clone(),
+            governance_generation: generation,
+            effective_stream_head: realm_head,
+            selector: NeverWrittenExactCurrentSelector::Policy(selector.clone()),
+        },
+        None => {
+            return Ok(SelfExactCurrentRead::Unresolved(
+                "Policy current is absent despite accepted history",
+            ));
+        }
+        Some(row) => {
+            if !latest.is_some_and(|latest| {
+                latest.commit_id == row.current_commit_id
+                    && latest.stream_position == row.current_stream_position
+            }) {
+                return Ok(SelfExactCurrentRead::Unresolved(
+                    "Policy current differs from accepted history",
+                ));
+            }
+            let payload: PolicySetStatePayload =
+                serde_json::from_value(row.payload).map_err(PersistenceError::database)?;
+            payload.validate().map_err(PersistenceError::database)?;
+            if payload.policy_id != selector.policy_id
+                || serde_json::to_value(&payload.value).map_err(PersistenceError::database)?
+                    != row.value
+            {
+                return Err(
+                    corrupt("Policy current differs from its original accepted payload").into(),
+                );
+            }
+            if !matches!(&payload.value, PolicySetValue::Governance(policy) if matches!(policy.policy_kind,arkret_wire::PolicyKind::Agent|arkret_wire::PolicyKind::Applet))
+            {
+                return Ok(SelfExactCurrentRead::NotFound);
+            }
+            let stream_key = crate::authority_commit::stream_key(&stream)?;
+            let head = sql_query("SELECT commit_id,stream_position FROM realm_commits WHERE realm_id=$1 AND stream_key=$2 ORDER BY stream_position DESC LIMIT 1")
+                .bind::<Text,_>(request.realm_id.as_str()).bind::<Text,_>(stream_key).get_result::<HeadRow>(&mut *conn).await?;
+            ExactCurrentResultsReadOutcome::Present {
+                realm_id: request.realm_id.clone(),
+                governance_generation: generation,
+                effective_stream_head: CommitStreamHead {
+                    stream_ref: stream.clone(),
+                    commit_id: head.commit_id.parse().map_err(PersistenceError::database)?,
+                    stream_position: to_u64(head.stream_position, "Policy scope head")?,
+                },
+                entry: ExactCurrentResultEntry::Policy(PolicyExactCurrentRow {
+                    selector: selector.clone(),
+                    source_stream_ref: stream,
+                    revision: CurrentRevision {
+                        commit_id: row
+                            .current_commit_id
+                            .parse()
+                            .map_err(PersistenceError::database)?,
+                        stream_position: to_u64(
+                            row.current_stream_position,
+                            "Policy current position",
+                        )?,
+                    },
+                    value: payload,
+                }),
+            }
+        }
+    };
+    outcome
+        .validate_for_request(request, generation)
+        .map_err(PersistenceError::database)?;
+    Ok(SelfExactCurrentRead::Answer(outcome))
 }
 
 async fn owned_agent_grant_read(

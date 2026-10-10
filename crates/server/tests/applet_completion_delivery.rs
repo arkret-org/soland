@@ -1,4 +1,4 @@
-//! Registered Applet completion delivery after an actual accepted install.
+//! Registered Applet completion delivery after an independent Bot provision.
 //! Run the completion test filter; the imported admission tests retain their
 //! independent target and are not counted again as completion evidence.
 

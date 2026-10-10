@@ -1,5 +1,43 @@
 use serde_json::json;
 
+#[tokio::test]
+async fn bot_and_ghost_routes_refuse_unsigned_and_bearer_only_requests() {
+    use salvo::test::ResponseExt as _;
+
+    // No state is injected: authentication must reject before any storage access.
+    let service = salvo::Service::new(super::protocol_router());
+    let applet = "ak:applet:01904100-0000-7000-8000-000000000001";
+    for operation in [
+        "bots/provision/preview",
+        "bots/provision",
+        "ghosts/provision/preview",
+        "ghosts/provision",
+    ] {
+        for bearer in [false, true] {
+            let request = salvo::test::TestClient::post(format!(
+                "http://server/self/applets/{applet}/{operation}"
+            ))
+            .json(&json!({}));
+            let request = if bearer {
+                request.add_header("authorization", "Bearer not-service-authority", true)
+            } else {
+                request
+            };
+            let mut response = request.send(&service).await;
+            assert_eq!(
+                response.status_code,
+                Some(salvo::http::StatusCode::UNAUTHORIZED),
+                "{operation}, bearer={bearer}"
+            );
+            let body = response.take_string().await.unwrap();
+            assert!(
+                body.contains("http_signature_required"),
+                "{operation}: {body}"
+            );
+        }
+    }
+}
+
 use super::signature::{
     applet_delivery_authentication_record_digest, applet_validate_signature_input,
 };

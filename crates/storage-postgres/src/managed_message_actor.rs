@@ -96,6 +96,20 @@ async fn require_applet_producer_inner(
 ) -> PersistenceResult<arkret_models_collaboration::authority_commit::ServiceHistoricalSignerFact> {
     let registration = registration(conn, event).await?;
     let service = ActorId::service(registration.service_id.clone());
+    if let Some(account) = event.actor_id.as_account_id() {
+        let managed = sql_query("SELECT to_jsonb(c) AS value FROM managed_authority_claims c WHERE actor_id=$1 AND station_id=$2 FOR SHARE")
+            .bind::<Text, _>(account.principal_id.as_str())
+            .bind::<Text, _>(account.station_id.as_str())
+            .get_result::<ValueRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?;
+        if managed.is_some() {
+            return Err(denied(
+                "Service key cannot sign a managed Account's own Event",
+            ));
+        }
+    }
     let executor = registered_executor(event, &registration)?;
     registration
         .manifest

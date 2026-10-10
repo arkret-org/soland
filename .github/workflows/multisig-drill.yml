@@ -129,12 +129,15 @@ jobs:
             _drill/logs
           head -c 32 /dev/urandom | base64 > "$SOLAND_KEYSTORE_MASTER_KEY_FILE"
           chmod 600 "$SOLAND_KEYSTORE_MASTER_KEY_FILE"
+          printf '{}\n' > "$GITHUB_WORKSPACE/_drill/config.json"
 
       - name: Boot soland once to apply migrations
         working-directory: soland
         run: |
           set -euxo pipefail
-          ./target/debug/soland > "$GITHUB_WORKSPACE/_drill/logs/soland-boot.log" 2>&1 &
+          TARGET_DIR="$(cargo metadata --format-version 1 --no-deps | jq -er '.target_directory')"
+          "$TARGET_DIR/debug/soland" --config "$GITHUB_WORKSPACE/_drill/config.json" \
+            > "$GITHUB_WORKSPACE/_drill/logs/soland-boot.log" 2>&1 &
           SOLAND_PID=$!
           READY=false
           for _ in $(seq 1 30); do
