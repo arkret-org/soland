@@ -26,14 +26,19 @@ async fn counts(pool: &soland_storage_postgres::PgPool, realm: &str) -> Counts {
     diesel::sql_query("SELECT (SELECT count(*) FROM canonical_events WHERE realm_id=$1) AS events,(SELECT count(*) FROM realm_commits WHERE realm_id=$1) AS commits,(SELECT count(*) FROM mimi_room_binding_current_results WHERE realm_id=$1) AS bindings,(SELECT count(*) FROM federation_outbox) AS outbox")
         .bind::<Text,_>(realm).get_result(&mut conn).await.unwrap()
 }
-fn next(previous: &EventCommitRequest, payload: Value) -> EventCommitRequest {
-    ordinary_realm::next_request(
+async fn next(
+    pool: &soland_storage_postgres::PgPool,
+    previous: &EventCommitRequest,
+    payload: Value,
+) -> EventCommitRequest {
+    let request = ordinary_realm::next_request_for_actor(
         &previous.authority_commit,
         EventKind::MimiRoomBinding,
-        &ordinary_realm::founder(),
+        previous.authority_commit.event.actor_id.clone(),
         payload,
         previous.authority_commit.commit.committed_at,
-    )
+    );
+    ordinary_realm::source_request(pool, request).await
 }
 
 #[tokio::test]
@@ -49,12 +54,12 @@ async fn completed_and_rolled_back_use_exact_lineage_and_topology_at_cut() {
             "mimi_room_uri":format!("mimi://ordinary-station.example/rooms/{outcome}"),
             "binding_scope":{"realm_id":realm,"strand_id":discussion.strand_id},
             "hub_provider_id":"ak:did_core:web:first-hub.example","local_provider_role":"hub","status":"accepted"});
-        let accepted = next(&discussion.head, original.clone());
+        let accepted = next(&pool, &discussion.head, original.clone()).await;
         uow.commit_event(accepted.clone()).await.unwrap();
         let mut candidate = original.clone();
         candidate["status"] = json!("migrating");
         candidate["hub_provider_id"] = json!("ak:did_core:web:next-hub.example");
-        let migrating = next(&accepted, candidate.clone());
+        let migrating = next(&pool, &accepted, candidate.clone()).await;
         uow.commit_event(migrating.clone()).await.unwrap();
         let mut resolved = if outcome == "completed" {
             candidate
@@ -94,7 +99,9 @@ async fn completed_and_rolled_back_use_exact_lineage_and_topology_at_cut() {
             }
             let before = counts(&pool, realm.as_str()).await;
             assert!(
-                uow.commit_event(next(&migrating, invalid)).await.is_err(),
+                uow.commit_event(next(&pool, &migrating, invalid).await)
+                    .await
+                    .is_err(),
                 "{mutation}"
             );
             assert_eq!(
@@ -103,7 +110,9 @@ async fn completed_and_rolled_back_use_exact_lineage_and_topology_at_cut() {
                 "{mutation} must roll back all effects"
             );
         }
-        uow.commit_event(next(&migrating, resolved)).await.unwrap();
+        uow.commit_event(next(&pool, &migrating, resolved).await)
+            .await
+            .unwrap();
         let mut conn = pool.get().await.unwrap();
         #[derive(diesel::QueryableByName)]
         struct Current {
