@@ -406,7 +406,14 @@ impl DeviceMessageStore for PgDeviceMessageStore {
                 )
                 .await?
                 {
-                    return Ok(DeviceMessageBatchCommitOutcome::QueueAtCapacity);
+                    // This may follow earlier queue and idempotency writes in
+                    // the same batch. Refuse through the transaction error
+                    // path so none of those writes can commit.
+                    return Err(PersistenceError::Conflict(format!(
+                        "{}: recipient queue is at capacity",
+                        soland_storage::ConflictCode::RecipientQueueAtCapacity
+                    ))
+                    .into());
                 }
                 sql_query(
                     "INSERT INTO device_messages \
@@ -447,6 +454,13 @@ impl DeviceMessageStore for PgDeviceMessageStore {
         })
         .await
         .map_err(PgTransactionError::into_persistence)
+        .or_else(|error| {
+            if error.conflict_code() == Some(soland_storage::ConflictCode::RecipientQueueAtCapacity) {
+                Ok(DeviceMessageBatchCommitOutcome::QueueAtCapacity)
+            } else {
+                Err(error)
+            }
+        })
     }
 
     async fn issue_ack_token(

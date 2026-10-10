@@ -157,6 +157,90 @@ async fn queue_row_count(pool: &PgPool) -> i64 {
         .count
 }
 
+async fn queue_write_state(pool: &PgPool) -> serde_json::Value {
+    #[derive(diesel::QueryableByName)]
+    struct State {
+        #[diesel(sql_type = Jsonb)]
+        state: serde_json::Value,
+    }
+    let mut conn = pool.get().await.unwrap();
+    sql_query("SELECT jsonb_build_object(\
+        'queue',(SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id),'[]') FROM device_messages t),\
+        'requests',(SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY key),'[]') FROM device_message_txns t),\
+        'messages',(SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY message_key),'[]') FROM device_message_idempotency t)\
+        ) AS state")
+        .get_result::<State>(&mut *conn).await.unwrap().state
+}
+
+#[tokio::test]
+async fn full_endpoint_rolls_back_an_earlier_batch_item_and_both_idempotency_ledgers() {
+    let database = TestDatabase::lease().await;
+    let pool = database.pool();
+    let (device_a, device_b) = two_device_authorities(&pool).await;
+    let store = PgDeviceMessageStore { pool: pool.clone() };
+    let old = batch(
+        "quota-existing",
+        message(
+            &device_a,
+            &device_b,
+            test_device_message_envelope(&device_a, &device_b, Utc::now()),
+        ),
+    );
+    assert!(matches!(
+        store.commit_batch(old).await.unwrap(),
+        DeviceMessageBatchCommitOutcome::Stored(_)
+    ));
+    let before = queue_write_state(&pool).await;
+
+    let mut free = test_device_message_envelope(&device_a, &device_a, Utc::now());
+    free.device_message_id = "ak:device_message:01964137-2000-7000-8000-000000000029"
+        .parse()
+        .unwrap();
+    let mut refused = batch("quota-free-prefix", message(&device_a, &device_a, free));
+    refused.per_device_queue_capacity = 1;
+    let mut full = test_device_message_envelope(&device_a, &device_b, Utc::now());
+    full.device_message_id = "ak:device_message:01964137-2000-7000-8000-000000000030"
+        .parse()
+        .unwrap();
+    refused
+        .items
+        .extend(batch("quota-full-tail", message(&device_a, &device_b, full)).items);
+    // The empty endpoint is deliberately first, making its provisional writes
+    // precede the quota refusal instead of relying on HTTP target sort order.
+    assert!(matches!(
+        store.commit_batch(refused.clone()).await.unwrap(),
+        DeviceMessageBatchCommitOutcome::QueueAtCapacity
+    ));
+    assert_eq!(queue_write_state(&pool).await, before);
+    assert_eq!(
+        store
+            .list_recipient_deliveries(&human(&device_a), 0, 10)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        store
+            .list_recipient_deliveries(&human(&device_b), 0, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    refused.per_device_queue_capacity = 2;
+    assert!(matches!(
+        store.commit_batch(refused.clone()).await.unwrap(),
+        DeviceMessageBatchCommitOutcome::Stored(_)
+    ));
+    assert_eq!(queue_row_count(&pool).await, 3);
+    assert!(matches!(
+        store.commit_batch(refused).await.unwrap(),
+        DeviceMessageBatchCommitOutcome::Duplicate(_)
+    ));
+    assert_eq!(queue_row_count(&pool).await, 3);
+}
+
 /// A selector counts only as the Station accepted it. A genuinely signed
 /// authorize Event the Station never committed, an older Commit of the same
 /// PCR cited for the founding device, and the founding authorization claimed
