@@ -59,13 +59,15 @@ fn write(
         f.history.founding_device_signing_seed,
     );
     let mut commit = previous.clone();
-    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
-        event.event_id.as_str().as_bytes(),
-    ));
     commit.event_ref = event.event_id.clone();
     commit.stream_position += 1;
     commit.previous_commit_ref = Some(previous.commit_id.clone());
     commit.committed_at = at;
+    let identity =
+        arkret_canonical::canonical::unsigned_value(&commit, &["commit_id", "signature"]).unwrap();
+    commit.commit_id = RealmCommitId::from_digest(arkret_canonical::sha256_bytes(
+        &arkret_canonical::canonical_json_bytes(&identity).unwrap(),
+    ));
     let unsigned = arkret_canonical::canonical::unsigned_value(&commit, &["signature"]).unwrap();
     commit.signature = arkret_signatures::detached_object::sign_detached_object(
         &unsigned,
