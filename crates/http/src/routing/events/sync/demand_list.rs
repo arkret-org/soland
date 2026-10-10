@@ -41,7 +41,7 @@ pub(crate) async fn read(
     session: &SessionIdentityState,
     body: &SyncRequestBody,
     after: &SyncCursor,
-) -> Result<AccountSummaryDelta, String> {
+) -> Result<AccountSummaryDelta, global_channels::GlobalReadError> {
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)
             .map_err(|_| "invalid account actor".to_owned())?;
@@ -58,7 +58,7 @@ pub(crate) async fn read(
         let frozen = if let Some(token) = &request.after {
             cursor::parse_realm_list_cursor(state, session, token.as_str())
                 .await
-                .map_err(|e| format!("{e:?}"))?
+                .map_err(global_channels::GlobalReadError::from)?
         } else {
             let (watermark, global_watermark) = state
                 .sync()
@@ -87,7 +87,7 @@ pub(crate) async fn read(
             },
         )
         .await
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(global_channels::GlobalReadError::from)?;
         let mut scanned = frozen.after.clone();
         let mut items = Vec::new();
         let limit = request.limit.unwrap_or(20) as usize;
@@ -135,7 +135,7 @@ pub(crate) async fn read(
                     },
                 )
                 .await
-                .map_err(|e| format!("{e:?}"))?,
+                .map_err(global_channels::GlobalReadError::from)?,
             )
         };
         page = Some(RealmListPage {

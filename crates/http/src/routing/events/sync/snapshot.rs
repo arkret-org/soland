@@ -18,7 +18,7 @@ pub(crate) async fn build_sync_snapshot(
     if let Some(frame) = current_details::frame(state, session, body, after_cursor).await? {
         return Ok(frame);
     }
-    Ok(build_global_sync_snapshot(state, session, body, after_cursor).await)
+    build_global_sync_snapshot(state, session, body, after_cursor).await
 }
 
 async fn build_global_sync_snapshot(
@@ -26,7 +26,10 @@ async fn build_global_sync_snapshot(
     session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
-) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+) -> Result<
+    arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
+    arkret_wire::Problem,
+> {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // Capture the Station-CAS retention coordinate before reading the
     // account-global projection. A later CAS may therefore cause a harmless
@@ -34,8 +37,9 @@ async fn build_global_sync_snapshot(
     // change that was not yet eligible for this snapshot.
     let account_data_change_position = if let Some(session) = session {
         let Some(actor) = session_actor(state, session) else {
-            return serde_json::from_value(json!({"kind":"resync_required"}))
-                .expect("resync frame");
+            return Ok(
+                serde_json::from_value(json!({"kind":"unauthorized"})).expect("unauthorized frame")
+            );
         };
         match state
             .account_data()
@@ -46,14 +50,12 @@ async fn build_global_sync_snapshot(
                 Ok(position) => position,
                 Err(_) => {
                     tracing::error!(%actor, position, "account-data change position exceeds cursor range");
-                    return serde_json::from_value(json!({"kind":"resync_required"}))
-                        .expect("resync frame");
+                    return Err(account_unavailable());
                 }
             },
             Err(error) => {
                 tracing::error!(%actor, %error, "account-data replay frontier unavailable");
-                return serde_json::from_value(json!({"kind":"resync_required"}))
-                    .expect("resync frame");
+                return Err(account_unavailable());
             }
         }
     } else {
@@ -62,10 +64,13 @@ async fn build_global_sync_snapshot(
     let summary_delta = if let Some(session) = session {
         match demand_list::read(state, session, body, after_cursor).await {
             Ok(delta) => Some(delta),
-            Err(error) => {
+            Err(global_channels::GlobalReadError::ResyncRequired) => {
+                return Ok(serde_json::from_value(json!({"kind":"resync_required"}))
+                    .expect("resync frame"));
+            }
+            Err(global_channels::GlobalReadError::Unavailable(error)) => {
                 tracing::warn!(%error, "account summary snapshot unavailable");
-                return serde_json::from_value(json!({"kind": "resync_required"}))
-                    .expect("closed resync control frame");
+                return Err(account_unavailable());
             }
         }
     } else {
@@ -86,14 +91,19 @@ async fn build_global_sync_snapshot(
         .await
         {
             Ok(delta) => delta,
-            Err(error) => {
+            Err(global_channels::GlobalReadError::ResyncRequired) => {
+                return Ok(serde_json::from_value(json!({"kind":"resync_required"}))
+                    .expect("resync frame"));
+            }
+            Err(global_channels::GlobalReadError::Unavailable(error)) => {
                 tracing::error!(%error, "account global slice unavailable");
-                return serde_json::from_value(json!({"kind":"resync_required"}))
-                    .expect("resync frame");
+                return Err(account_unavailable());
             }
         }
     } else {
-        return serde_json::from_value(json!({"kind":"unauthorized"})).expect("unauthorized frame");
+        return Ok(
+            serde_json::from_value(json!({"kind":"unauthorized"})).expect("unauthorized frame")
+        );
     };
     let sync_realms = BTreeMap::new();
     let mut to_device_position = after_cursor.to_device_position;
@@ -112,7 +122,7 @@ async fn build_global_sync_snapshot(
             Ok(watermark) => watermark,
             Err(error) => {
                 tracing::error!(%error, "failed to read to-device lost watermark during sync snapshot");
-                None
+                return Err(account_unavailable());
             }
         };
         if lost_watermark.is_some_and(|position| position > after_cursor.to_device_position) {
@@ -131,8 +141,7 @@ async fn build_global_sync_snapshot(
             Ok(queued) => queued,
             Err(error) => {
                 tracing::error!(%error, "recipient delivery queue unavailable during account delta");
-                return serde_json::from_value(json!({"kind":"resync_required"}))
-                    .expect("resync frame");
+                return Err(account_unavailable());
             }
         };
         let queued_count = queued.len();
@@ -151,8 +160,7 @@ async fn build_global_sync_snapshot(
             tracing::warn!(
                 "recipient delivery exceeds account delta frame budget; use the queue pull operation"
             );
-            return serde_json::from_value(json!({"kind":"resync_required"}))
-                .expect("resync frame");
+            return Err(account_unavailable());
         }
         to_device_limited = page.len() < queued_count;
         let deliveries = page.iter().map(|record| record.delivery.clone()).collect();
@@ -166,13 +174,11 @@ async fn build_global_sync_snapshot(
                 Ok(Some(token)) => Some(token),
                 Ok(None) => {
                     tracing::error!("recipient delivery ACK token was not issued for a queued row");
-                    return serde_json::from_value(json!({"kind":"resync_required"}))
-                        .expect("resync frame");
+                    return Err(account_unavailable());
                 }
                 Err(error) => {
                     tracing::error!(%error, "recipient delivery ACK token unavailable");
-                    return serde_json::from_value(json!({"kind":"resync_required"}))
-                        .expect("resync frame");
+                    return Err(account_unavailable());
                 }
             };
             if to_device_limited {
@@ -186,8 +192,7 @@ async fn build_global_sync_snapshot(
                     Ok(cursor) => Some(cursor),
                     Err(error) => {
                         tracing::error!(?error, "recipient queue continuation unavailable");
-                        return serde_json::from_value(json!({"kind":"resync_required"}))
-                            .expect("resync frame");
+                        return Err(account_unavailable());
                     }
                 };
             }
@@ -198,8 +203,7 @@ async fn build_global_sync_snapshot(
                     Ok(cursor) => Some(cursor),
                     Err(error) => {
                         tracing::error!(?error, "recipient queue continuation unavailable");
-                        return serde_json::from_value(json!({"kind":"resync_required"}))
-                            .expect("resync frame");
+                        return Err(account_unavailable());
                     }
                 };
         }
@@ -209,7 +213,7 @@ async fn build_global_sync_snapshot(
     };
 
     if to_device_next_cursor.as_ref().is_some_and(String::is_empty) {
-        return serde_json::from_value(json!({"kind":"resync_required"})).expect("resync frame");
+        return Err(account_unavailable());
     }
 
     let cursor = cursor::sync_token_for_account_positions(
@@ -235,8 +239,7 @@ async fn build_global_sync_snapshot(
         Ok(cursor) => cursor,
         Err(error) => {
             tracing::error!(?error, "account continuation unavailable");
-            return serde_json::from_value(json!({"kind":"resync_required"}))
-                .expect("resync frame");
+            return Err(account_unavailable());
         }
     };
     let response = arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
@@ -266,7 +269,14 @@ async fn build_global_sync_snapshot(
     };
     // An empty global delta is not sent: the long poll keeps waiting and the
     // caller keeps its cursor. There is no cursor-only "frontier" frame kind.
-    response
+    Ok(response)
+}
+
+fn account_unavailable() -> arkret_wire::Problem {
+    arkret_wire::Problem::from_code(
+        "temporarily_unavailable",
+        "Account global cut could not be proved",
+    )
 }
 
 #[cfg(test)]

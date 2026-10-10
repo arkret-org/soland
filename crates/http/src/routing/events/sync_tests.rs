@@ -232,6 +232,145 @@ async fn accepted_leave_preserves_the_ordinary_unavailable_continuation() {
     panic!("normal detail turn did not report the accepted membership loss");
 }
 
+#[tokio::test]
+async fn global_storage_failure_returns_503_without_reset_or_new_delivery_material() {
+    use diesel::sql_types::Jsonb;
+    use diesel_async::RunQueryDsl as _;
+    use salvo::test::ResponseExt as _;
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
+    #[derive(diesel::QueryableByName)]
+    struct JsonRow {
+        #[diesel(sql_type = Jsonb)]
+        value: Value,
+    }
+    const EFFECTS: &str = "SELECT jsonb_build_object('cursors',(SELECT count(*) FROM sync_cursor_handles),'snapshots',(SELECT count(*) FROM realm_state_snapshot_issuances),'windows',(SELECT count(*) FROM realm_state_snapshot_window_reservations),'device_acks',(SELECT count(*) FROM device_message_ack_tokens),'agent_acks',(SELECT count(*) FROM agent_recipient_delivery_ack_tokens)) AS value";
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(
+        config,
+        soland_storage_postgres::Db {
+            pool: Some(pool.clone()),
+        },
+    );
+    database.bind_device_inventory_station(state.service_id());
+    let store = state.test_persistence();
+    let genesis = PcrGenesisFixture::new(state.service_did());
+    let device = genesis.admit_founding_device(store.as_ref()).await.unwrap();
+    let mut session = roster_session(&state, genesis.history.account.principal_id.as_str());
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: device.device_id,
+    };
+    let body: SyncRequestBody = serde_json::from_value(json!({"catchup": true})).unwrap();
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let list_token = initial.realm_list.unwrap().snapshot_cursor;
+    let token = initial.cursor.unwrap();
+    let after = super::cursor::parse_account_cursor(
+        &token,
+        &state,
+        Some(&session),
+        None,
+        Utc::now().timestamp_millis(),
+        false,
+    )
+    .await
+    .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    let before = diesel::sql_query(EFFECTS)
+        .get_result::<JsonRow>(&mut conn)
+        .await
+        .unwrap()
+        .value;
+    diesel::sql_query("ALTER TABLE account_data_change_retention RENAME TO unavailable_account_data_change_retention")
+        .execute(&mut conn).await.unwrap();
+    let refused = super::build_sync_snapshot(&state, Some(&session), &body, &after).await;
+    let mut response = Response::new();
+    super::subscribe::account_response(
+        &mut Depot::new(),
+        &Request::new(),
+        &mut response,
+        state.clone(),
+        session.clone(),
+        body,
+        None,
+    )
+    .await;
+    diesel::sql_query("ALTER TABLE unavailable_account_data_change_retention RENAME TO account_data_change_retention")
+        .execute(&mut conn).await.unwrap();
+    let problem = refused.expect_err("storage failure must not become a resync frame");
+    assert_eq!(
+        problem.error_code(),
+        Some(arkret_wire::ErrorCode::TemporarilyUnavailable)
+    );
+    assert!(problem.extensions.is_empty());
+    assert_eq!(response.status_code, Some(StatusCode::SERVICE_UNAVAILABLE));
+    let problem: arkret_wire::Problem = response.take_json().await.unwrap();
+    assert_eq!(
+        problem.error_code(),
+        Some(arkret_wire::ErrorCode::TemporarilyUnavailable)
+    );
+    let retained = super::cursor::parse_account_cursor(
+        &token,
+        &state,
+        Some(&session),
+        None,
+        Utc::now().timestamp_millis(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(retained.global_baseline, after.global_baseline);
+    let unchanged = diesel::sql_query(EFFECTS)
+        .get_result::<JsonRow>(&mut conn)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(before, unchanged);
+    super::build_sync_snapshot(&state, Some(&session), &SyncRequestBody::default(), &after)
+        .await
+        .unwrap()
+        .validate()
+        .unwrap();
+    // Exercise the internal expiry classifier, not an externally forgeable cursor.
+    let mut expired = retained;
+    let progress = expired.global_baseline.as_mut().unwrap();
+    progress["snapshot_expires_at_ms"] = json!(0);
+    progress["completed"] = json!([]);
+    let body: SyncRequestBody =
+        serde_json::from_value(json!({"after": token.clone(), "catchup": true})).unwrap();
+    let frame = super::build_sync_snapshot(&state, Some(&session), &body, &expired)
+        .await
+        .unwrap();
+    frame.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(frame).unwrap()["kind"],
+        json!("resync_required")
+    );
+    assert!(
+        diesel::sql_query(
+            "UPDATE sync_cursor_handles SET expires_at_ms=0 WHERE purpose='realm_list'"
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap()
+            > 0
+    );
+    let body: SyncRequestBody = serde_json::from_value(json!({
+        "after": token, "catchup": true, "realm_list": {"after": list_token},
+    }))
+    .unwrap();
+    let frame = super::build_sync_snapshot(&state, Some(&session), &body, &after)
+        .await
+        .unwrap();
+    frame.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(frame).unwrap()["kind"],
+        json!("resync_required")
+    );
+}
+
 fn roster_actor(principal: &str) -> arkret_wire::ActorId {
     arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(principal).unwrap(),
@@ -836,10 +975,20 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
 /// whether it is public or was left.
 #[tokio::test]
 async fn sync_snapshot_excludes_public_realms_without_exact_account_membership() {
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
     let mut config = test_config();
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    let session = roster_session(&state, ROSTER_CALLER);
+    let genesis = PcrGenesisFixture::new(state.service_did());
+    let device = genesis
+        .admit_founding_device(state.test_persistence().as_ref())
+        .await
+        .unwrap();
+    let mut session = roster_session(&state, genesis.history.account.principal_id.as_str());
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: device.device_id,
+    };
     state.realm_directory().upsert(roster_realm(true, false));
     insert_projected_membership(&state, ROSTER_ACTOR, "join");
     let detail = |frame| {
@@ -867,7 +1016,11 @@ async fn sync_snapshot_excludes_public_realms_without_exact_account_membership()
         Some(not_found.clone()),
         "a public Realm is not readable without exact account membership"
     );
-    insert_projected_membership(&state, ROSTER_CALLER, "leave");
+    insert_projected_membership(
+        &state,
+        genesis.history.account.principal_id.as_str(),
+        "leave",
+    );
     let left = build_sync_snapshot(&state, Some(&session), &selected, &SyncCursor::default()).await;
     assert_eq!(detail(left), Some(not_found));
 }

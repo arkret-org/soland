@@ -36,6 +36,33 @@ pub(crate) struct GlobalDelta {
     pub agent_draft_pending_intents: Option<AgentDraftPendingIntentContainer>,
 }
 
+#[derive(Debug)]
+pub(crate) enum GlobalReadError {
+    ResyncRequired,
+    Unavailable(String),
+}
+
+impl From<String> for GlobalReadError {
+    fn from(message: String) -> Self {
+        Self::Unavailable(message)
+    }
+}
+
+impl From<&str> for GlobalReadError {
+    fn from(message: &str) -> Self {
+        Self::Unavailable(message.to_owned())
+    }
+}
+
+impl From<SyncCursorError> for GlobalReadError {
+    fn from(error: SyncCursorError) -> Self {
+        match error {
+            SyncCursorError::Expired => Self::ResyncRequired,
+            other => Self::Unavailable(format!("{other:?}")),
+        }
+    }
+}
+
 pub(super) fn pending_intents_allowed(has_agent_session: bool, has_account_binding: bool) -> bool {
     !has_agent_session && has_account_binding
 }
@@ -67,7 +94,7 @@ pub(crate) async fn read(
     session: &SessionIdentityState,
     after: &SyncCursor,
     initial_snapshot: Option<(i64, i64)>,
-) -> Result<GlobalDelta, String> {
+) -> Result<GlobalDelta, GlobalReadError> {
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)
             .map_err(|_| "invalid account actor".to_owned())?;
@@ -110,7 +137,7 @@ pub(crate) async fn read(
     if !global_baseline_complete(&progress, pending_allowed)
         && progress.snapshot_expires_at_ms <= chrono::Utc::now().timestamp_millis()
     {
-        return Err("account baseline snapshot expired; establish a fresh baseline".into());
+        return Err(GlobalReadError::ResyncRequired);
     }
     let mut account_data = AccountDataContainer::default();
     let mut cas = StationCasAccountDataContainer::default();
@@ -182,7 +209,7 @@ pub(crate) async fn read(
         let pending_page_offset = progress.pending_page_offset;
         for row in &rows {
             if row.payload.get("_oversized").and_then(Value::as_bool) == Some(true) {
-                return Err("one account-global value exceeds the byte budget".to_owned());
+                return Err("one account-global value exceeds the byte budget".into());
             }
             if row.payload.get("_budget_boundary").is_some() {
                 break;
@@ -210,7 +237,7 @@ pub(crate) async fn read(
             }
             if bytes > remaining_bytes {
                 if consumed == 0 && remaining_bytes == 6 * 1024 * 1024 {
-                    return Err("account global item exceeds frame byte budget".to_owned());
+                    return Err("account global item exceeds frame byte budget".into());
                 }
                 break;
             }
@@ -288,10 +315,7 @@ pub(crate) async fn read(
             match name {
                 "account_data_events" => {
                     if payload["source"] == "invalidated" {
-                        return Err(
-                            "account data source was withdrawn; establish a fresh baseline"
-                                .to_owned(),
-                        );
+                        return Err(GlobalReadError::ResyncRequired);
                     }
                     let event: arkret_wire::Event =
                         serde_json::from_value(payload["value"].clone())
