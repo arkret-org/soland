@@ -55,6 +55,18 @@ jobs:
           path: floria
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Windows OpenSSL configuration regression tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/tests/configure-windows-openssl.tests.ps1
+        working-directory: soland
+
+      - name: Configure Windows OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/configure-windows-openssl.ps1
+        working-directory: soland
+
       - name: Install Rust 1.98
         uses: dtolnay/rust-toolchain@master
         with:

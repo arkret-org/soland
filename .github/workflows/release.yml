@@ -63,6 +63,12 @@ jobs:
           path: floria
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
+      - name: Configure Windows OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/configure-windows-openssl.ps1
+        working-directory: soland
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
