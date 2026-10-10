@@ -1,5 +1,237 @@
 use super::*;
 
+async fn build_sync_snapshot(
+    state: &AppState,
+    session: Option<&SessionIdentityState>,
+    body: &SyncRequestBody,
+    after: &SyncCursor,
+) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+    super::build_sync_snapshot(state, session, body, after)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn inconsistent_continuation_head_returns_503_without_issuing_or_resetting() {
+    use diesel::sql_types::{Jsonb, Text};
+    use diesel_async::RunQueryDsl as _;
+    use salvo::test::ResponseExt as _;
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
+    #[derive(diesel::QueryableByName)]
+    struct JsonRow {
+        #[diesel(sql_type = Jsonb)]
+        value: Value,
+    }
+    const EFFECTS: &str = "SELECT jsonb_build_object('cursors',(SELECT count(*) FROM sync_cursor_handles),'snapshots',(SELECT count(*) FROM realm_state_snapshot_issuances),'windows',(SELECT count(*) FROM realm_state_snapshot_window_reservations),'device_acks',(SELECT count(*) FROM device_message_ack_tokens),'agent_acks',(SELECT count(*) FROM agent_recipient_delivery_ack_tokens)) AS value";
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(
+        config,
+        soland_storage_postgres::Db {
+            pool: Some(pool.clone()),
+        },
+    );
+    database.bind_device_inventory_station(state.service_id());
+    let store = state.test_persistence();
+    let genesis = PcrGenesisFixture::new(state.service_did());
+    let device = genesis.admit_founding_device(store.as_ref()).await.unwrap();
+    let account = &genesis.history.account;
+    let mut session = roster_session(&state, account.principal_id.as_str());
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: device.device_id,
+    };
+    let realm = CommittedRealm::bootstrap(
+        store.as_ref(),
+        account,
+        state.service_verification_method("notary-key").unwrap(),
+    )
+    .await;
+    let mut body: SyncRequestBody = serde_json::from_value(json!({
+        "filter": {"realm_ids": [realm.head.event.realm_id]}, "catchup": true,
+    }))
+    .unwrap();
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    initial.validate().unwrap();
+    let token = initial.cursor.unwrap();
+    let filter = sync_filter_value(body.filter.as_ref());
+    let before_cursor = super::cursor::parse_account_cursor(
+        &token,
+        &state,
+        Some(&session),
+        filter.as_ref(),
+        Utc::now().timestamp_millis(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(!before_cursor.detail_positions.is_empty());
+    body.after = Some(token.clone());
+    let mut conn = pool.get().await.unwrap();
+    let original =
+        diesel::sql_query("SELECT to_jsonb(c) AS value FROM realm_commits c WHERE commit_id=$1")
+            .bind::<Text, _>(realm.head.commit.commit_id.as_str())
+            .get_result::<JsonRow>(&mut conn)
+            .await
+            .unwrap()
+            .value;
+    diesel::sql_query("UPDATE realm_commits SET commit_json=jsonb_set(commit_json,'{event_ref}','null'::jsonb) WHERE commit_id=$1")
+        .bind::<Text, _>(realm.head.commit.commit_id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let before = diesel::sql_query(EFFECTS)
+        .get_result::<JsonRow>(&mut conn)
+        .await
+        .unwrap()
+        .value;
+    let mut response = Response::new();
+    super::subscribe::account_response(
+        &mut Depot::new(),
+        &Request::new(),
+        &mut response,
+        state.clone(),
+        session.clone(),
+        body,
+        None,
+    )
+    .await;
+    assert_eq!(response.status_code, Some(StatusCode::SERVICE_UNAVAILABLE));
+    let problem: arkret_wire::Problem = response.take_json().await.unwrap();
+    assert_eq!(
+        problem.error_code(),
+        Some(arkret_wire::ErrorCode::TemporarilyUnavailable)
+    );
+    assert!(problem.extensions.is_empty());
+    let after = diesel::sql_query(EFFECTS)
+        .get_result::<JsonRow>(&mut conn)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(before, after);
+    let retained = super::cursor::parse_account_cursor(
+        &token,
+        &state,
+        Some(&session),
+        filter.as_ref(),
+        Utc::now().timestamp_millis(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(retained.detail_positions, before_cursor.detail_positions);
+    diesel::sql_query("UPDATE realm_commits SET commit_json=$2 WHERE commit_id=$1")
+        .bind::<Text, _>(realm.head.commit.commit_id.as_str())
+        .bind::<Jsonb, _>(original["commit_json"].clone())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    assert!(
+        state
+            .authority_commits()
+            .account_continuation_heads_covered(
+                &realm.head.event.realm_id,
+                account,
+                &retained.detail_positions[realm.head.event.realm_id.as_str()].stream_heads,
+            )
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn accepted_leave_preserves_the_ordinary_unavailable_continuation() {
+    use soland_test_support::pcr_genesis::PcrGenesisFixture;
+
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(
+        config,
+        soland_storage_postgres::Db {
+            pool: Some(database.pool()),
+        },
+    );
+    database.bind_device_inventory_station(state.service_id());
+    let store = state.test_persistence();
+    let founder = PcrGenesisFixture::new(state.service_did());
+    founder.admit_into(store.as_ref()).await.unwrap();
+    let peer = PcrGenesisFixture::new(state.service_did());
+    let device = peer.admit_founding_device(store.as_ref()).await.unwrap();
+    let account = &peer.history.account;
+    let mut session = roster_session(&state, account.principal_id.as_str());
+    session.endpoint = soland_services::identity::SessionEndpointState::HumanDevice {
+        device_id: device.device_id,
+    };
+    let mut realm = CommittedRealm::bootstrap(
+        store.as_ref(),
+        &founder.history.account,
+        state.service_verification_method("notary-key").unwrap(),
+    )
+    .await;
+    realm
+        .member_state(store.as_ref(), account, account, "join")
+        .await;
+    let mut body: SyncRequestBody = serde_json::from_value(json!({
+        "filter": {"realm_ids": [realm.head.event.realm_id]}, "catchup": true,
+    }))
+    .unwrap();
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
+    let token = initial.cursor.unwrap();
+    let filter = sync_filter_value(body.filter.as_ref());
+    let mut after = super::cursor::parse_account_cursor(
+        &token,
+        &state,
+        Some(&session),
+        filter.as_ref(),
+        Utc::now().timestamp_millis(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(!after.detail_positions.is_empty());
+    body.after = Some(token);
+    realm
+        .member_state(store.as_ref(), account, account, "leave")
+        .await;
+    assert!(
+        super::current_details::continuation_heads_covered(&state, account, &body, &after)
+            .await
+            .unwrap()
+    );
+    // Follow the normal global/detail turn using only server-issued tokens.
+    for _ in 0..2 {
+        let frame = super::build_sync_snapshot(&state, Some(&session), &body, &after)
+            .await
+            .unwrap();
+        frame.validate().unwrap();
+        let value = serde_json::to_value(&frame).unwrap();
+        let code =
+            &value["realms"][realm.head.event.realm_id.as_str()]["unavailable"]["error_code"];
+        if !code.is_null() {
+            assert_eq!(*code, serde_json::to_value(
+                arkret_models_collaboration::sync_frames::demand_sync::RealmDetailErrorCode::NotFound
+            ).unwrap());
+            return;
+        }
+        let token = frame.cursor.expect("global turn issues its continuation");
+        after = super::cursor::parse_account_cursor(
+            &token,
+            &state,
+            Some(&session),
+            filter.as_ref(),
+            Utc::now().timestamp_millis(),
+            false,
+        )
+        .await
+        .unwrap();
+        body.after = Some(token);
+    }
+    panic!("normal detail turn did not report the accepted membership loss");
+}
+
 fn roster_actor(principal: &str) -> arkret_wire::ActorId {
     arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(principal).unwrap(),

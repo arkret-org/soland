@@ -1771,6 +1771,18 @@ impl AuthorityCommitApplication {
             .await?)
     }
 
+    pub async fn account_continuation_heads_covered(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        minimum_heads: &[arkret_wire::CommitStreamHead],
+    ) -> ServiceResult<bool> {
+        Ok(self
+            .store()
+            .account_continuation_heads_covered(realm_id, account, minimum_heads)
+            .await?)
+    }
+
     pub async fn direct_conversation_replica_cut(
         &self,
         realm_id: &arkret_wire::RealmId,

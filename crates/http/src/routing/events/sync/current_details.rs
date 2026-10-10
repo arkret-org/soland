@@ -68,6 +68,36 @@ fn realm_selection(filter: &AccountFilter, realm: &RealmId) -> RealmSelection {
     }
 }
 
+/// Only bindings still selected by this request owe minimum-head coverage.
+pub(super) async fn continuation_heads_covered(
+    state: &AppState,
+    account: &arkret_wire::AccountId,
+    body: &SyncRequestBody,
+    after: &SyncCursor,
+) -> soland_services::ServiceResult<bool> {
+    let Some(filter) = body.filter.as_ref() else {
+        return Ok(true);
+    };
+    for realm in filter.realm_ids.iter().flatten() {
+        let Some(progress) = after.detail_positions.get(realm.as_str()) else {
+            continue;
+        };
+        let selection = realm_selection(filter, realm);
+        let (heads, _) = selected_visible_heads(&progress.stream_heads, realm, &selection);
+        if heads.is_empty() {
+            continue;
+        }
+        if !state
+            .authority_commits()
+            .account_continuation_heads_covered(realm, account, &heads)
+            .await?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Whether a delivered window must be replaced by a newly frozen one.
 fn selected_visible_heads(
     visible: &[arkret_wire::CommitStreamHead],
@@ -305,20 +335,22 @@ pub(super) async fn frame(
     session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
     after: &SyncCursor,
-) -> Option<AccountSubscribeFrame> {
-    let filter = body.filter.as_ref()?;
+) -> Result<Option<AccountSubscribeFrame>, arkret_wire::Problem> {
+    let Some(filter) = body.filter.as_ref() else {
+        return Ok(None);
+    };
     let realms = filter.realm_ids.clone().unwrap_or_default();
     if realms.is_empty() {
-        return None;
+        return Ok(None);
     }
     let Some(session) = session else {
-        return Some(control("unauthorized"));
+        return Ok(Some(control("unauthorized")));
     };
     let account = match crate::routing::identity::session_actor::session_actor_from_credential(
         state, session,
     ) {
         Ok(actor) => actor.as_account_id().cloned(),
-        Err(_) => return Some(control("unauthorized")),
+        Err(_) => return Ok(Some(control("unauthorized"))),
     };
     let window_limit = filter
         .window_limit
@@ -330,23 +362,34 @@ pub(super) async fn frame(
     let mut last_realm = None;
     let mut delivered_window = false;
     for realm in round_robin(realms, after.detail_next_realm.as_deref()) {
-        let code = match (realm_selection(filter, &realm), account.as_ref()) {
+        let selection = realm_selection(filter, &realm);
+        if selection == RealmSelection::NotSelected {
+            continue;
+        }
+        let joined = match account.as_ref() {
+            Some(account) if !is_realm_deleted(state, realm.as_str()).await => {
+                match crate::routing::realm_state_snapshot::account_is_joined_member(
+                    state,
+                    realm.as_str(),
+                    account,
+                )
+                .await
+                {
+                    Ok(joined) => joined,
+                    Err(error) => {
+                        tracing::warn!(%error, realm_id = %realm, "Account membership proof unavailable");
+                        return Err(continuation_unavailable());
+                    }
+                }
+            }
+            _ => false,
+        };
+        let code = match (selection, account.as_ref()) {
             (RealmSelection::NotSelected, _) => continue,
             (RealmSelection::Default | RealmSelection::Explicit(_), None) => {
                 Some(RealmDetailErrorCode::NotFound)
             }
-            (RealmSelection::Default | RealmSelection::Explicit(_), Some(account))
-                if is_realm_deleted(state, realm.as_str()).await
-                    || !matches!(
-                        crate::routing::realm_state_snapshot::account_is_joined_member(
-                            state,
-                            realm.as_str(),
-                            account,
-                        )
-                        .await,
-                        Ok(true)
-                    ) =>
-            {
+            (RealmSelection::Default | RealmSelection::Explicit(_), Some(_)) if !joined => {
                 Some(RealmDetailErrorCode::NotFound)
             }
             (selection, Some(account)) => {
@@ -373,7 +416,7 @@ pub(super) async fn frame(
                     }
                     Err(error) => {
                         tracing::warn!(%error, realm_id = %realm, "Account visible stream heads unavailable");
-                        return Some(control("resync_required"));
+                        return Err(continuation_unavailable());
                     }
                 };
                 let (selected_heads, streams_limited) =
@@ -416,7 +459,7 @@ pub(super) async fn frame(
                     Ok(Freeze::Unavailable(code)) => Some(code),
                     Err(error) => {
                         tracing::warn!(%error, realm_id = %realm, "Account window freeze failed");
-                        return Some(control("resync_required"));
+                        return Err(continuation_unavailable());
                     }
                 }
             }
@@ -430,10 +473,10 @@ pub(super) async fn frame(
         }
     }
     if !delivered_window && !report_unavailable {
-        return None;
+        return Ok(None);
     }
     if entries.is_empty() {
-        return None;
+        return Ok(None);
     }
     let filter_value = sync_filter_value(body.filter.as_ref());
     let cursor = match cursor::sync_token_for_account_positions(
@@ -455,7 +498,7 @@ pub(super) async fn frame(
         Ok(cursor) => cursor,
         Err(error) => {
             tracing::warn!(?error, "Realm detail continuation unavailable");
-            return Some(control("resync_required"));
+            return Err(continuation_unavailable());
         }
     };
     let frame = AccountSubscribeFrame {
@@ -482,9 +525,16 @@ pub(super) async fn frame(
         // The freeze budget must make this unreachable; never emit a frame
         // the closed contract or its byte bound would reject.
         tracing::error!("Realm detail frame failed its own closed contract");
-        return Some(control("resync_required"));
+        return Err(continuation_unavailable());
     }
-    Some(frame)
+    Ok(Some(frame))
+}
+
+fn continuation_unavailable() -> arkret_wire::Problem {
+    arkret_wire::Problem::from_code(
+        "temporarily_unavailable",
+        "Account detail cut could not be proved",
+    )
 }
 
 #[cfg(test)]

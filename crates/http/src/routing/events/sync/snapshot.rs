@@ -11,10 +11,22 @@ pub(crate) async fn build_sync_snapshot(
     session: Option<&SessionIdentityState>,
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
-) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
-    if let Some(frame) = current_details::frame(state, session, body, after_cursor).await {
-        return frame;
+) -> Result<
+    arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
+    arkret_wire::Problem,
+> {
+    if let Some(frame) = current_details::frame(state, session, body, after_cursor).await? {
+        return Ok(frame);
     }
+    Ok(build_global_sync_snapshot(state, session, body, after_cursor).await)
+}
+
+async fn build_global_sync_snapshot(
+    state: &AppState,
+    session: Option<&SessionIdentityState>,
+    body: &SyncRequestBody,
+    after_cursor: &SyncCursor,
+) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // Capture the Station-CAS retention coordinate before reading the
     // account-global projection. A later CAS may therefore cause a harmless

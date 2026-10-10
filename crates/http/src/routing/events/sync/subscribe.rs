@@ -198,7 +198,7 @@ pub(super) async fn account_response(
         let actor = match crate::routing::identity::session_actor::session_actor_from_credential(
             &state, &session,
         ) {
-            Ok(actor) => actor.to_string(),
+            Ok(actor) => actor,
             Err(error) => {
                 tracing::error!(%error, "authenticated account subscribe session has no actor");
                 render_error(
@@ -210,11 +210,30 @@ pub(super) async fn account_response(
                 return;
             }
         };
+        if let Some(account) = actor.as_account_id() {
+            match current_details::continuation_heads_covered(&state, account, &body, &after_cursor)
+                .await
+            {
+                Ok(true) => {}
+                outcome => {
+                    if let Err(error) = outcome {
+                        tracing::warn!(%error, "Account continuation minimum head proof unavailable");
+                    }
+                    render_error(
+                        res,
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "temporarily_unavailable",
+                        "account continuation head coverage is temporarily unavailable",
+                    );
+                    return;
+                }
+            }
+        }
         let position = u64::try_from(after_cursor.account_data_change_position)
             .expect("validated account-data change position is non-negative");
         match state
             .account_data()
-            .change_position_is_replayable(&actor, position)
+            .change_position_is_replayable(&actor.to_string(), position)
             .await
         {
             Ok(true) => {}
@@ -266,7 +285,13 @@ pub(super) async fn account_response(
             salvo::http::HeaderValue::from_static("true"),
         );
     }
-    let response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
+    let response = match build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await {
+        Ok(response) => response,
+        Err(problem) => {
+            crate::error::render_problem_envelope(res, StatusCode::SERVICE_UNAVAILABLE, problem);
+            return;
+        }
+    };
     let initial_cursor = response.cursor.clone();
     // An unavailable detail has no new data or durable detail position. If
     // returned immediately on every continuation, the detail/global turn
@@ -308,12 +333,15 @@ pub(super) async fn account_response(
                     }
                     // Re-read durable projections at timeout. Broadcast is only
                     // a latency hint, so a lost wake-up must not hide data.
-                    let final_snapshot = build_sync_snapshot(
+                    let final_snapshot = match build_sync_snapshot(
                         &state,
                         Some(&session),
                         &body,
                         &current_cursor,
-                    ).await;
+                    ).await {
+                        Ok(frame) => frame,
+                        Err(_) => break,
+                    };
                     let final_cursor = final_snapshot.cursor.clone();
                     if delta_is_empty(&final_snapshot) {
                         yield Ok::<Bytes, std::io::Error>(ndjson_line(
@@ -373,12 +401,15 @@ pub(super) async fn account_response(
                             yield Ok::<Bytes,std::io::Error>(ndjson_line(&account_unauthorized_frame()));
                             break;
                         }
-                        let delta = build_sync_snapshot(
+                        let delta = match build_sync_snapshot(
                             &state,
                             Some(&session),
                             &body,
                             &current_cursor,
-                        ).await;
+                        ).await {
+                            Ok(frame) => frame,
+                            Err(_) => break,
+                        };
                         if delta_is_empty(&delta) {
                             continue;
                         }

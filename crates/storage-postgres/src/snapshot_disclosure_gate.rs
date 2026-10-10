@@ -20,7 +20,7 @@ use arkret_wire::{
 use diesel::sql_types::Text as SqlText;
 
 use super::{
-    AsyncConnection, AsyncPgConnection, Bool, OptionalExtension, PersistenceError,
+    AsyncConnection, AsyncPgConnection, Bool, Jsonb, OptionalExtension, PersistenceError,
     PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, pg_conn,
     sql_query,
 };
@@ -274,6 +274,146 @@ pub async fn account_snapshot_material(
     })
     .await
     .map_err(PgTransactionError::into_persistence)
+}
+
+/// A continuation cannot mint a replacement window below its validated cut.
+/// This check issues nothing and never classifies missing evidence as stale.
+pub(crate) async fn account_continuation_heads_covered(
+    pool: &PgPool,
+    realm_id: &RealmId,
+    account: &AccountId,
+    minimum_heads: &[arkret_wire::CommitStreamHead],
+) -> PersistenceResult<bool> {
+    if minimum_heads.is_empty() {
+        return Ok(true);
+    }
+    let mut conn = pg_conn(pool).await?;
+    conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+        sql_query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let material = match account_snapshot_material_in_connection(conn, realm_id, account).await
+        {
+            Ok(Some(material)) => material,
+            Ok(None) => return Ok(false),
+            Err(error) => {
+                // A proved membership loss must reach the ordinary unavailable
+                // response, not be mistaken for an unproved storage failure.
+                let Some(material) =
+                    crate::authority_commit::realm_state_snapshot_material_in_connection(
+                        conn, realm_id,
+                    )
+                    .await?
+                else {
+                    return Ok(false);
+                };
+                let caller = ActorId::account(account.clone());
+                let membership = material
+                    .current_state_entries
+                    .iter()
+                    .find_map(|entry| match entry {
+                        TypedCurrentRow::Value {
+                            selector: CurrentSelector::MemberState { actor_id },
+                            value,
+                            ..
+                        } if actor_id == &caller => Some(value),
+                        _ => None,
+                    })
+                    .map(|value| {
+                        serde_json::from_value::<arkret_wire::MemberStateCurrent>(value.clone())
+                    })
+                    .transpose()
+                    .map_err(PersistenceError::database)?;
+                if membership
+                    .is_some_and(|current| current.membership != arkret_wire::MembershipState::Join)
+                    && continuation_heads_covered_in_material(
+                        conn,
+                        realm_id,
+                        &material,
+                        minimum_heads,
+                    )
+                    .await?
+                {
+                    return Ok(true);
+                }
+                return Err(error.into());
+            }
+        };
+        continuation_heads_covered_in_material(conn, realm_id, &material, minimum_heads)
+            .await
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(PgTransactionError::into_persistence)
+}
+
+pub(crate) async fn continuation_heads_covered_in_material(
+    conn: &mut AsyncPgConnection,
+    realm_id: &RealmId,
+    material: &soland_storage::RealmStateSnapshotMaterial,
+    minimum_heads: &[arkret_wire::CommitStreamHead],
+) -> PersistenceResult<bool> {
+    for required in minimum_heads {
+        if required.stream_ref.realm_id() != realm_id {
+            return Ok(false);
+        }
+        let Some(current) = material
+            .visible_stream_heads
+            .iter()
+            .find(|head| head.stream_ref == required.stream_ref)
+        else {
+            // A formerly visible private stream may no longer be owed.
+            continue;
+        };
+        if current.stream_position < required.stream_position
+            || (current.stream_position == required.stream_position
+                && current.commit_id != required.commit_id)
+        {
+            return Ok(false);
+        }
+        if material
+            .retention_and_history_floor
+            .stream_floors
+            .iter()
+            .any(|floor| {
+                floor.stream_ref == required.stream_ref
+                    && required.stream_position < floor.oldest_position
+            })
+        {
+            // Preserve the existing retained-floor/resync contract.
+            continue;
+        }
+        let position = i64::try_from(required.stream_position)
+            .map_err(|_| rejected("continuation head exceeds the stored position range"))?;
+        let present = sql_query(
+            "SELECT (EXISTS(SELECT 1 FROM realm_commits c \
+                 LEFT JOIN canonical_events e ON e.pk=c.event_pk \
+                 WHERE c.stream_key=$1 AND c.stream_position=$2 AND c.commit_id=$3 \
+                   AND c.stream_ref=$4 \
+                   AND c.commit_json->>'commit_id'=c.commit_id \
+                   AND c.commit_json->>'stream_position'=c.stream_position::text \
+                   AND c.commit_json->'stream_ref'=c.stream_ref \
+                   AND (c.event_pk IS NULL OR (e.state='committed' \
+                     AND c.commit_json->>'event_ref'=e.envelope->>'event_id'))) \
+                 OR EXISTS(SELECT 1 FROM replica_stream_anchors a \
+                 WHERE a.stream_key=$1 AND a.anchor_stream_position=$2 \
+                   AND a.anchor_commit_id=$3)) AS present",
+        )
+        .bind::<Text, _>(crate::authority_commit::stream_key(&required.stream_ref)?)
+        .bind::<diesel::sql_types::BigInt, _>(position)
+        .bind::<Text, _>(required.commit_id.as_str())
+        .bind::<Jsonb, _>(
+            serde_json::to_value(&required.stream_ref).map_err(PersistenceError::database)?,
+        )
+        .get_result::<PresenceRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .present;
+        if !present {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Issue the complete signed Snapshot to `account` at one durable cut. The

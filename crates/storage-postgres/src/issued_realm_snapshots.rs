@@ -1077,6 +1077,29 @@ pub(crate) async fn freeze_account_realm_window(
                 &material.visible_stream_heads,
                 request.selected_stream_refs.as_deref(),
             )?;
+            let minimum_heads = request
+                .delivered_heads
+                .iter()
+                .filter(|required| {
+                    selected_heads
+                        .iter()
+                        .any(|head| head.stream_ref == required.stream_ref)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if !crate::snapshot_disclosure_gate::continuation_heads_covered_in_material(
+                conn,
+                &request.realm_id,
+                &material,
+                &minimum_heads,
+            )
+            .await?
+            {
+                return Err(PersistenceError::Internal(
+                    "Account continuation minimum head is not covered at the frozen cut".into(),
+                )
+                .into());
+            }
             let per_stream_limit = request
                 .window_limit
                 .min((100 / selected_heads.len()) as u32)

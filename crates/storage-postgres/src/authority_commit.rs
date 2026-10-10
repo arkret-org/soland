@@ -4381,6 +4381,21 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
             .await
     }
 
+    async fn account_continuation_heads_covered(
+        &self,
+        realm_id: &arkret_wire::RealmId,
+        account: &arkret_wire::AccountId,
+        minimum_heads: &[arkret_wire::CommitStreamHead],
+    ) -> PersistenceResult<bool> {
+        crate::snapshot_disclosure_gate::account_continuation_heads_covered(
+            &self.pool,
+            realm_id,
+            account,
+            minimum_heads,
+        )
+        .await
+    }
+
     async fn direct_conversation_replica_cut(
         &self,
         realm_id: &arkret_wire::RealmId,

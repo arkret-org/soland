@@ -2181,6 +2181,21 @@ pub trait AuthorityCommitStore: Send + Sync {
         account: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<RealmStateSnapshotMaterial>>;
 
+    /// Check an already validated Account cursor's selected minimum heads
+    /// against current disclosure and held identities in one read-only cut.
+    /// False is unavailable evidence, not proof of recoverable lag. Changed
+    /// disclosure and retained-floor recovery remain the ordinary read's job.
+    async fn account_continuation_heads_covered(
+        &self,
+        _realm_id: &arkret_wire::RealmId,
+        _account: &arkret_wire::AccountId,
+        _minimum_heads: &[CommitStreamHead],
+    ) -> PersistenceResult<bool> {
+        Err(crate::PersistenceError::Internal(
+            "Account continuation head evidence is unavailable".into(),
+        ))
+    }
+
     /// Read only the exact binding, Realm MLS group, two participant rows
     /// and at most one additional joined member from a verified held cut.
     /// The Account's existing readable interval must be proved at that cut.
