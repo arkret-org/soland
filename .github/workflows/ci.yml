@@ -275,7 +275,7 @@ jobs:
           exit 1
 
       - name: Apply migrations forwards (baseline schema)
-        run: diesel --migration-dir crates/storage-postgres/migrations migration run
+        run: diesel migration --migration-dir crates/storage-postgres/migrations run
 
       - name: Snapshot baseline schema
         run: pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
@@ -284,10 +284,10 @@ jobs:
           PGPASSWORD: soland
 
       - name: Revert every migration in reverse order
-        run: diesel --migration-dir crates/storage-postgres/migrations migration revert --all
+        run: diesel migration --migration-dir crates/storage-postgres/migrations revert --all
 
       - name: Re-apply every migration forwards
-        run: diesel --migration-dir crates/storage-postgres/migrations migration run
+        run: diesel migration --migration-dir crates/storage-postgres/migrations run
 
       - name: Snapshot cycled schema
         run: pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \

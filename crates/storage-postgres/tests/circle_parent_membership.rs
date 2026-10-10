@@ -7,21 +7,12 @@
 //! Event or rewritten canonical row, and only an explicit new Circle join
 //! bound to the new revision restores it.
 
-#[path = "support/accepted_pcr_account.rs"]
-mod accepted_pcr_account;
-#[path = "../../test-support/src/device_authorization_history.rs"]
-#[allow(dead_code)]
-mod device_authorization_history;
-#[path = "support/ordinary_realm.rs"]
-#[allow(dead_code)]
-mod ordinary_realm;
-#[path = "../../test-support/src/pcr_genesis.rs"]
-#[allow(dead_code)]
-mod pcr_genesis;
-
+#[path = "support/historical_human.rs"]
+mod historical_human;
 use arkret_wire::{ActorId, CircleId, CommitStreamRef, EventKind, ScopeRef};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Text};
 use diesel_async::RunQueryDsl;
+use historical_human::ordinary_realm;
 use serde_json::{Value, json};
 use soland_storage::{
     AccountStreamScan, AuthorityCommitStore, AuthorityCommitTransaction, ConflictCode,
@@ -215,18 +206,17 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
     let pool = database.pool();
     let store = PgAuthorityCommitStore { pool: pool.clone() };
     let uow = PgEventCommitUnitOfWork::new(pool.clone());
-    let did = device_authorization_history::did_web_station(&ordinary_realm::station());
-    let creator = accepted_pcr_account::accepted_pcr_account(&pool, did.clone()).await;
-    let unit = ordinary_realm::bootstrap_unit_for_account(
-        &uuid::Uuid::now_v7().to_string(),
-        creator.as_account_id().unwrap(),
-        &did,
+    let did = ordinary_realm::human_profile::station_did(&ordinary_realm::station());
+    let fixture = historical_human::HumanFixture::new(&pool, did).await;
+    ordinary_realm::human_profile::register_fixture_signer(
+        &fixture.pcr.history.account,
+        fixture.pcr.history.device_verification_method.clone(),
+        fixture.pcr.history.founding_device_signing_seed,
     );
+    let creator = ActorId::account(fixture.pcr.history.account.clone());
+    fixture.admit(&pool).await;
+    let unit = fixture.unit;
     let at = unit.transactions.last().unwrap().commit.committed_at;
-    store
-        .admit_ordinary_realm_bootstrap_unit(&unit, at)
-        .await
-        .unwrap();
     let realm = unit.transactions[0].event.realm_id.clone();
     let alice = remote_member("circle-parent-alice");
     let realm_join = realm_membership(
@@ -237,7 +227,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         "first join",
     );
     uow.commit_event(realm_join.clone()).await.unwrap();
-    let create = sourced(ordinary_realm::next_request_for_actor(
+    let create = ordinary_realm::source_request(&pool, sourced(ordinary_realm::next_request_for_actor(
         &realm_join.authority_commit,
         EventKind::CircleCreate,
         creator.clone(),
@@ -247,7 +237,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             "state":"active","created_by":creator,
             "created_at":arkret_canonical::format_timestamp_canonical(at)}}),
         at,
-    ));
+    ))).await;
     uow.commit_event(create.clone()).await.unwrap();
     let circle = CircleId::from_event_id(&create.authority_commit.event.event_id);
     let stream = CommitStreamRef::Circle {
@@ -270,7 +260,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         .unwrap()
         .authority_event_ref
     };
-    let grant = sourced(ordinary_realm::next_request_for_actor(
+    let grant = ordinary_realm::source_request(&pool, sourced(ordinary_realm::next_request_for_actor(
         &create.authority_commit,
         EventKind::CapabilityGrant,
         creator.clone(),
@@ -283,7 +273,7 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             "issued_at":arkret_canonical::format_timestamp_canonical(at)
         }}),
         at,
-    ));
+    ))).await;
     uow.commit_event(grant.clone()).await.unwrap();
     let first_parent = ordinary_realm::parent_membership_revision(&pool, &realm, &alice).await;
     assert_eq!(

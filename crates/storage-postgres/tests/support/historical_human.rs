@@ -9,7 +9,7 @@
 mod device_authorization_history;
 #[path = "ordinary_realm.rs"]
 #[allow(dead_code)]
-mod ordinary_realm;
+pub mod ordinary_realm;
 #[path = "../../../test-support/src/pcr_genesis.rs"]
 #[allow(
     clippy::duplicate_mod,

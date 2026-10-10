@@ -288,7 +288,7 @@ async fn admit(
     store
         .admit_actor_private_event(&soland_storage::ActorPrivateAccountDataAdmission {
             canonical_event_digest: arkret_canonical::sha256_bytes(
-                &arkret_canonical::canonical_json_bytes(event).unwrap(),
+                arkret_canonical::canonical_json_bytes(event).unwrap(),
             )
             .to_vec(),
             cas: soland_storage::AccountDataCasCommit {
@@ -472,10 +472,11 @@ async fn visible(pool: &PgPool, recipient: &str, owner: &str) -> bool {
 /// a real leave Commit, never a hand-written summary row.
 #[tokio::test]
 async fn device_interest_requires_exact_actor_current_membership() {
-    use ordinary_realm::{founder, next_request, open_discussion, station};
+    use ordinary_realm::{next_request, open_discussion, source_request};
     use soland_storage::EventCommitUnitOfWork;
 
-    let pool = pool().await;
+    let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
+    let pool = database.pool();
     let run = uuid::Uuid::now_v7();
     let account = |principal: &arkret_wire::DidCoreId, station: &str| {
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -483,10 +484,6 @@ async fn device_interest_requires_exact_actor_current_membership() {
             arkret_wire::DidCoreId::new(station).unwrap(),
         ))
     };
-    let recipient =
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(founder(), station()))
-            .canonical_key()
-            .unwrap();
     let peer_principal =
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:peer-{run}.example")).unwrap();
     let peer_actor = account(&peer_principal, "ak:did_core:web:remote.example");
@@ -495,7 +492,10 @@ async fn device_interest_requires_exact_actor_current_membership() {
         .canonical_key()
         .unwrap();
 
-    let discussion = open_discussion(&pool, &format!("device-interest-{run}")).await;
+    let discussion = Box::pin(open_discussion(&pool, &format!("device-interest-{run}"))).await;
+    let creator = &discussion.unit.transactions[0].event.actor_id;
+    let recipient = creator.canonical_key().unwrap();
+    let founder = creator.signing_principal_id();
     assert!(
         !visible(&pool, &recipient, &peer).await,
         "an actor with no member state shares no Realm"
@@ -515,7 +515,7 @@ async fn device_interest_requires_exact_actor_current_membership() {
     let invite = next_request(
         &discussion.head.authority_commit,
         arkret_wire::EventKind::InviteCreate,
-        &founder(),
+        founder,
         serde_json::json!({
             "invitee_account_id": peer_actor.as_account_id().unwrap(),
             "introduction_evidence_digest": format!("sha256:{}", "d".repeat(64)),
@@ -525,6 +525,7 @@ async fn device_interest_requires_exact_actor_current_membership() {
         }),
         at,
     );
+    let invite = Box::pin(source_request(&pool, invite)).await;
     uow.commit_event(invite.clone()).await.unwrap();
     let join = with_fanout_source(ordinary_realm::next_request_for_actor(
         &invite.authority_commit,
@@ -545,10 +546,11 @@ async fn device_interest_requires_exact_actor_current_membership() {
     let leave = with_fanout_source(next_request(
         &join.authority_commit,
         arkret_wire::EventKind::MemberState,
-        &founder(),
+        founder,
         serde_json::json!({"member_id": peer_actor, "membership": "leave"}),
         at,
     ));
+    let leave = Box::pin(source_request(&pool, leave)).await;
     uow.commit_event(leave).await.unwrap();
     assert!(!visible(&pool, &recipient, &peer).await);
     assert!(!visible(&pool, &peer, &recipient).await);
