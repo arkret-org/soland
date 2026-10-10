@@ -1803,10 +1803,9 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         1,
         "one exact CAS must win"
     );
-    let (winner, mut loser, loser_error) = if l.is_ok() {
-        (left, right, r.unwrap_err())
-    } else {
-        (right, left, l.unwrap_err())
+    let (winner, mut loser, loser_error) = match l {
+        Ok(_) => (left, right, r.unwrap_err()),
+        Err(error) => (right, left, error),
     };
     assert_eq!(
         loser_error.conflict_code(),
@@ -1848,10 +1847,9 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     ));
     let (l, r) = tokio::join!(left.commit(stores.applets), right.commit(stores.applets));
     assert_eq!(usize::from(l.is_ok()) + usize::from(r.is_ok()), 1);
-    let (winner, mut loser, error) = if l.is_ok() {
-        (left, right, r.unwrap_err())
-    } else {
-        (right, left, l.unwrap_err())
+    let (winner, mut loser, error) = match l {
+        Ok(_) => (left, right, r.unwrap_err()),
+        Err(error) => (right, left, error),
     };
     assert_eq!(
         error.conflict_code(),
