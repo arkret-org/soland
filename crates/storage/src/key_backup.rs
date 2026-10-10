@@ -110,6 +110,19 @@ pub enum KeyBackupUnlockBasis {
     RecoverySession,
 }
 
+/// Frozen unlock inputs consumed together under the original transaction guards.
+#[derive(Debug)]
+pub struct KeyBackupUnlockCommand<'a> {
+    pub basis: &'a KeyBackupUnlockBasis,
+    pub authority_id: &'a str,
+    pub backup: Value,
+    pub request_digest: &'a str,
+    pub holder: &'a str,
+    pub ip: &'a str,
+    pub now: chrono::DateTime<Utc>,
+    pub daily_limit: u32,
+}
+
 /// Frozen authorization inputs rechecked inside the destructive transaction.
 #[derive(Clone, Debug)]
 pub struct KeyBackupDeleteGate {
@@ -195,21 +208,8 @@ pub trait KeyBackupStore: Send + Sync {
         now: chrono::DateTime<Utc>,
     ) -> PersistenceResult<bool>;
     async fn unlock_challenge(&self, authority_id: &str) -> PersistenceResult<Option<Value>>;
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Atomic unlock consumption binds authority, backup, replay digest, holder and rate limit inputs."
-    )]
-    async fn consume_unlock(
-        &self,
-        basis: &KeyBackupUnlockBasis,
-        authority_id: &str,
-        backup: Value,
-        request_digest: &str,
-        holder: &str,
-        ip: &str,
-        now: chrono::DateTime<Utc>,
-        daily_limit: u32,
-    ) -> PersistenceResult<Value>;
+    async fn consume_unlock(&self, command: KeyBackupUnlockCommand<'_>)
+    -> PersistenceResult<Value>;
     async fn put(&self, backup_id: String, payload: Value) -> PersistenceResult<()>;
     async fn get(&self, backup_id: &str) -> PersistenceResult<Option<Value>>;
     async fn delete(&self, backup_id: &str) -> PersistenceResult<bool>;

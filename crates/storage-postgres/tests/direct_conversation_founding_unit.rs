@@ -1604,9 +1604,7 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
     assert_eq!(founder_join.commit.stream_position, 1);
     assert_eq!(unit.transactions[2].commit.stream_position, 2);
     assert!(founder_join.commit.stream_position < unit.transactions[2].commit.stream_position);
-    let soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(
-        exact_founder_join,
-    )) = peer_store
+    let soland_storage::MemberCommittedEventRead::Read(view) = peer_store
         .committed_event_for_member(
             &founder_join.event.event_id,
             &pair.peer_actor(),
@@ -1616,6 +1614,9 @@ async fn peer_founding_missing_contact_dependency_writes_nothing() {
         .unwrap()
     else {
         panic!("the founding peer must hold the exact foreign founder join below its own join");
+    };
+    let arkret_wire::CommittedEventView::Full(exact_founder_join) = *view else {
+        panic!("the founding peer must hold full disclosure of the foreign founder join");
     };
     assert_eq!(exact_founder_join.event, founder_join.event);
     assert_eq!(exact_founder_join.commit, founder_join.commit);
@@ -2268,15 +2269,15 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     };
     let signal_at = bound.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
     let signal = store
-        .signal_scope_authority(
-            &signal_scope,
-            &bound.authority_commit.commit.commit_id,
-            None,
-            &peer,
-            arkret_wire::SignalClass::Session,
-            signal_at,
-            signal_at,
-        )
+        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            scope: &signal_scope,
+            authority_commit_id: &bound.authority_commit.commit.commit_id,
+            parent_realm_authority_commit_id: None,
+            sender: &peer,
+            signal_class: arkret_wire::SignalClass::Session,
+            sent_at: signal_at,
+            at: signal_at,
+        })
         .await
         .unwrap()
         .expect("owned-Agent Signal has a complete read-only authority cut without Contact");
@@ -2304,15 +2305,15 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     );
     assert!(
         store
-            .signal_scope_authority(
-                &signal_scope,
-                &bound.authority_commit.commit.commit_id,
-                None,
-                &peer,
-                arkret_wire::SignalClass::Session,
-                signal_at,
-                signal_at
-            )
+            .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                scope: &signal_scope,
+                authority_commit_id: &bound.authority_commit.commit.commit_id,
+                parent_realm_authority_commit_id: None,
+                sender: &peer,
+                signal_class: arkret_wire::SignalClass::Session,
+                sent_at: signal_at,
+                at: signal_at,
+            })
             .await
             .unwrap()
             .is_none()
@@ -2333,15 +2334,15 @@ async fn controller_owned_agent_founding_reads_provision_and_runtime_key_at_the_
     drop(conn);
     assert!(
         store
-            .signal_scope_authority(
-                &signal_scope,
-                &bound.authority_commit.commit.commit_id,
-                None,
-                &peer,
-                arkret_wire::SignalClass::Session,
-                signal_at,
-                signal_at
-            )
+            .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                scope: &signal_scope,
+                authority_commit_id: &bound.authority_commit.commit.commit_id,
+                parent_realm_authority_commit_id: None,
+                sender: &peer,
+                signal_class: arkret_wire::SignalClass::Session,
+                sent_at: signal_at,
+                at: signal_at,
+            })
             .await
             .unwrap()
             .is_none()
@@ -3641,17 +3642,17 @@ async fn participant_authority_scenario() {
     // a REPEATABLE READ, READ ONLY transaction. A row lock here caused 503.
     let signal_at = head.commit.committed_at + chrono::TimeDelta::seconds(1);
     let signal_cut = store
-        .signal_scope_authority(
-            &arkret_wire::ScopeRef::Realm {
+        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            scope: &arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
-            &head.commit.commit_id,
-            None,
-            &founder,
-            arkret_wire::SignalClass::Session,
-            signal_at,
-            signal_at,
-        )
+            authority_commit_id: &head.commit.commit_id,
+            parent_realm_authority_commit_id: None,
+            sender: &founder,
+            signal_class: arkret_wire::SignalClass::Session,
+            sent_at: signal_at,
+            at: signal_at,
+        })
         .await
         .unwrap()
         .expect("accepted DM pair has a complete read-only Signal cut");

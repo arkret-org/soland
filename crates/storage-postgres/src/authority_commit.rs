@@ -4331,25 +4331,9 @@ impl AuthorityCommitStore for PgAuthorityCommitStore {
 
     async fn signal_scope_authority(
         &self,
-        scope: &arkret_wire::ScopeRef,
-        authority_commit_id: &arkret_wire::RealmCommitId,
-        parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
-        sender: &arkret_wire::ActorId,
-        signal_class: arkret_wire::SignalClass,
-        sent_at: chrono::DateTime<chrono::Utc>,
-        at: chrono::DateTime<chrono::Utc>,
+        query: soland_storage::SignalScopeAuthorityQuery<'_>,
     ) -> PersistenceResult<Option<soland_storage::SignalScopeAuthority>> {
-        crate::signal_scope_authority::read(
-            &self.pool,
-            scope,
-            authority_commit_id,
-            parent_realm_authority_commit_id,
-            sender,
-            signal_class,
-            sent_at,
-            at,
-        )
-        .await
+        crate::signal_scope_authority::read(&self.pool, query).await
     }
 
     async fn signal_recipient_realms(

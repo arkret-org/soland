@@ -236,15 +236,15 @@ async fn verify_signal_scope_authority(
 ) -> Result<soland_storage::SignalScopeAuthority, AppError> {
     let authority = state
         .authority_commits()
-        .signal_scope_authority(
-            &envelope.scope_ref,
-            &envelope.authority_commit_id,
-            envelope.parent_realm_authority_commit_id.as_ref(),
-            actor,
-            envelope.signal_class,
-            envelope.sent_at,
-            chrono::Utc::now(),
-        )
+        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+            scope: &envelope.scope_ref,
+            authority_commit_id: &envelope.authority_commit_id,
+            parent_realm_authority_commit_id: envelope.parent_realm_authority_commit_id.as_ref(),
+            sender: actor,
+            signal_class: envelope.signal_class,
+            sent_at: envelope.sent_at,
+            at: chrono::Utc::now(),
+        })
         .await
         .map_err(|error| {
             tracing::warn!(%error,"verified Signal governance is unavailable");

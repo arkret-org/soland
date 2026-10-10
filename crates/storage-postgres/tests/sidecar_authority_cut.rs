@@ -394,8 +394,9 @@ async fn pending_agent_handshake_reads(
                     store.committed_event_for_member(
                         &original.event.event_id, &ActorId::account(agent.clone()), &controller.station_id,
                     ).await.unwrap(),
-                    soland_storage::MemberCommittedEventRead::Read(CommittedEventView::Full(row))
-                        if row.event == original.event && row.commit == original.commit
+                    soland_storage::MemberCommittedEventRead::Read(view)
+                        if matches!(*view, CommittedEventView::Full(ref row)
+                            if row.event == original.event && row.commit == original.commit)
                 ));
             }
             assert!(matches!(
@@ -407,7 +408,8 @@ async fn pending_agent_handshake_reads(
                     )
                     .await
                     .unwrap(),
-                soland_storage::MemberCommittedEventRead::Read(CommittedEventView::Withheld(_))
+                soland_storage::MemberCommittedEventRead::Read(view)
+                    if matches!(*view, CommittedEventView::Withheld(_))
             ));
             let material =
                 arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody {
@@ -724,7 +726,8 @@ async fn desired_agents_require_owned_active_key_and_exact_realm_membership() {
             )
             .await
             .unwrap(),
-        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(_))
+        soland_storage::MemberCommittedEventRead::Read(view)
+            if matches!(*view, arkret_wire::CommittedEventView::Full(_))
     ));
     let controller_leave = ordinary_realm::next_request(
         &join.authority_commit,

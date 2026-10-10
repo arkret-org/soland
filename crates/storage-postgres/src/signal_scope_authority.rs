@@ -17,7 +17,7 @@ use diesel::sql_types::{Jsonb, Nullable, Text};
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use soland_storage::{
     AuthorizationOperation, OperationFacts, PersistenceError, PersistenceResult,
-    SignalScopeAuthority, evaluate_grants,
+    SignalScopeAuthority, SignalScopeAuthorityQuery, evaluate_grants,
 };
 
 use crate::capability_grant_current_results::RealmAuthorityRootCurrent;
@@ -836,19 +836,9 @@ async fn declared_commit(
         .then_some(commit))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Atomic Signal scope reads retain both historical cuts, sender, class and timestamps."
-)]
 pub(crate) async fn read(
     pool: &PgPool,
-    scope: &ScopeRef,
-    authority_commit_id: &RealmCommitId,
-    parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
-    sender: &ActorId,
-    class: SignalClass,
-    sent_at: DateTime<Utc>,
-    at: DateTime<Utc>,
+    query: SignalScopeAuthorityQuery<'_>,
 ) -> PersistenceResult<Option<SignalScopeAuthority>> {
     let mut conn = pg_conn(pool).await?;
     conn.transaction::<_, PgTransactionError, _>(async move |conn| {
@@ -856,36 +846,24 @@ pub(crate) async fn read(
             .execute(conn)
             .await
             .map_err(PersistenceError::database)?;
-        read_in_connection(
-            conn,
-            scope,
-            authority_commit_id,
-            parent_realm_authority_commit_id,
-            sender,
-            class,
-            sent_at,
-            at,
-        )
-        .await
-        .map_err(Into::into)
+        read_in_connection(conn, query).await.map_err(Into::into)
     })
     .await
     .map_err(PgTransactionError::into_persistence)
 }
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Atomic Signal scope reads retain both historical cuts, sender, class and times on the same connection."
-)]
 async fn read_in_connection(
     conn: &mut AsyncPgConnection,
-    scope: &ScopeRef,
-    authority_commit_id: &RealmCommitId,
-    parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
-    sender: &ActorId,
-    class: SignalClass,
-    sent_at: DateTime<Utc>,
-    at: DateTime<Utc>,
+    query: SignalScopeAuthorityQuery<'_>,
 ) -> PersistenceResult<Option<SignalScopeAuthority>> {
+    let SignalScopeAuthorityQuery {
+        scope,
+        authority_commit_id,
+        parent_realm_authority_commit_id,
+        sender,
+        signal_class: class,
+        sent_at,
+        at,
+    } = query;
     let realm = scope.realm_id();
     let stream = CommitStreamRef::from_scope(scope, None).map_err(unavailable)?;
     let Some(declared) = declared_commit(conn, &stream, authority_commit_id, sent_at).await? else {

@@ -187,14 +187,14 @@ fn refusal_code(error: &PersistenceError) -> Option<ConflictCode> {
 #[tokio::test]
 async fn circle_join_binds_the_exact_parent_join_and_parent_changes_invalidate_it() {
     for history in ["since_join", "all_history_for_current_members"] {
-        parent_revision_matrix(history, None).await;
+        Box::pin(parent_revision_matrix(history, None)).await;
     }
 }
 
 #[tokio::test]
 async fn signal_parent_cut_reset_controller_and_handoff_matrix() {
     for branch in ["reset", "controller", "handoff"] {
-        parent_revision_matrix("since_join", Some(branch)).await;
+        Box::pin(parent_revision_matrix("since_join", Some(branch))).await;
     }
 }
 
@@ -455,15 +455,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         let signal_at =
             genesis.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
         let authority = store
-            .signal_scope_authority(
-                &material_request.effective_scope,
-                &genesis.authority_commit.commit.commit_id,
-                Some(&grant.authority_commit.commit.commit_id),
-                &alice,
-                arkret_wire::SignalClass::Session,
-                signal_at,
-                signal_at,
-            )
+            .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                scope: &material_request.effective_scope,
+                authority_commit_id: &genesis.authority_commit.commit.commit_id,
+                parent_realm_authority_commit_id: Some(&grant.authority_commit.commit.commit_id),
+                sender: &alice,
+                signal_class: arkret_wire::SignalClass::Session,
+                sent_at: signal_at,
+                at: signal_at,
+            })
             .await
             .unwrap()
             .expect("signed Circle parent join proves the historical and current Signal cut");
@@ -479,15 +479,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         ] {
             assert!(
                 store
-                    .signal_scope_authority(
-                        &material_request.effective_scope,
-                        &genesis.authority_commit.commit.commit_id,
-                        parent,
-                        &alice,
-                        arkret_wire::SignalClass::Session,
-                        signal_at,
-                        signal_at
-                    )
+                    .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                        scope: &material_request.effective_scope,
+                        authority_commit_id: &genesis.authority_commit.commit.commit_id,
+                        parent_realm_authority_commit_id: parent,
+                        sender: &alice,
+                        signal_class: arkret_wire::SignalClass::Session,
+                        sent_at: signal_at,
+                        at: signal_at,
+                    })
                     .await
                     .unwrap()
                     .is_none()
@@ -509,30 +509,34 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         // A later grant cannot retroactively authorize an older parent cut.
         assert!(
             store
-                .signal_scope_authority(
-                    &material_request.effective_scope,
-                    &genesis.authority_commit.commit.commit_id,
-                    Some(&grant.authority_commit.commit.commit_id),
-                    &alice,
-                    arkret_wire::SignalClass::Moderation,
-                    signal_at,
-                    signal_at
-                )
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                    scope: &material_request.effective_scope,
+                    authority_commit_id: &genesis.authority_commit.commit.commit_id,
+                    parent_realm_authority_commit_id: Some(
+                        &grant.authority_commit.commit.commit_id
+                    ),
+                    sender: &alice,
+                    signal_class: arkret_wire::SignalClass::Moderation,
+                    sent_at: signal_at,
+                    at: signal_at,
+                })
                 .await
                 .unwrap()
                 .is_none()
         );
         assert!(
             store
-                .signal_scope_authority(
-                    &material_request.effective_scope,
-                    &genesis.authority_commit.commit.commit_id,
-                    Some(&moderation_grant.authority_commit.commit.commit_id),
-                    &alice,
-                    arkret_wire::SignalClass::Moderation,
-                    signal_at,
-                    signal_at
-                )
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                    scope: &material_request.effective_scope,
+                    authority_commit_id: &genesis.authority_commit.commit.commit_id,
+                    parent_realm_authority_commit_id: Some(
+                        &moderation_grant.authority_commit.commit.commit_id
+                    ),
+                    sender: &alice,
+                    signal_class: arkret_wire::SignalClass::Moderation,
+                    sent_at: signal_at,
+                    at: signal_at,
+                })
                 .await
                 .unwrap()
                 .is_some()
@@ -553,15 +557,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 uow.commit_event(reset).await.unwrap();
                 assert!(
                     store
-                        .signal_scope_authority(
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
-                            scope_head,
-                            Some(original_parent),
-                            &alice,
-                            arkret_wire::SignalClass::Moderation,
-                            signal_at,
-                            signal_at
-                        )
+                            authority_commit_id: scope_head,
+                            parent_realm_authority_commit_id: Some(original_parent),
+                            sender: &alice,
+                            signal_class: arkret_wire::SignalClass::Moderation,
+                            sent_at: signal_at,
+                            at: signal_at,
+                        })
                         .await
                         .unwrap()
                         .is_none(),
@@ -579,15 +583,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 uow.commit_event(transfer.clone()).await.unwrap();
                 assert!(
                     store
-                        .signal_scope_authority(
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
-                            scope_head,
-                            Some(original_parent),
-                            &alice,
-                            arkret_wire::SignalClass::Moderation,
-                            signal_at,
-                            signal_at
-                        )
+                            authority_commit_id: scope_head,
+                            parent_realm_authority_commit_id: Some(original_parent),
+                            sender: &alice,
+                            signal_class: arkret_wire::SignalClass::Moderation,
+                            sent_at: signal_at,
+                            at: signal_at,
+                        })
                         .await
                         .unwrap()
                         .is_some(),
@@ -615,15 +619,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 uow.commit_event(transfer_back).await.unwrap();
                 assert!(
                     store
-                        .signal_scope_authority(
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
-                            scope_head,
-                            Some(original_parent),
-                            &alice,
-                            arkret_wire::SignalClass::Moderation,
-                            signal_at,
-                            signal_at
-                        )
+                            authority_commit_id: scope_head,
+                            parent_realm_authority_commit_id: Some(original_parent),
+                            sender: &alice,
+                            signal_class: arkret_wire::SignalClass::Moderation,
+                            sent_at: signal_at,
+                            at: signal_at,
+                        })
                         .await
                         .unwrap()
                         .is_none(),
@@ -721,15 +725,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                     .unwrap();
                 assert!(
                     store
-                        .signal_scope_authority(
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
-                            scope_head,
-                            Some(original_parent),
-                            &alice,
-                            arkret_wire::SignalClass::Moderation,
-                            signal_at,
-                            signal_at
-                        )
+                            authority_commit_id: scope_head,
+                            parent_realm_authority_commit_id: Some(original_parent),
+                            sender: &alice,
+                            signal_class: arkret_wire::SignalClass::Moderation,
+                            sent_at: signal_at,
+                            at: signal_at,
+                        })
                         .await
                         .unwrap()
                         .is_some(),
@@ -753,15 +757,15 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
                 drop(conn);
                 assert!(
                     store
-                        .signal_scope_authority(
+                        .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
                             scope,
-                            scope_head,
-                            Some(original_parent),
-                            &alice,
-                            arkret_wire::SignalClass::Moderation,
-                            signal_at,
-                            signal_at
-                        )
+                            authority_commit_id: scope_head,
+                            parent_realm_authority_commit_id: Some(original_parent),
+                            sender: &alice,
+                            signal_class: arkret_wire::SignalClass::Moderation,
+                            sent_at: signal_at,
+                            at: signal_at,
+                        })
                         .await
                         .is_err(),
                     "missing durable handoff manifest cannot authorize an old generation head"
@@ -788,15 +792,17 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         uow.commit_event(revoke.clone()).await.unwrap();
         assert!(
             store
-                .signal_scope_authority(
-                    &material_request.effective_scope,
-                    &genesis.authority_commit.commit.commit_id,
-                    Some(&moderation_grant.authority_commit.commit.commit_id),
-                    &alice,
-                    arkret_wire::SignalClass::Moderation,
-                    signal_at,
-                    signal_at
-                )
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                    scope: &material_request.effective_scope,
+                    authority_commit_id: &genesis.authority_commit.commit.commit_id,
+                    parent_realm_authority_commit_id: Some(
+                        &moderation_grant.authority_commit.commit.commit_id
+                    ),
+                    sender: &alice,
+                    signal_class: arkret_wire::SignalClass::Moderation,
+                    sent_at: signal_at,
+                    at: signal_at,
+                })
                 .await
                 .unwrap()
                 .is_none()
@@ -876,15 +882,17 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
             realm_leave.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
         assert!(
             store
-                .signal_scope_authority(
-                    &material_request.effective_scope,
-                    &genesis.authority_commit.commit.commit_id,
-                    Some(&grant.authority_commit.commit.commit_id),
-                    &alice,
-                    arkret_wire::SignalClass::Session,
-                    signal_at,
-                    signal_at
-                )
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                    scope: &material_request.effective_scope,
+                    authority_commit_id: &genesis.authority_commit.commit.commit_id,
+                    parent_realm_authority_commit_id: Some(
+                        &grant.authority_commit.commit.commit_id
+                    ),
+                    sender: &alice,
+                    signal_class: arkret_wire::SignalClass::Session,
+                    sent_at: signal_at,
+                    at: signal_at,
+                })
                 .await
                 .unwrap()
                 .is_none()
@@ -934,15 +942,17 @@ async fn parent_revision_matrix(history: &str, branch: Option<&str>) {
         let signal_at = rejoin.authority_commit.commit.committed_at + chrono::TimeDelta::seconds(1);
         assert!(
             store
-                .signal_scope_authority(
-                    &material_request.effective_scope,
-                    &genesis.authority_commit.commit.commit_id,
-                    Some(&grant.authority_commit.commit.commit_id),
-                    &alice,
-                    arkret_wire::SignalClass::Session,
-                    signal_at,
-                    signal_at
-                )
+                .signal_scope_authority(soland_storage::SignalScopeAuthorityQuery {
+                    scope: &material_request.effective_scope,
+                    authority_commit_id: &genesis.authority_commit.commit.commit_id,
+                    parent_realm_authority_commit_id: Some(
+                        &grant.authority_commit.commit.commit_id
+                    ),
+                    sender: &alice,
+                    signal_class: arkret_wire::SignalClass::Session,
+                    sent_at: signal_at,
+                    at: signal_at,
+                })
                 .await
                 .unwrap()
                 .is_none(),

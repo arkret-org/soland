@@ -1411,14 +1411,14 @@ pub(crate) async fn committed_event_for_member(
             if floor.is_none_or(|floor| commit.stream_position<floor.oldest_position) {
                 return Ok(Read::NotVisible);
             }
-            return Ok(Read::Read(match event {
+            return Ok(Read::Read(Box::new(match event {
                 Some(event) => single_row(crate::committed_disclosure::disclose_to_member_in_connection(
                     conn,vec![arkret_wire::CommittedEventFullView { commit,event }],caller,
                 ).await?)?,
                 None => CommittedEventView::Withheld(arkret_wire::CommittedEventWithheldView {
                     commit,event_disclosure:arkret_wire::EventDisclosure { status:arkret_wire::EventDisclosureStatus::Withheld },
                 }),
-            }));
+            })));
         }
         if let CommitStreamRef::Sidecar { sidecar_id, .. } = &commit.stream_ref {
             let Some(tenure) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
@@ -1441,7 +1441,7 @@ pub(crate) async fn committed_event_for_member(
             if floor.is_none_or(|floor| commit.stream_position < floor.oldest_position) {
                 return Ok(Read::NotVisible);
             }
-            return Ok(Read::Read(match event {
+            return Ok(Read::Read(Box::new(match event {
                 Some(event) => single_row(crate::committed_disclosure::disclose_to_member_in_connection(
                     conn, vec![arkret_wire::CommittedEventFullView { commit, event }], caller,
                 ).await?)?,
@@ -1450,7 +1450,7 @@ pub(crate) async fn committed_event_for_member(
                         status: arkret_wire::EventDisclosureStatus::Withheld,
                     },
                 }),
-            }));
+            })));
         }
         if commit.stream_ref
             != (CommitStreamRef::Realm {
@@ -1479,9 +1479,9 @@ pub(crate) async fn committed_event_for_member(
                 commit,
                 event: event.clone(),
             };
-            return Ok(Read::Read(single_row(
+            return Ok(Read::Read(Box::new(single_row(
                 crate::committed_disclosure::disclose_to_member_in_connection(conn, vec![full], caller).await?,
-            )?));
+            )?)));
         }
         let Some(tenure) = sql_query("SELECT service_id FROM realm_authorities WHERE realm_id=$1")
             .bind::<Text, _>(realm_id.as_str())
@@ -1529,23 +1529,23 @@ pub(crate) async fn committed_event_for_member(
             }
         }
         let Some(event) = event else {
-            return Ok(Read::Read(CommittedEventView::Withheld(
+            return Ok(Read::Read(Box::new(CommittedEventView::Withheld(
                 arkret_wire::CommittedEventWithheldView {
                     commit,
                     event_disclosure: arkret_wire::EventDisclosure {
                         status: arkret_wire::EventDisclosureStatus::Withheld,
                     },
                 },
-            )));
+            ))));
         };
-        Ok(Read::Read(single_row(
+        Ok(Read::Read(Box::new(single_row(
             crate::committed_disclosure::disclose_to_member_in_connection(
                 conn,
                 vec![arkret_wire::CommittedEventFullView { commit, event }],
                 caller,
             )
             .await?,
-        )?))
+        )?)))
     })
     .await
     .map_err(PgTransactionError::into_persistence)

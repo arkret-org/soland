@@ -1063,7 +1063,7 @@ async fn realm_mls_material_peer_uses_joined_target_cut_not_prejoin_genesis_cut(
             request: selected,
             governance_station_id,
         } => {
-            assert_eq!(selected, member.with_accepted_genesis(genesis_ref.clone()));
+            assert_eq!(*selected, member.with_accepted_genesis(genesis_ref.clone()));
             assert_eq!(governance_station_id, station);
         }
         result => panic!("authorized member without a prejoin baseline was refused: {result:?}"),

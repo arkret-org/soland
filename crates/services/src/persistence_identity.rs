@@ -1089,29 +1089,9 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
     }
     async fn consume_unlock(
         &self,
-        basis: &soland_storage::KeyBackupUnlockBasis,
-        authority_id: &str,
-        backup: Value,
-        request_digest: &str,
-        holder: &str,
-        ip: &str,
-        now: chrono::DateTime<Utc>,
-        daily_limit: u32,
+        command: soland_storage::KeyBackupUnlockCommand<'_>,
     ) -> crate::ServiceResult<Value> {
-        Ok(self
-            .0
-            .key_backups()
-            .consume_unlock(
-                basis,
-                authority_id,
-                backup,
-                request_digest,
-                holder,
-                ip,
-                now,
-                daily_limit,
-            )
-            .await?)
+        Ok(self.0.key_backups().consume_unlock(command).await?)
     }
     async fn backup(&self, backup_id: &str) -> crate::ServiceResult<Option<serde_json::Value>> {
         Ok(self.0.key_backups().get(backup_id).await?)

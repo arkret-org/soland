@@ -2247,7 +2247,7 @@ async fn member_read(
 fn read_shape(read: soland_storage::MemberCommittedEventRead) -> Option<bool> {
     match read {
         soland_storage::MemberCommittedEventRead::Read(view) => {
-            Some(matches!(view, arkret_wire::CommittedEventView::Full(_)))
+            Some(matches!(*view, arkret_wire::CommittedEventView::Full(_)))
         }
         soland_storage::MemberCommittedEventRead::NotVisible => None,
         other => panic!("expected a decided read, got {other:?}"),
@@ -3922,13 +3922,13 @@ async fn member_station_anchors_on_the_bootstrap_snapshot_and_keeps_chain_nodes(
             &member_station(),
         )
         .await,
-        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Withheld(
-            arkret_wire::CommittedEventWithheldView {
+        soland_storage::MemberCommittedEventRead::Read(Box::new(
+            arkret_wire::CommittedEventView::Withheld(arkret_wire::CommittedEventWithheldView {
                 commit: message.authority_commit.commit.clone(),
                 event_disclosure: arkret_wire::EventDisclosure {
                     status: arkret_wire::EventDisclosureStatus::Withheld,
                 },
-            },
+            },)
         ))
     );
     assert!(

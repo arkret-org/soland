@@ -267,32 +267,30 @@ jobs:
       - name: Wait for postgres
         run: |
           for i in {1..30}; do
-            pg_isready -h localhost -p 5432 -U soland && break
+            if pg_isready -h localhost -p 5432 -U soland; then
+              exit 0
+            fi
             sleep 1
           done
+          exit 1
 
       - name: Apply migrations forwards (baseline schema)
-        run: diesel migration run
+        run: diesel --migration-dir crates/storage-postgres/migrations migration run
 
       - name: Snapshot baseline schema
-        run: pg_dump --schema-only --no-owner --no-privileges \
+        run: pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
               "$DATABASE_URL" > /tmp/schema.baseline.sql
         env:
           PGPASSWORD: soland
 
       - name: Revert every migration in reverse order
-        run: |
-          # `diesel migration revert` removes the most recent applied
-          # migration. Loop until none remain. The loop guard is the
-          # exit status: revert returns non-zero when there is nothing
-          # left to revert.
-          while diesel migration revert; do :; done
+        run: diesel --migration-dir crates/storage-postgres/migrations migration revert --all
 
       - name: Re-apply every migration forwards
-        run: diesel migration run
+        run: diesel --migration-dir crates/storage-postgres/migrations migration run
 
       - name: Snapshot cycled schema
-        run: pg_dump --schema-only --no-owner --no-privileges \
+        run: pg_dump --schema-only --no-owner --no-privileges --restrict-key=ArkretCiCycle \
               "$DATABASE_URL" > /tmp/schema.cycled.sql
         env:
           PGPASSWORD: soland

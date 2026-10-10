@@ -70,14 +70,10 @@ pub struct AccountRealmStreamAuthorizationCut {
 /// Result of `ak.self.committed_event.resource.get.v1` for one caller on an
 /// ordinary Realm's Realm stream, decided from typed current at one read cut.
 #[derive(Clone, Debug, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Preserve the public member read API and its full or withheld event variants."
-)]
 pub enum MemberCommittedEventRead {
     /// The Commit lies in the caller's readable interval; the Event is
     /// disclosed in full or as the withheld branch.
-    Read(arkret_wire::CommittedEventView),
+    Read(Box<arkret_wire::CommittedEventView>),
     /// Unknown, or outside the caller's readable interval: indistinguishable.
     NotVisible,
     /// The held Realm stream is pending its bootstrap anchor
@@ -1337,6 +1333,18 @@ pub struct ReplicaAnchorInstall {
     pub verified_snapshot: arkret_wire::RealmStateSnapshot,
 }
 
+/// Inputs for the same read-only Signal eligibility cut used by every layer.
+#[derive(Clone, Copy, Debug)]
+pub struct SignalScopeAuthorityQuery<'a> {
+    pub scope: &'a arkret_wire::ScopeRef,
+    pub authority_commit_id: &'a RealmCommitId,
+    pub parent_realm_authority_commit_id: Option<&'a RealmCommitId>,
+    pub sender: &'a arkret_wire::ActorId,
+    pub signal_class: arkret_wire::SignalClass,
+    pub sent_at: DateTime<Utc>,
+    pub at: DateTime<Utc>,
+}
+
 /// Internal read-only eligibility at the Signal's signed and current cuts.
 #[derive(Clone, Debug)]
 pub struct SignalScopeAuthority {
@@ -1587,29 +1595,10 @@ pub trait AuthorityCommitStore: Send + Sync {
         ))
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "One atomic authority read binds the scope, historical cuts, sender, signal class and both times."
-    )]
     async fn signal_scope_authority(
         &self,
-        scope: &arkret_wire::ScopeRef,
-        authority_commit_id: &RealmCommitId,
-        parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
-        sender: &arkret_wire::ActorId,
-        signal_class: arkret_wire::SignalClass,
-        sent_at: chrono::DateTime<chrono::Utc>,
-        at: chrono::DateTime<chrono::Utc>,
+        _query: SignalScopeAuthorityQuery<'_>,
     ) -> PersistenceResult<Option<SignalScopeAuthority>> {
-        let _ = (
-            scope,
-            authority_commit_id,
-            parent_realm_authority_commit_id,
-            sender,
-            signal_class,
-            sent_at,
-            at,
-        );
         Err(crate::PersistenceError::Conflict(
             "unsupported_feature: verified Signal scope cuts are unavailable".to_owned(),
         ))

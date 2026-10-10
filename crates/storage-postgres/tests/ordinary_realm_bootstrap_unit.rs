@@ -6065,9 +6065,8 @@ fn assert_cross_realm_relation_snapshot_disclosure<'a>(
                 )
                 .await
                 .unwrap(),
-            soland_storage::MemberCommittedEventRead::Read(
-                arkret_wire::CommittedEventView::Withheld(_)
-            )
+            soland_storage::MemberCommittedEventRead::Read(view)
+                if matches!(*view, arkret_wire::CommittedEventView::Withheld(_))
         ));
         // The shared ordinary-Realm helper owns a separate fixture signing registry.
         // Reuse the actually accepted foreign founder PCR/Profile in this module's
@@ -6099,9 +6098,8 @@ fn assert_cross_realm_relation_snapshot_disclosure<'a>(
                 )
                 .await
                 .unwrap(),
-            soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(
-                _
-            ))
+            soland_storage::MemberCommittedEventRead::Read(view)
+                if matches!(*view, arkret_wire::CommittedEventView::Full(_))
         ));
         let key = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
         let sign = |material: &soland_storage::RealmStateSnapshotMaterial| {
@@ -6285,9 +6283,8 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         .unwrap();
     assert!(matches!(
         before_join,
-        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Withheld(
-            _
-        ))
+        soland_storage::MemberCommittedEventRead::Read(view)
+            if matches!(*view, arkret_wire::CommittedEventView::Withheld(_))
     ));
     let join = circle_self_member_request(
         &create,
@@ -6322,7 +6319,8 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         .unwrap();
     assert!(matches!(
         after_join,
-        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Full(_))
+        soland_storage::MemberCommittedEventRead::Read(view)
+            if matches!(*view, arkret_wire::CommittedEventView::Full(_))
     ));
     // The Account detail freezes Realm and joined Circle windows at one cut.
     // The typed current and signed head keep both independent stream heads.
@@ -6486,9 +6484,8 @@ async fn circle_create_and_self_join_write_same_cut_current() {
         .unwrap();
     assert!(matches!(
         after_leave,
-        soland_storage::MemberCommittedEventRead::Read(arkret_wire::CommittedEventView::Withheld(
-            _
-        ))
+        soland_storage::MemberCommittedEventRead::Read(view)
+            if matches!(*view, arkret_wire::CommittedEventView::Withheld(_))
     ));
 }
 

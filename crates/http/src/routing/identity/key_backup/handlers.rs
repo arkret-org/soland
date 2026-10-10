@@ -475,16 +475,16 @@ pub(super) async fn unlock_key_backup(
     };
     let backup = state
         .key_backups()
-        .consume_unlock(
-            &basis,
+        .consume_unlock(soland_storage::KeyBackupUnlockCommand {
+            basis: &basis,
             authority_id,
             backup,
-            &request_digest,
-            &holder,
-            &unlock_client_ip(req),
-            Utc::now(),
-            state.config().key_backup_daily_download_limit,
-        )
+            request_digest: &request_digest,
+            holder: &holder,
+            ip: &unlock_client_ip(req),
+            now: Utc::now(),
+            daily_limit: state.config().key_backup_daily_download_limit,
+        })
         .await
         .map_err(unlock_consumption_error)?;
     let backup = serde_json::from_value(backup)

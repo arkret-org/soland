@@ -40,7 +40,7 @@ async fn get_committed_event(
         .await
         .map_err(|error| AppError::internal(format!("committed Event read failed: {error}")))?
     {
-        MemberCommittedEventRead::Read(view) => view,
+        MemberCommittedEventRead::Read(view) => *view,
         MemberCommittedEventRead::NotVisible => {
             return Err(AppError::not_found("committed event not found"));
         }

@@ -377,16 +377,16 @@ impl Fixture {
 
     async fn consume(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<Value> {
         self.store
-            .consume_unlock_entry(
-                &soland_storage::KeyBackupUnlockBasis::RecoverySession,
-                SESSION,
-                self.backup.clone(),
-                REQUEST,
-                &self.holder,
-                "127.0.0.1",
+            .consume_unlock_entry(soland_storage::KeyBackupUnlockCommand {
+                basis: &soland_storage::KeyBackupUnlockBasis::RecoverySession,
+                authority_id: SESSION,
+                backup: self.backup.clone(),
+                request_digest: REQUEST,
+                holder: &self.holder,
+                ip: "127.0.0.1",
                 now,
-                64,
-            )
+                daily_limit: 64,
+            })
             .await
     }
 

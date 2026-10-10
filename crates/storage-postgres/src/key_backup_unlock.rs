@@ -142,18 +142,20 @@ impl crate::key_backup::PgKeyBackupStore {
         .map(|row| row.payload))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn consume_unlock_entry(
         &self,
-        basis: &soland_storage::KeyBackupUnlockBasis,
-        id: &str,
-        backup: Value,
-        request_digest: &str,
-        holder: &str,
-        ip: &str,
-        now: chrono::DateTime<Utc>,
-        daily_limit: u32,
+        command: soland_storage::KeyBackupUnlockCommand<'_>,
     ) -> PersistenceResult<Value> {
+        let soland_storage::KeyBackupUnlockCommand {
+            basis,
+            authority_id: id,
+            backup,
+            request_digest,
+            holder,
+            ip,
+            now,
+            daily_limit,
+        } = command;
         let id = id.to_owned();
         let request_digest = request_digest.to_owned();
         let holder = holder.to_owned();

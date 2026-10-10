@@ -2,7 +2,8 @@ use std::mem::size_of;
 
 use crate::{
     AppletTransactionReplayBegin, ContactCompletionAction, ContactCompletionResult,
-    MlsMemberGroupStateMaterialRead, MlsMemberRosterSelectorRead, SelfProducerCommitGuard,
+    MemberCommittedEventRead, MlsMemberGroupStateMaterialRead, MlsMemberRosterSelectorRead,
+    SelfProducerCommitGuard,
 };
 
 #[test]
@@ -33,4 +34,9 @@ fn contact_action_has_indirect_receipt_and_transcript_storage() {
 #[test]
 fn contact_result_has_indirect_outcome_storage() {
     assert!(size_of::<ContactCompletionResult>() <= 160);
+}
+
+#[test]
+fn member_committed_event_result_has_indirect_sdk_view_storage() {
+    assert!(size_of::<MemberCommittedEventRead>() <= 16);
 }

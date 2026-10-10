@@ -1700,32 +1700,11 @@ impl AuthorityCommitApplication {
         Ok(self.store().signal_recipient_realms(actor).await?)
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "One atomic authority read binds scope, historical cuts, sender, signal class and both times."
-    )]
     pub async fn signal_scope_authority(
         &self,
-        scope: &arkret_wire::ScopeRef,
-        authority_commit_id: &RealmCommitId,
-        parent_realm_authority_commit_id: Option<&arkret_wire::RealmCommitId>,
-        sender: &arkret_wire::ActorId,
-        signal_class: arkret_wire::SignalClass,
-        sent_at: DateTime<Utc>,
-        at: DateTime<Utc>,
+        query: soland_storage::SignalScopeAuthorityQuery<'_>,
     ) -> ServiceResult<Option<soland_storage::SignalScopeAuthority>> {
-        Ok(self
-            .store()
-            .signal_scope_authority(
-                scope,
-                authority_commit_id,
-                parent_realm_authority_commit_id,
-                sender,
-                signal_class,
-                sent_at,
-                at,
-            )
-            .await?)
+        Ok(self.store().signal_scope_authority(query).await?)
     }
 
     pub async fn committed_event_by_commit_id(
