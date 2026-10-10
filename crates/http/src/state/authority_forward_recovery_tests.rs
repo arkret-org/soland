@@ -90,8 +90,37 @@ async fn foreign_request(
     payload: serde_json::Value,
 ) -> soland_storage::EventCommitRequest {
     let at = previous.commit.committed_at + Duration::seconds(1);
-    let event = historical_human::signed_ordinary_event(joining, previous, kind, payload, at);
+    let circle_id = (kind == EventKind::CircleMemberState).then(|| {
+        serde_json::from_value::<arkret_wire::CircleId>(payload["circle_id"].clone()).unwrap()
+    });
+    let mut event = historical_human::signed_ordinary_event(joining, previous, kind, payload, at);
+    if let Some(circle_id) = circle_id {
+        event.scope_ref = arkret_wire::ScopeRef::Circle {
+            realm_id: previous.event.realm_id.clone(),
+            circle_id,
+        };
+        event = soland_test_support::device_authorization_history::sign_event(
+            event,
+            joining.pcr.history.device_verification_method.clone(),
+            joining.pcr.history.founding_device_signing_seed,
+        );
+    }
     let mut request = historical_human::request_for_event(joining, previous, event, at);
+    if let arkret_wire::ScopeRef::Circle {
+        realm_id,
+        circle_id,
+    } = &request.authority_commit.event.scope_ref
+    {
+        let stream = arkret_wire::CommitStreamRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: circle_id.clone(),
+        };
+        if previous.commit.stream_ref != stream {
+            request.authority_commit.commit.stream_position = 0;
+            request.authority_commit.commit.previous_commit_ref = None;
+        }
+        request.authority_commit.commit.stream_ref = stream;
+    }
     let unsigned = arkret_models_collaboration::authority_commit::PeerAuthorityForwardEventRequest {
         branch: arkret_models_collaboration::authority_commit::AuthorityForwardBranch::AuthorityForward,
         event_submission: EventAdmissionSubmission::new(request.authority_commit.event.clone()),
@@ -1519,6 +1548,9 @@ async fn accepted_own_opening_join_without_anchor_uses_original_peer_fact_then_s
     let mut gap =
         historical_human::request_for_event(&governor, &join.authority_commit, gap_event, gap_at);
     seal_service_commit(&mut gap.authority_commit.commit, &governor_state);
+    gap.realm_fanout_source = Some(EventAdmissionSubmission::new(
+        gap.authority_commit.event.clone(),
+    ));
     uow.commit_event(gap.clone()).await.unwrap();
     let mut bob_join = foreign_request(
         &origin, &bob, &governor, &gap.authority_commit, EventKind::MemberState,
@@ -1809,6 +1841,30 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
     seal_service_commit(&mut strand.authority_commit.commit, &governor_state);
     let uow = PgEventCommitUnitOfWork::new(governor_pool.clone());
     uow.commit_event(strand.clone()).await.unwrap();
+    let create_at = strand.authority_commit.commit.committed_at + Duration::seconds(1);
+    let create_event = historical_human::signed_ordinary_event(
+        &governor,
+        &strand.authority_commit,
+        EventKind::CircleCreate,
+        serde_json::json!({"object":{
+            "schema":"ak.schema.circle.v1","realm_id":strand.authority_commit.event.realm_id,
+            "title":"Own leave bound result","display":{"short_name":"Leave","color_token":"blue","symbol":{"glyph":"lock"}},
+            "directory_visibility":"members","join_rule":"public","history_access":"since_join","state":"active",
+            "created_by":owner,"created_at":create_at
+        }}),
+        create_at,
+    );
+    let mut circle_create = historical_human::request_for_event(
+        &governor,
+        &strand.authority_commit,
+        create_event,
+        create_at,
+    );
+    seal_service_commit(&mut circle_create.authority_commit.commit, &governor_state);
+    uow.commit_event(circle_create.clone()).await.unwrap();
+    let circle_id =
+        arkret_wire::CircleId::from_event_id(&circle_create.authority_commit.event.event_id);
+
     // Membership is not an action grant. Read the actual accepted root cut,
     // then admit the owner's narrow Grant before the foreign member joins. The
     // Grant grants no membership; MessageCreate still runs after the real join.
@@ -1838,7 +1894,7 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
         owner
     );
     let root_generation = u64::try_from(root_cut.authority_generation).unwrap();
-    let previous = &strand.authority_commit;
+    let previous = &circle_create.authority_commit;
     let grant_at = previous.commit.committed_at + Duration::seconds(1);
     let grant_payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
         serde_json::from_value(serde_json::json!({"grant": {
@@ -1846,8 +1902,8 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
             "realm_id":previous.event.realm_id,
             "issuer_id":owner,
             "subject":actor,
-            "actions":["ak.message.create"],
-            "resources":[{"kind":"realm","realm_id":previous.event.realm_id}],
+            "actions":["ak.message.create","ak.circle.member.add"],
+            "resources":[{"kind":"realm","realm_id":previous.event.realm_id},{"kind":"circle","realm_id":previous.event.realm_id,"circle_id":circle_id}],
             "issuer_authority_refs":[{
                 "kind":"realm_root","realm_id":previous.event.realm_id,
                 "authority_event_ref":root_cut.authority_event_ref,
@@ -2182,6 +2238,20 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
         Some(commit.clone())
     );
     assert_eq!(opening_footprint(&origin_pool, realm).await, before_replay);
+    Box::pin(circle_own_leave_bound_result_cases(
+        &origin,
+        &origin_pool,
+        &governor_state,
+        &governor_pool,
+        &human,
+        &governor,
+        &join.authority_commit,
+        &circle_id,
+        listener.clone(),
+        &mut located,
+        &session,
+    ))
+    .await;
     // Author, sign and admit the real own leave on Gov; Origin keeps its frozen
     // request and the authentic original acceptance without yet installing it.
     let mut leave = foreign_request(&origin, &human, &governor, &join.authority_commit,
@@ -2540,6 +2610,224 @@ async fn accepted_own_leave_returns_original_bound_result_after_terminal_members
             .unwrap(),
         soland_storage::AccountStreamScan::NotAuthorized
     ));
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The regression shares two real Stations and their original signed acceptance fixture."
+)]
+async fn circle_own_leave_bound_result_cases(
+    origin: &AppState,
+    origin_pool: &PgPool,
+    governor_state: &AppState,
+    governor_pool: &PgPool,
+    human: &historical_human::HumanFixture,
+    governor: &historical_human::HumanFixture,
+    parent_join: &soland_storage::AuthorityCommitTransaction,
+    circle_id: &arkret_wire::CircleId,
+    listener: Arc<RegisteredTlsPeer>,
+    located: &mut crate::routing::realm_join::LocatedRealmAuthority,
+    session: &SessionIdentityState,
+) {
+    use diesel_async::RunQueryDsl as _;
+    let source = PgAuthorityCommitStore {
+        pool: governor_pool.clone(),
+    };
+    let store = PgAuthorityCommitStore {
+        pool: origin_pool.clone(),
+    };
+    let uow = PgEventCommitUnitOfWork::new(governor_pool.clone());
+    let actor = ActorId::account(human.pcr.history.account.clone());
+    let mut previous = parent_join.clone();
+    let mut terminal = None;
+    for (index, state) in ["join", "leave", "join"].into_iter().enumerate() {
+        let mut payload = serde_json::json!({"circle_id":circle_id,"member_id":actor,"membership":state,
+            "expected_membership":match index { 0 => None, 1 => Some("join"), _ => Some("leave") }});
+        if state == "join" {
+            payload["parent_membership_revision"] = serde_json::json!({"commit_id":parent_join.commit.commit_id,
+                "stream_position":parent_join.commit.stream_position});
+        }
+        let mut request = foreign_request(
+            origin,
+            human,
+            governor,
+            &previous,
+            EventKind::CircleMemberState,
+            payload,
+        )
+        .await;
+        seal_service_commit(&mut request.authority_commit.commit, governor_state);
+        uow.commit_event(request.clone()).await.unwrap();
+        let event = &request.authority_commit.event;
+        let commit = &request.authority_commit.commit;
+        store.queue_event(event, commit.committed_at).await.unwrap();
+        store
+            .retain_forwarded_submission(
+                event,
+                &SelfAuthoritySubmitRequest::Event(EventAdmissionSubmission::new(event.clone())),
+                commit.committed_at,
+            )
+            .await
+            .unwrap();
+        store
+            .retain_forwarded_acceptance(event, commit, commit.committed_at)
+            .await
+            .unwrap();
+        let scan = StreamScanRequest {
+            realm_id: event.realm_id.clone(),
+            stream_ref: commit.stream_ref.clone(),
+            direction: StreamScanDirection::After(
+                (state == "leave").then_some(previous.commit.stream_position),
+            ),
+            limit: 128,
+        };
+        let soland_storage::PeerStreamScan::Page(page) = source
+            .scan_stream_for_peer(
+                &scan,
+                &human.pcr.history.account.station_id,
+                &governor_state.service_core_id(),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("Circle opening or terminating interval unavailable")
+        };
+        assert_eq!(page.committed_events.len(), 1);
+        assert!(
+            matches!(&page.committed_events[0], arkret_wire::CommittedEventView::Full(full)
+            if full.event == *event && full.commit == *commit)
+        );
+        let (rl, rg, rp, ra, rc) = (
+            listener.clone(),
+            governor_state.clone(),
+            governor_pool.clone(),
+            human.pcr.history.account.clone(),
+            commit.clone(),
+        );
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reply_stop = stop.clone();
+        let reply = tokio::spawn(async move {
+            assert_eq!(
+                tcp_scan(rl.clone(), page, scan, ra.clone(), rg.service_core_id()).await,
+                1
+            );
+            if state == "join" {
+                tcp_opening_bootstrap(rl, rg, rp, ra, rc, reply_stop).await
+            } else {
+                tcp_original_service_history_once(rl, rg, rp).await
+            }
+        });
+        let outcome = super::super::replica_anchor::ensure_forwarded_target(
+            origin,
+            &governor_state.service_core_id(),
+            event,
+            Some(commit),
+            located,
+            session,
+        )
+        .await;
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(outcome.unwrap(), Some(commit.clone()));
+        assert_eq!(reply.await.unwrap(), 1);
+        if state == "leave" {
+            assert!(
+                store
+                    .accepted_own_leave_bound_result(
+                        event,
+                        commit,
+                        &human.pcr.history.account,
+                        &origin.service_core_id()
+                    )
+                    .await
+                    .unwrap()
+            );
+            let read = StreamScanRequest {
+                realm_id: event.realm_id.clone(),
+                stream_ref: commit.stream_ref.clone(),
+                direction: StreamScanDirection::Before(Some(commit.stream_position + 1)),
+                limit: 1,
+            };
+            assert!(matches!(
+                store
+                    .scan_stream_for_account(
+                        &read,
+                        &human.pcr.history.account,
+                        &origin.service_core_id()
+                    )
+                    .await
+                    .unwrap(),
+                soland_storage::AccountStreamScan::NotAuthorized
+            ));
+            assert!(
+                !store
+                    .accepted_own_leave_bound_result(
+                        event,
+                        commit,
+                        &governor.pcr.history.account,
+                        &origin.service_core_id()
+                    )
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                !store
+                    .accepted_own_leave_bound_result(
+                        event,
+                        &parent_join.commit,
+                        &human.pcr.history.account,
+                        &origin.service_core_id()
+                    )
+                    .await
+                    .unwrap()
+            );
+            // A changed parent cut cannot borrow the old Circle opening proof.
+            let mut conn = origin_pool.get().await.unwrap();
+            diesel::sql_query("UPDATE member_state_current_results SET current_stream_position=current_stream_position+1 WHERE realm_id=$1 AND member_id=$2")
+                .bind::<diesel::sql_types::Text,_>(event.realm_id.as_str()).bind::<diesel::sql_types::Text,_>(actor.to_string()).execute(&mut *conn).await.unwrap();
+            drop(conn);
+            assert!(
+                !store
+                    .accepted_own_leave_bound_result(
+                        event,
+                        commit,
+                        &human.pcr.history.account,
+                        &origin.service_core_id()
+                    )
+                    .await
+                    .unwrap()
+            );
+            let mut conn = origin_pool.get().await.unwrap();
+            diesel::sql_query("UPDATE member_state_current_results SET current_stream_position=current_stream_position-1 WHERE realm_id=$1 AND member_id=$2")
+                .bind::<diesel::sql_types::Text,_>(event.realm_id.as_str()).bind::<diesel::sql_types::Text,_>(actor.to_string()).execute(&mut *conn).await.unwrap();
+            drop(conn);
+            assert!(
+                store
+                    .accepted_own_leave_bound_result(
+                        event,
+                        commit,
+                        &human.pcr.history.account,
+                        &origin.service_core_id()
+                    )
+                    .await
+                    .unwrap()
+            );
+            terminal = Some((event.clone(), commit.clone()));
+        }
+        previous = request.authority_commit;
+    }
+    let (event, commit) = terminal.unwrap();
+    assert!(
+        !store
+            .accepted_own_leave_bound_result(
+                &event,
+                &commit,
+                &human.pcr.history.account,
+                &origin.service_core_id()
+            )
+            .await
+            .unwrap(),
+        "a real accepted Circle rejoin cannot revive an old leave result"
+    );
 }
 
 async fn tcp_opening_bootstrap(
