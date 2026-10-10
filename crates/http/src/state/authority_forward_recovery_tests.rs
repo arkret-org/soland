@@ -2885,6 +2885,9 @@ async fn circle_own_leave_bound_result_cases(
                 direction: StreamScanDirection::Before(Some(commit.stream_position + 1)),
                 limit: 1,
             };
+            // history-visibility §3.1 gives a departed Circle member no readable
+            // Commit. This internal replica result proves zero Page/disclosure;
+            // it does not assert or change the public HTTP not_found mapping.
             assert_eq!(
                 store
                     .scan_stream_for_account(
